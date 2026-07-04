@@ -174,8 +174,9 @@ def markdown(p):
         lines.append("## Notes")
         lines.append("")
         if excl:
-            lines.append(f"- Bulk caps excluded (≥10 µF, ineffective at the edge): "
-                         f"{', '.join(excl)}. Re-run with `--include-bulk-cin` to keep them.")
+            lines.append(f"- Bulk caps excluded by package/type (electrolytic/THT, "
+                         f"ineffective at the edge): {', '.join(excl)}. "
+                         f"Re-run with `--include-bulk-cin` to keep them.")
         for wm in warns:
             lines.append(f"- ⚠️ {wm}")
 

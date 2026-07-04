@@ -30,7 +30,6 @@ the discovered topology for the reduce step.
 import argparse
 import json
 import os
-import re
 import sys
 
 import pcbnew
@@ -436,44 +435,49 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     return model
 
 
-def _cap_farads(fp):
-    """Parse a cap footprint's value field to farads. Returns None if unparseable
-    (e.g. 'DNP', a part number). Handles '100n', '4u7', '10uF', '1nF', '470µF'."""
-    v = (fp.GetValue() or "").strip().replace("µ", "u").replace("Ω", "")
-    m = re.search(r"([\d]+)([pnum]?)(?:F)?[.,]?(\d*)", v, re.I) \
-        or re.search(r"([\d.]+)\s*([pnum]?)F?", v, re.I)
-    if not m:
-        return None
-    mult = dict(p=1e-12, n=1e-9, u=1e-6, m=1e-3)
-    # KiCad "R/units" style: digit-unit-digit means unit is the decimal point (4u7 = 4.7u)
-    if m.lastindex and m.lastindex >= 3 and m.group(2) and m.group(3):
-        val = float(f"{m.group(1)}.{m.group(3)}")
-        return val * mult.get(m.group(2).lower(), 1.0)
-    try:
-        val = float(m.group(1))
-    except ValueError:
-        return None
-    return val * mult.get((m.group(2) or "").lower(), 1.0)
+_BULK_MARKERS = ("CP_", "ELEC", "RADIAL", "TANTAL", "_CAN", "EIA-", "SMC_",
+                 "ALUMINUM", "POLYMER")
 
 
-def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False,
-              bulk_uf=10.0):
+def _cap_class(fp):
+    """Classify a cap by FOOTPRINT/PACKAGE, not value ('mlcc' | 'bulk').
+
+    HF ceramics (SMD chip packages) source the tens-of-MHz commutation edge and
+    belong in the SW-peak loop; bulk electrolytic/polymer/tantalum (THT cans,
+    radial) are above SRF at the edge and don't. Value is a bad proxy in both
+    directions — a 10-22uF 1210 MLCC is a legit HF bypass, a small-value
+    electrolytic is not — so we go by package/type instead."""
+    name = str(fp.GetFPID().GetLibItemName()).upper()
+    if any(k in name for k in _BULK_MARKERS):
+        return "bulk"
+    try:                       # through-hole cap in the input bank = bulk can
+        if fp.GetAttributes() & pcbnew.FP_THROUGH_HOLE:
+            return "bulk"
+    except Exception:
+        pass
+    return "mlcc"
+
+
+def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False):
     """Return up to `n` (ref, vin_node, gnd_node) for input caps bridging
     Vin<->GND, ordered nearest-first by distance to the FET centroid. Ports are
     ALWAYS (Vin-pad -> GND-pad) so every cap port has identical polarity (a
     reversed port would silently corrupt the mutuals).
 
-    - `refs` (explicit refdes list) overrides the nearest-N heuristic entirely.
-    - bulk electrolytics (value >= `bulk_uf` uF) are excluded by default: above
-      their SRF they cannot source the tens-of-MHz commutation edge, and they
-      only add conductors/mesh cost. Pass include_bulk=True to keep them.
-    n==1 (no refs) reproduces the old single-cap port."""
+    - `refs` (explicit refdes list) overrides the nearest-N heuristic and the
+      bulk filter entirely.
+    - otherwise bulk electrolytics are excluded by package/type (see _cap_class):
+      above SRF they can't source the commutation edge and only add mesh cost.
+      Pass include_bulk=True to keep them (e.g. a low-freq ripple-path study).
+    The per-refdes classification is recorded in topo['cin_class'] so any
+    exclusion is visible in the manifest. n==1 (no refs) reproduces the old
+    single-cap port."""
     fps = [fp for fp in board.GetFootprints()
            if fp.GetReference() in (topo["hs"]["refs"] + topo["ls"]["refs"])]
     cx = sum(mm(fp.GetPosition().x) for fp in fps) / len(fps)
     cy = sum(mm(fp.GetPosition().y) for fp in fps) / len(fps)
     want = set(refs) if refs else None
-    cand, excluded_bulk = [], []
+    cand, excluded_bulk, cls = [], [], {}
     for fp in board.GetFootprints():
         ref = fp.GetReference()
         if want is not None:
@@ -484,11 +488,11 @@ def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False,
         nets = {p.GetNetname() for p in fp.Pads()}
         if not ({topo["vin"], topo["gnd"]} <= nets):
             continue
-        if want is None and not include_bulk:
-            farads = _cap_farads(fp)
-            if farads is not None and farads >= bulk_uf * 1e-6:
-                excluded_bulk.append(ref)
-                continue
+        klass = _cap_class(fp)
+        cls[ref] = klass
+        if want is None and not include_bulk and klass == "bulk":
+            excluded_bulk.append(ref)
+            continue
         p = fp.GetPosition()
         dsq = (mm(p.x) - cx) ** 2 + (mm(p.y) - cy) ** 2
         cand.append((dsq, ref, fp))
@@ -501,6 +505,11 @@ def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False,
         if vn and gn:
             out.append((ref, vn, gn))
     topo["cin_excluded_bulk"] = excluded_bulk
+    topo["cin_class"] = cls
+    topo["cin_select"] = dict(
+        metric=("explicit-refs" if refs else "centroid-distance"),
+        cap_filter=("all (bulk included)" if include_bulk or refs
+                    else "package/type: MLCC only, electrolytic excluded"))
     return out
 
 

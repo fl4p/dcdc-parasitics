@@ -69,10 +69,14 @@ report/JSON. Port polarity is fixed (always Vin→GND) so a reversed cap can't
 silently corrupt the mutuals; a spuriously-low effective L still trips a warning.
 
 **Cap selection.** Default is nearest-by-centroid-distance (deterministic, shown in
-the manifest); **bulk electrolytics (≥ 10 µF) are excluded** — above their SRF they
-can't source the tens-of-MHz edge (`--include-bulk-cin` to keep them). Override the
-heuristic entirely with `--cin-refs C17 C18 C9 C16`. If you request more caps than
-exist, it warns and solves with what it found rather than silently clamping.
+the manifest as `cin_select`); **bulk electrolytics are excluded by package/type**
+(THT can/radial, `CP_`/`Elec`/tantalum/polymer footprints) — above their SRF they
+can't source the tens-of-MHz edge. Classification is **by footprint, not value**, so
+a 10–22 µF 1210 MLCC stays in the HF set while a small electrolytic stays out; the
+per-refdes class is recorded in `cin_class`. Keep the bulk caps with
+`--include-bulk-cin` (e.g. a low-frequency ripple-path study). Override selection
+entirely with `--cin-refs C17 C18 C9 C16`. If you request more caps than exist, it
+warns and solves with what it found rather than silently clamping.
 
 Meshing: tracks → filaments; copper pours → a gridded filament mesh clipped to the
 real filled polygon (and to an ROI around the FETs/Cin, so far copper is skipped);
@@ -109,6 +113,10 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   gate-drive/DPT or SW-overshoot sim.
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
 - **`report.md`** — table + a topology sketch of where CSI sits.
+- **`schematic.svg`** (with `--svg`) — a standalone half-bridge drawing of the
+  extracted network: each parasitic as a labelled coil, the two common-source
+  source-leads in red, and the input-cap bank showing which caps the model ported
+  (parallel legs with their current split) vs. board caps left out of the loop.
 
 ## Requirements & config
 
