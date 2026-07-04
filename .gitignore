@@ -1,0 +1,8 @@
+# FastHenry / solver artifacts
+*.inp
+*.mat
+*.ports.json
+Zc*.mat
+_tmp.*
+__pycache__/
+*.pyc
