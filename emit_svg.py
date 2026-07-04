@@ -181,8 +181,11 @@ def schematic(p):
     # ---- rails (extend left to the outermost cap) ----
     s.append(_line(x_left, y_vin, xdrv+60, y_vin, WIRE, 2.6))
     s.append(_line(x_left, y_gnd, xdrv+60, y_gnd, WIRE, 2.6))
-    s.append(_txt(xdrv+64, y_vin+4, f"VIN  {t.get('vin','')}", 12, INK, "start", "bold"))
-    s.append(_txt(xdrv+64, y_gnd+4, f"GND  {t.get('gnd','')}", 12, INK, "start", "bold"))
+    def _rail(word, net):
+        net = (net or "").strip()
+        return word if not net or net.upper().lstrip("/") == word else f"{word}  {net}"
+    s.append(_txt(xdrv+64, y_vin+4, _rail("VIN", t.get("vin")), 12, INK, "start", "bold"))
+    s.append(_txt(xdrv+64, y_gnd+4, _rail("GND", t.get("gnd")), 12, INK, "start", "bold"))
 
     # ported caps: parallel legs closing the loop
     for k, ref in enumerate(disp):
@@ -294,12 +297,8 @@ def schematic(p):
         # return leg down to the return node (red = shares CSI, grey-dash = Kelvin)
         rx = bx + bw - 12
         dash = "5 3" if kelvin else None
-        col = MUTE if kelvin else CSI
         out.append(_line(rx, cy + 10, rx, ret_y, WIRE, 1.6, dash=dash))
         out.append(_line(rx, ret_y, xc, ret_y, WIRE, 1.6, dash=dash))
-        lbl = ("gate return → die-src (Kelvin, CSI excluded)" if kelvin
-               else "gate return → source (shares Lscs = CSI)")
-        out.append(_txt(rx - 4, ret_y - 6, lbl, 9.5, col, "end"))
         return "".join(out)
 
     s.append(driver(cy_hs, g_hs, y_nhs, y_sw, p["L_gate_hs"],
