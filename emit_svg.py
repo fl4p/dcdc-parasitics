@@ -244,7 +244,7 @@ def schematic(p):
     s.append(_coil_v(xc, y_lh0, y_lh1))
     s.append(_txt(xc - 14, (y_lh0+y_lh1)/2 - 2, "Lloop_hs", 11.5, INK, "end", "bold"))
     s.append(_txt(xc - 14, (y_lh0+y_lh1)/2 + 12, f"{_fmtL(loop_hs)}", 11, INK, "end"))
-    fet_hs, d_hs, sc_hs, g_hs = _nfet(xc, cy_hs, (t["hs"]["refs"] or ["Q_HS"])[0])
+    fet_hs, d_hs, sc_hs, g_hs = _nfet(xc, cy_hs, "∥".join(t["hs"]["refs"]) or "Q_HS")
     s.append(_line(xc, y_lh1, d_hs[0], d_hs[1], WIRE))   # coil -> drain
     s.append(fet_hs)
     # source -> nHS node
@@ -268,7 +268,7 @@ def schematic(p):
     s.append(_coil_v(xc, y_lsl0, y_lsl1))
     s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 - 2, "Lloop_ls", 11.5, INK, "end", "bold"))
     s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 + 12, f"{_fmtL(loop_ls)}", 11, INK, "end"))
-    fet_ls, d_ls, sc_ls, g_ls = _nfet(xc, cy_ls, (t["ls"]["refs"] or ["Q_LS"])[0])
+    fet_ls, d_ls, sc_ls, g_ls = _nfet(xc, cy_ls, "∥".join(t["ls"]["refs"]) or "Q_LS")
     s.append(_line(xc, y_lsl1, d_ls[0], d_ls[1], WIRE))
     s.append(fet_ls)
     s.append(_line(sc_ls[0], sc_ls[1], xc, y_nls, WIRE))
@@ -302,8 +302,8 @@ def schematic(p):
         out.append(_coil_h(cy, gx + 8, gx + 28, WIRE))
         out.append(_txt((gx + 8 + gx + 28) / 2, cy - 8, tag.split()[0] + " gate", 9.5,
                         INK, "middle"))
-        out.append(_txt(gx + 34, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
-        out.append(_txt(gx + 34, cy + 36, f"R={_fmtR(r_gate)} (Cu)", 9.5, INK, "start"))
+        out.append(_txt(gx + 66, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
+        out.append(_txt(gx + 66, cy + 36, f"R={_fmtR(r_gate)} (Cu)", 9.5, INK, "start"))
         gd_r = (gd or {}).get("r")
         gd_d = (gd or {}).get("d")
         if gd_r or gd_d:
