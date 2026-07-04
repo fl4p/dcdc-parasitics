@@ -241,8 +241,8 @@ def schematic(p):
     # SW node
     s.append(_line(xc, y_lsh1, xc, y_sw, WIRE))
     s.append(_dot(xc, y_sw, CSI))
-    s.append(_txt(xc - 150, y_sw + 4, _leaf(t.get("sw", "")), 12, INK, "start", "bold"))
     s.append(_line(xc - 18, y_sw, xc, y_sw, WIRE))
+    s.append(_txt(xc - 24, y_sw + 4, _leaf(t.get("sw", "")), 12, INK, "end", "bold"))
 
     # ================= LS side =================
     s.append(_line(xc, y_sw, xc, y_lsl0, WIRE))
