@@ -123,6 +123,11 @@ def _fmtR(v):
     return f"{v*1e3:.1f} mΩ"
 
 
+def _leaf(net):
+    """Leaf net name — drop the KiCad sheet path (/DC/DC/SW_NODE -> SW_NODE)."""
+    return (net or "").strip().split("/")[-1]
+
+
 def schematic(p):
     t = p["topo"]
     m = p.get("meta", {})
@@ -182,8 +187,8 @@ def schematic(p):
     s.append(_line(x_left, y_vin, xdrv+60, y_vin, WIRE, 2.6))
     s.append(_line(x_left, y_gnd, xdrv+60, y_gnd, WIRE, 2.6))
     def _rail(word, net):
-        net = (net or "").strip()
-        return word if not net or net.upper().lstrip("/") == word else f"{word}  {net}"
+        net = _leaf(net)
+        return word if not net or net.upper() == word else f"{word}  {net}"
     s.append(_txt(xdrv+64, y_vin+4, _rail("VIN", t.get("vin")), 12, INK, "start", "bold"))
     s.append(_txt(xdrv+64, y_gnd+4, _rail("GND", t.get("gnd")), 12, INK, "start", "bold"))
 
@@ -205,28 +210,15 @@ def schematic(p):
         s.append(_txt((used_xs[0]+used_xs[-1])/2, cy_cap + 48, "share = current split", 9,
                       MUTE, "middle", ital=True))
 
-    # greyed caps present on the board but NOT in the modeled loop, annotated with
-    # WHY: bulk/electrolytic (can't source the HF edge) vs MLCC present but unported
+    # greyed caps present on the board but NOT in the modeled loop
     if others:
-        cin_class = t.get("cin_class", {})
-        bulk = [c for c in others if cin_class.get(c) == "bulk"]
-        mlcc_out = [c for c in others if cin_class.get(c) != "bulk"]
+        lbl = ", ".join(others) if len(others) <= 4 else f"{len(others)} more caps"
         s.append(_line(gx, y_vin, gx, cy_cap - 7, MUTE, 1.2, dash="4 3"))
         s.append(_line(gx, cy_cap + 7, gx, y_gnd, MUTE, 1.2, dash="4 3"))
         s.append(_cap(gx, cy_cap, MUTE, 1.6))
-        s.append(_txt(gx, cy_cap - 12, "not in loop", 9, MUTE, "middle", ital=True))
-        reasons = []
-        if bulk:
-            reasons.append((f"{','.join(bulk)}: bulk (HF-excl.)" if len(bulk) <= 3
-                            else f"{len(bulk)} bulk (HF-excl.)"))
-        if mlcc_out:
-            reasons.append(f"{','.join(mlcc_out)}: MLCC" if len(mlcc_out) <= 3
-                           else f"{len(mlcc_out)} MLCC unported")
-            reasons.append("→ add --cin-parallel")
-        yy = cy_cap + 20
-        for r in reasons:
-            s.append(_txt(gx, yy, r, 8.5, MUTE, "middle", ital=True))
-            yy += 11
+        s.append(_txt(gx, cy_cap - 12, f"+{lbl}", 9.5, MUTE, "middle"))
+        s.append(_txt(gx, cy_cap + 20, "not in", 9, MUTE, "middle", ital=True))
+        s.append(_txt(gx, cy_cap + 31, "modeled loop", 9, MUTE, "middle", ital=True))
 
     # ================= HS side =================
     s.append(_line(xc, y_vin, xc, y_lh0, WIRE))
@@ -249,7 +241,7 @@ def schematic(p):
     # SW node
     s.append(_line(xc, y_lsh1, xc, y_sw, WIRE))
     s.append(_dot(xc, y_sw, CSI))
-    s.append(_txt(xc - 150, y_sw + 4, f"SW  {t.get('sw','')}", 12, INK, "start", "bold"))
+    s.append(_txt(xc - 150, y_sw + 4, _leaf(t.get("sw", "")), 12, INK, "start", "bold"))
     s.append(_line(xc - 18, y_sw, xc, y_sw, WIRE))
 
     # ================= LS side =================
