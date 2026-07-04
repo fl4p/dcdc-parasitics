@@ -72,17 +72,20 @@ def _unique_nets(pads):
     return out
 
 
-def gate_network(board, gate_net, owner_refs):
-    """Discrete gate-drive parts between the gate net and the driver net.
+def gate_network(board, gate_net, owner_refs, exclude_nets=()):
+    """Discrete gate-drive parts in series between the gate net and the driver net.
 
     Detects a series gate resistor and an anti-parallel diode by connectivity: any
     part (not the FET itself) with a pad on the FET-side gate net; its other pad is
-    the driver-side net. Returns dict(r=..., d=..., driver_net=...) where r/d are
-    each dict(ref, value, driver_net) or None. These are annotated on the schematic
-    for context — FastHenry meshes only copper, so R/D are not part of the extraction.
+    the driver-side net. Parts whose other pad lands on a power/reference net in
+    `exclude_nets` (SW/GND/Vin) are gate-source **pulldowns/clamps**, not series
+    drive elements, and are skipped. Returns dict(r=..., d=..., driver_net=...) where
+    r/d are each dict(ref, value, driver_net) or None. Annotated on the schematic for
+    context — FastHenry meshes only copper, so R/D are not part of the extraction.
     """
     r = d = driver_net = None
     owners = set(owner_refs)
+    excl = set(exclude_nets)
     for fp in board.GetFootprints():
         ref = fp.GetReference()
         if ref in owners:
@@ -91,8 +94,8 @@ def gate_network(board, gate_net, owner_refs):
         if gate_net not in nets:
             continue
         others = [n for n in nets if n != gate_net]
-        if not others:
-            continue
+        if not others or others[0] in excl:
+            continue  # dangling, or a gate-source pulldown/clamp — not series drive
         drv = others[0]
         entry = dict(ref=ref, value=fp.GetValue(), driver_net=drv)
         up = ref.upper()
@@ -184,12 +187,14 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
         hs=dict(refs=[r["ref"] for r in hs], gate=hs_gate_net,
                 drain=vin_net, source=sw, kelvin=hs_kv,
                 gate_return=source_net("hs") if not hs_kv else "KELVIN",
-                gate_drive=gate_network(board, hs_gate_net, [r["ref"] for r in hs]),
+                gate_drive=gate_network(board, hs_gate_net, [r["ref"] for r in hs],
+                                        exclude_nets={sw, gnd, vin_net}),
                 pads={r["ref"]: r["pads"] for r in hs}),
         ls=dict(refs=[r["ref"] for r in ls], gate=ls_gate_net,
                 drain=sw, source=gnd, kelvin=ls_kv,
                 gate_return=source_net("ls") if not ls_kv else "KELVIN",
-                gate_drive=gate_network(board, ls_gate_net, [r["ref"] for r in ls]),
+                gate_drive=gate_network(board, ls_gate_net, [r["ref"] for r in ls],
+                                        exclude_nets={sw, gnd, vin_net}),
                 pads={r["ref"]: r["pads"] for r in ls}),
         cin=cin,
     )

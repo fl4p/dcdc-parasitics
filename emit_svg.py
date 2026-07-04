@@ -130,9 +130,10 @@ def _leaf(net):
 
 
 def _rkm(v):
-    """Decode an RKM resistor value (3R3 -> '3.3 Ω', 4K7 -> '4.7 kΩ'); pass through
-    anything that doesn't match."""
-    v = (v or "").strip()
+    """Decode a resistor value to a clean ohm string: RKM (3R3 -> '3.3 Ω',
+    4K7 -> '4.7 kΩ') or a plain number ('4.7, 1%' -> '4.7 Ω'). Drops a trailing
+    tolerance field; passes anything unrecognized through unchanged."""
+    v = (v or "").strip().split(",")[0].strip()
     m = re.fullmatch(r"(\d*)[Rr](\d*)", v)
     if m:
         a, b = m.group(1) or "0", m.group(2)
@@ -141,6 +142,8 @@ def _rkm(v):
     if m:
         a, b = m.group(1) or "0", m.group(2)
         return f"{a}.{b} kΩ" if b else f"{a} kΩ"
+    if re.fullmatch(r"\d+(\.\d+)?", v):
+        return f"{v} Ω"
     return v
 
 
