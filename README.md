@@ -206,10 +206,19 @@ shorter-path-only value. Two caveats:
 
 ## Tests
 
-`python3 test_parasitics.py` — stdlib + numpy unit tests for the pure layers
-(SVG formatting/rendering, the reduction maths: single-cap, parallel effective L,
-common-source mutual, and the `weld` de-fragmentation). The pcbnew/FastHenry
-geometry+solve path is covered by running on the real boards below.
+Stdlib + numpy unit tests for the pure layers (no KiCad/FastHenry) live in
+`test/`:
+
+```sh
+python3 test/test_parasitics.py   # SVG formatting/rendering, reduction, weld
+python3 test/test_reduce.py       # --cin-parallel reduction vs closed-form
+```
+
+`test_parasitics.py` covers SVG formatting/rendering and the `weld`
+de-fragmentation; `test_reduce.py` checks the parallel-cap reduction against
+hand-derived answers (shared-path law, coupled 2-port, CSI degeneracy, polarity
+and ill-conditioning warnings). The pcbnew/FastHenry geometry+solve path is
+covered by running on the real boards below.
 
 ## Validation
 

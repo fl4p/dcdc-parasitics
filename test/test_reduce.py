@@ -7,11 +7,17 @@ the failure modes the EE review flagged: single-cap regression, shared-path
 parallel law, the coupled 2-port formula, CSI degeneracy, reversed-port polarity
 (must warn), and an ill-conditioned near-coincident pair (must warn).
 
-    python3 test_reduce.py        # prints PASS/FAIL per case, exits nonzero on any fail
+    python3 test/test_reduce.py   # prints PASS/FAIL per case, exits nonzero on any fail
 """
-import numpy as np
+import os
+import sys
 
-import solve_reduce as sr
+# tests live in test/; import the modules from the parent package dir
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np  # noqa: E402
+
+import solve_reduce as sr  # noqa: E402
 
 W = 2 * np.pi * 5e6
 FAILS = []

@@ -9,12 +9,16 @@ mppt-2420-hc / Fugu2 boards — see README.
 
 Plain asserts, no framework, matching the repo style.
 """
+import os
 import sys
 import types
 
-import numpy as np
+# tests live in test/; import the modules from the parent package dir
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import emit_svg
+import numpy as np  # noqa: E402
+
+import emit_svg  # noqa: E402
 
 # kicad_geom does `import pcbnew` at module top; stub it so we can import the
 # pure Model class (weld/node/seg use no pcbnew).
