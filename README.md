@@ -14,6 +14,16 @@ You give it the **switch-node net** and the **GND net**; everything else (HS/LS
 FETs, Vin rail, gate nets, input caps) is auto-discovered from connectivity, with
 overrides for every guess.
 
+## Showcase
+
+Half-bridge parasitics extracted from the open-hardware
+[LibreSolar MPPT 2420 HC](https://github.com/LibreSolar/mppt-2420-hc) (4-layer
+synchronous buck), rendered by `--svg`: each parasitic as a labelled coil, the
+two **common-source source-leads in red**, the input-cap bank (the ported cap and
+the greyed-out ones), and the auto-detected gate network (Rg).
+
+![Power-stage parasitics of the LibreSolar MPPT 2420 HC](docs/mppt-2420-hc.svg)
+
 ## How it works
 
 One FastHenry solve with three ports yields the full mutual-inductance matrix:
