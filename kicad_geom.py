@@ -115,6 +115,45 @@ class Model:
             if (bx - x) ** 2 + (by - y) ** 2 < thr:
                 self.seg(nm_, bn, pitch)
 
+    def weld(self, tol):
+        """Fuse near-coincident nodes on the SAME net+layer that interning missed —
+        a track ending inside a pad (pad-centre vs trace-end), or two touching pour
+        fills / stubs. Each node bonds to its nearest same-net+layer neighbour within
+        `tol` mm. Restricted to one net+layer, so it can never short unrelated copper;
+        `tol` is kept well below the pour pitch, so it never welds across the mesh grid
+        (only endpoints that should have coincided). Fixes gate nets (no pour for
+        stitch_zones to bond to) and isolated power-fill islands."""
+        if tol <= 0:
+            return 0
+        cell = tol
+        grid = {}
+        for nm_, (net, lid) in self.meta.items():
+            x, y, _ = self._pos[nm_]
+            grid.setdefault((net, lid, round(x / cell), round(y / cell)), []).append(nm_)
+        tol2 = tol * tol
+        done = set()
+        welded = 0
+        for nm_, (net, lid) in self.meta.items():
+            x, y, _ = self._pos[nm_]
+            cx, cy = round(x / cell), round(y / cell)
+            best, bd = None, tol2
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for b in grid.get((net, lid, cx + dx, cy + dy), ()):
+                        if b == nm_:
+                            continue
+                        xb, yb, _ = self._pos[b]
+                        dd = (x - xb) ** 2 + (y - yb) ** 2
+                        if dd <= bd:
+                            bd, best = dd, b
+            if best is not None:
+                key = frozenset((nm_, best))
+                if key not in done:
+                    done.add(key)
+                    self.seg(nm_, best, tol)
+                    welded += 1
+        return welded
+
     def seg(self, na, nb, w, h=CU_T):
         if na == nb:
             return
@@ -317,33 +356,39 @@ def build_fet(board, model, zmap, topo, role, lead_mm):
     d = topo[role]
     refs = d["refs"]
     fps = {fp.GetReference(): fp for fp in board.GetFootprints() if fp.GetReference() in refs}
-    # parallel FETs share drain/source/gate rails; model each, equiv their dies
+    # Parallel FETs share the drain/source rails: model each one's drain+source
+    # lead stubs (they parallel in the power loop, lowering the effective lead L)
+    # and equiv their dies. Only the FIRST FET's gate is ported (d["gate"]);
+    # paralleled FETs may sit on separate gate nets (Net-(Q1-G) vs Net-(Q3-G)), so
+    # their gates are not required or modeled here.
     die_src = die_drn = die_gate = None
     src_pad_node = None
     for ref in refs:
         fp = fps[ref]
         dn, dpos = _pad_node_stack(board, model, zmap, fp, d["drain"])
         sn, spos = _pad_node_stack(board, model, zmap, fp, d["source"])
-        gn, gpos = _pad_node_stack(board, model, zmap, fp, d["gate"])
-        if not (dn and sn and gn):
-            raise ValueError(f"{ref}: could not resolve drain/source/gate pads")
+        if not (dn and sn):
+            raise ValueError(f"{ref}: could not resolve drain/source pads "
+                             f"(drain={d['drain']}, source={d['source']})")
         # vertical lead stubs up to a die plane at z = +lead_mm
         dref = model.node(d["drain"], "DIE", *dpos, lead_mm)
         sref = model.node(d["source"], "DIE", *spos, lead_mm)
-        gref = model.node(d["gate"], "DIE", *gpos, lead_mm)
         model.seg(dn, dref, 1.0)
         model.seg(sn, sref, 1.0)
-        model.seg(gn, gref, 0.5)
-        # channel + gate-source close at the die
-        model.equiv(dref, sref)
-        model.equiv(gref, sref)
+        model.equiv(dref, sref)  # channel short at the die
         if die_src is None:
+            # first FET: also model + port its gate loop
+            gn, gpos = _pad_node_stack(board, model, zmap, fp, d["gate"])
+            if not gn:
+                raise ValueError(f"{ref}: could not resolve gate pad on {d['gate']}")
+            gref = model.node(d["gate"], "DIE", *gpos, lead_mm)
+            model.seg(gn, gref, 0.5)
+            model.equiv(gref, sref)
             die_src, die_drn, die_gate = sref, dref, gref
             src_pad_node = sn
         else:
             model.equiv(die_src, sref)
             model.equiv(die_drn, dref)
-            model.equiv(die_gate, gref)
     d["_die_src"] = die_src
     d["_die_gate"] = die_gate
     d["_src_pad_node"] = src_pad_node
@@ -392,7 +437,7 @@ def _roi(board, topo, margin=8.0):
 
 
 def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
-          cin_refs=None, include_bulk=False):
+          cin_refs=None, include_bulk=False, weld_tol=0.6):
     zmap = layer_z_map(board)
     model = Model()
     power_nets = {topo["sw"], topo["vin"], topo["gnd"]}
@@ -401,7 +446,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     roi = _roi(board, topo, margin)
 
     add_tracks(board, model, zmap, nets)
-    add_vias(board, model, zmap, power_nets)
+    add_vias(board, model, zmap, nets)  # gate traces can change layers too — model their vias
     add_zones(board, model, zmap, power_nets, pitch, roi=roi)
 
     # FET leads + die shorts
@@ -415,8 +460,11 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     cins = cin_ports(board, model, zmap, topo, n=cin_parallel,
                      refs=cin_refs, include_bulk=include_bulk)
 
-    # bond every track/via/pad node into the pour mesh on its net+layer
+    # bond every track/via/pad node into the pour mesh on its net+layer, then weld
+    # near-coincident endpoints interning missed (pad-centre vs trace-end, touching
+    # fills) — essential for nets with no pour (gate) and multi-fill power planes.
     model.stitch_zones(pitch)
+    model.weld(weld_tol)
 
     # ---- ports ----
     cin_labels = []
@@ -533,6 +581,11 @@ def main():
     ap.add_argument("--include-bulk-cin", action="store_true",
                     help="also port bulk electrolytics (>=10uF); default excludes them")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
+    ap.add_argument("--weld-tol", type=float, default=0.6,
+                    help="fuse same-net nodes within this many mm (fixes pad/trace and "
+                         "touching-fill fragmentation; 0 disables)")
+    ap.add_argument("--margin", type=float, default=8.0,
+                    help="ROI margin (mm) around FETs/Cin for pour meshing")
     ap.add_argument("--nwinc", type=int, default=1, help="filament width sub-mesh (skin; >1 slower, more HF-accurate)")
     ap.add_argument("--nhinc", type=int, default=1, help="filament height sub-mesh (skin)")
     ap.add_argument("-o", "--out", required=True, help="output .inp path")
@@ -544,9 +597,9 @@ def main():
         hs_ref=args.hs_ref, ls_ref=args.ls_ref,
         hs_gate=args.hs_gate, ls_gate=args.ls_gate,
         hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
-    model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm,
+    model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm, margin=args.margin,
                   cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
-                  include_bulk=args.include_bulk_cin)
+                  include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol)
     stats = model.write(args.out, nwinc=args.nwinc, nhinc=args.nhinc)
     # sidecar: port order + topology for the reduce step
     ports = [lbl for lbl, _, _ in model.ports]
