@@ -110,7 +110,7 @@ def _nfet(cx, cy, ref, col=INK):
     s.append(f"<path d='M {bx-6:.1f} {cy+4:.1f} l 12 0 l -6 -12 z' "
              f"fill='none' stroke='{MUTE}' stroke-width='1.4'/>")  # triangle up
     s.append(_line(bx - 6, cy - 8, bx + 6, cy - 8, MUTE, 1.4))     # cathode bar
-    s.append(_txt(gx + 6, cy + 4, ref, 13, INK, "start", "bold"))
+    s.append(_txt(gx + 2, cy + 18, ref, 13, INK, "start", "bold"))
     s.append(_txt(bx - 10, cy + 46, "body diode", 9.5, MUTE, "middle", ital=True))
     return "".join(s), (dx, cy - 34), (dx, cy + 34), (gx, cy)
 
@@ -285,20 +285,21 @@ def schematic(p):
                    f"fill='#fbfbf7' stroke='{INK}' stroke-width='1.6'/>")
         out.append(_txt(bx + bw/2, cy - 4, tag, 11, INK, "middle", "bold"))
         out.append(_txt(bx + bw/2, cy + 11, "driver", 10, MUTE, "middle"))
-        # output -> gate via Lghs coil
-        out.append(_line(bx, cy - 10, gx + 28, cy - 10, WIRE))
-        out.append(_coil_h(cy - 10, gx + 8, gx + 28, WIRE))
-        out.append(_line(gx, cy, gx, cy - 10, WIRE))
-        out.append(_line(gx, cy - 10, gx + 8, cy - 10, WIRE))
-        out.append(_txt((gx + 28 + gx + 8)/2, cy - 15, tag.split()[0]+" gate", 9.5,
+        # gate drive: one straight horizontal run at the gate level (cy) — FET gate
+        # -> Lghs coil -> driver output pin on the box's left edge (no jog).
+        out.append(_line(gx, cy, gx + 8, cy, WIRE))
+        out.append(_coil_h(cy, gx + 8, gx + 28, WIRE))
+        out.append(_line(gx + 28, cy, bx, cy, WIRE))
+        out.append(_txt((gx + 8 + gx + 28) / 2, cy - 8, tag.split()[0] + " gate", 9.5,
                         INK, "middle"))
-        out.append(_txt(gx + 30, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
-        out.append(_txt(gx + 30, cy + 36, f"R={_fmtR(r_gate)}", 9.5, INK, "start"))
-        # return leg down to the return node (red = shares CSI, grey-dash = Kelvin)
-        rx = bx + bw - 12
+        out.append(_txt(gx + 34, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
+        out.append(_txt(gx + 34, cy + 36, f"R={_fmtR(r_gate)}", 9.5, INK, "start"))
+        # return leg exits the box BOTTOM edge (clear of the block) and drops to the
+        # return node (solid = shares CSI / non-Kelvin, grey-dashed = Kelvin tap).
+        rpx = bx + bw - 16
         dash = "5 3" if kelvin else None
-        out.append(_line(rx, cy + 10, rx, ret_y, WIRE, 1.6, dash=dash))
-        out.append(_line(rx, ret_y, xc, ret_y, WIRE, 1.6, dash=dash))
+        out.append(_line(rpx, by + bh, rpx, ret_y, WIRE, 1.6, dash=dash))
+        out.append(_line(rpx, ret_y, xc, ret_y, WIRE, 1.6, dash=dash))
         return "".join(out)
 
     s.append(driver(cy_hs, g_hs, y_nhs, y_sw, p["L_gate_hs"],
