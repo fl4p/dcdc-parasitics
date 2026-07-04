@@ -202,15 +202,28 @@ def schematic(p):
         s.append(_txt((used_xs[0]+used_xs[-1])/2, cy_cap + 48, "share = current split", 9,
                       MUTE, "middle", ital=True))
 
-    # greyed caps present on the board but NOT in the modeled loop
+    # greyed caps present on the board but NOT in the modeled loop, annotated with
+    # WHY: bulk/electrolytic (can't source the HF edge) vs MLCC present but unported
     if others:
-        lbl = ", ".join(others) if len(others) <= 4 else f"{len(others)} more caps"
+        cin_class = t.get("cin_class", {})
+        bulk = [c for c in others if cin_class.get(c) == "bulk"]
+        mlcc_out = [c for c in others if cin_class.get(c) != "bulk"]
         s.append(_line(gx, y_vin, gx, cy_cap - 7, MUTE, 1.2, dash="4 3"))
         s.append(_line(gx, cy_cap + 7, gx, y_gnd, MUTE, 1.2, dash="4 3"))
         s.append(_cap(gx, cy_cap, MUTE, 1.6))
-        s.append(_txt(gx, cy_cap - 12, f"+{lbl}", 9.5, MUTE, "middle"))
-        s.append(_txt(gx, cy_cap + 20, "not in", 9, MUTE, "middle", ital=True))
-        s.append(_txt(gx, cy_cap + 31, "modeled loop", 9, MUTE, "middle", ital=True))
+        s.append(_txt(gx, cy_cap - 12, "not in loop", 9, MUTE, "middle", ital=True))
+        reasons = []
+        if bulk:
+            reasons.append((f"{','.join(bulk)}: bulk (HF-excl.)" if len(bulk) <= 3
+                            else f"{len(bulk)} bulk (HF-excl.)"))
+        if mlcc_out:
+            reasons.append(f"{','.join(mlcc_out)}: MLCC" if len(mlcc_out) <= 3
+                           else f"{len(mlcc_out)} MLCC unported")
+            reasons.append("→ add --cin-parallel")
+        yy = cy_cap + 20
+        for r in reasons:
+            s.append(_txt(gx, yy, r, 8.5, MUTE, "middle", ital=True))
+            yy += 11
 
     # ================= HS side =================
     s.append(_line(xc, y_vin, xc, y_lh0, WIRE))
@@ -255,9 +268,14 @@ def schematic(p):
     s.append(_line(xc, y_lsl_cs1, xc, y_gnd, WIRE))
 
     # ================= gate drivers =================
-    def driver(cy, gxy, node_y, l_gate, r_gate, kelvin, tag):
+    # The gate-return node sets whether CSI is in the gate loop:
+    #   non-Kelvin -> return to the power-source node (SW / GND), BELOW Lscs, so the
+    #                 return current shares the source lead (CSI in loop).
+    #   Kelvin     -> return to the die-source tap (nHS / nLS), ABOVE Lscs (excluded).
+    def driver(cy, gxy, die_y, src_y, l_gate, r_gate, kelvin, tag):
         out = []
         gx = gxy[0]
+        ret_y = die_y if kelvin else src_y
         # driver box
         bx, by, bw, bh = xdrv, cy - 22, 74, 44
         out.append(f"<rect x='{bx}' y='{by}' width='{bw}' height='{bh}' rx='4' "
@@ -273,21 +291,20 @@ def schematic(p):
                         INK, "middle"))
         out.append(_txt(gx + 30, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
         out.append(_txt(gx + 30, cy + 36, f"R={_fmtR(r_gate)}", 9.5, INK, "start"))
-        # return leg: down from driver bottom to the die-source node (non-Kelvin)
-        # or to a Kelvin tap. This return SHARES Lscs with the power current.
+        # return leg down to the return node (red = shares CSI, grey-dash = Kelvin)
         rx = bx + bw - 12
-        out.append(_line(rx, cy + 10, rx, node_y, WIRE, 1.6,
-                         dash=None if not kelvin else "5 3"))
-        out.append(_line(rx, node_y, xc, node_y, WIRE, 1.6,
-                         dash=None if not kelvin else "5 3"))
-        out.append(_txt(rx + 6, node_y - 6,
-                        "gate return" + (" (Kelvin)" if kelvin else ""),
-                        9.5, CSI if not kelvin else MUTE, "start"))
+        dash = "5 3" if kelvin else None
+        col = MUTE if kelvin else CSI
+        out.append(_line(rx, cy + 10, rx, ret_y, WIRE, 1.6, dash=dash))
+        out.append(_line(rx, ret_y, xc, ret_y, WIRE, 1.6, dash=dash))
+        lbl = ("gate return → die-src (Kelvin, CSI excluded)" if kelvin
+               else "gate return → source (shares Lscs = CSI)")
+        out.append(_txt(rx - 4, ret_y - 6, lbl, 9.5, col, "end"))
         return "".join(out)
 
-    s.append(driver(cy_hs, g_hs, y_nhs, p["L_gate_hs"],
+    s.append(driver(cy_hs, g_hs, y_nhs, y_sw, p["L_gate_hs"],
                     p["R_gate_hs"], t["hs"]["kelvin"], "HS gate"))
-    s.append(driver(cy_ls, g_ls, y_nls, p["L_gate_ls"],
+    s.append(driver(cy_ls, g_ls, y_nls, y_gnd, p["L_gate_ls"],
                     p["R_gate_ls"], t["ls"]["kelvin"], "LS gate"))
 
     # ================= title + legend =================
