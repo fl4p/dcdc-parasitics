@@ -19,6 +19,7 @@ loop — keeping the single-cap heuristic honest.
 import html
 import json
 import os
+import re
 
 # ---- palette -------------------------------------------------------------
 INK = "#1a1a1a"
@@ -126,6 +127,21 @@ def _fmtR(v):
 def _leaf(net):
     """Leaf net name — drop the KiCad sheet path (/DC/DC/SW_NODE -> SW_NODE)."""
     return (net or "").strip().split("/")[-1]
+
+
+def _rkm(v):
+    """Decode an RKM resistor value (3R3 -> '3.3 Ω', 4K7 -> '4.7 kΩ'); pass through
+    anything that doesn't match."""
+    v = (v or "").strip()
+    m = re.fullmatch(r"(\d*)[Rr](\d*)", v)
+    if m:
+        a, b = m.group(1) or "0", m.group(2)
+        return f"{a}.{b} Ω" if b else f"{a} Ω"
+    m = re.fullmatch(r"(\d*)[kK](\d*)", v)
+    if m:
+        a, b = m.group(1) or "0", m.group(2)
+        return f"{a}.{b} kΩ" if b else f"{a} kΩ"
+    return v
 
 
 def schematic(p):
@@ -267,7 +283,7 @@ def schematic(p):
     #   non-Kelvin -> return to the power-source node (SW / GND), BELOW Lscs, so the
     #                 return current shares the source lead (CSI in loop).
     #   Kelvin     -> return to the die-source tap (nHS / nLS), ABOVE Lscs (excluded).
-    def driver(cy, gxy, die_y, src_y, l_gate, r_gate, kelvin, tag):
+    def driver(cy, gxy, die_y, src_y, l_gate, r_gate, kelvin, tag, gd=None):
         out = []
         gx = gxy[0]
         ret_y = die_y if kelvin else src_y
@@ -278,14 +294,44 @@ def schematic(p):
         out.append(_txt(bx + bw/2, cy - 4, tag, 11, INK, "middle", "bold"))
         out.append(_txt(bx + bw/2, cy + 11, "driver", 10, MUTE, "middle"))
         # gate drive: one straight horizontal run at the gate level (cy) — FET gate
-        # -> Lghs coil -> driver output pin on the box's left edge (no jog).
+        # -> Lghs coil -> [series Rg ∥ anti-parallel D] -> driver output pin (no jog).
         out.append(_line(gx, cy, gx + 8, cy, WIRE))
         out.append(_coil_h(cy, gx + 8, gx + 28, WIRE))
-        out.append(_line(gx + 28, cy, bx, cy, WIRE))
         out.append(_txt((gx + 8 + gx + 28) / 2, cy - 8, tag.split()[0] + " gate", 9.5,
                         INK, "middle"))
         out.append(_txt(gx + 34, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
-        out.append(_txt(gx + 34, cy + 36, f"R={_fmtR(r_gate)}", 9.5, INK, "start"))
+        out.append(_txt(gx + 34, cy + 36, f"R={_fmtR(r_gate)} (Cu)", 9.5, INK, "start"))
+        gd_r = (gd or {}).get("r")
+        gd_d = (gd or {}).get("d")
+        if gd_r or gd_d:
+            # discrete gate network sits between the coil and the driver pin. Not in
+            # the FastHenry extraction (copper only) — drawn for context.
+            xL, xR = bx - 92, bx - 32
+            rc, bw2, bh2 = (xL + xR) / 2, 30, 11
+            out.append(_line(gx + 28, cy, xL, cy, WIRE))
+            out.append(_line(xR, cy, bx, cy, WIRE))
+            if gd_r:
+                out.append(_line(xL, cy, rc - bw2 / 2, cy, WIRE))
+                out.append(_line(rc + bw2 / 2, cy, xR, cy, WIRE))
+                out.append(f"<rect x='{rc-bw2/2:.1f}' y='{cy-bh2/2:.1f}' width='{bw2}' "
+                           f"height='{bh2}' fill='white' stroke='{INK}' stroke-width='1.4'/>")
+                out.append(_txt(rc, cy - 9, f"{gd_r['ref']} {_rkm(gd_r['value'])}", 9,
+                                INK, "middle", "bold"))
+            else:
+                out.append(_line(xL, cy, xR, cy, WIRE))
+            if gd_d:
+                # anti-parallel diode branch below (cathode toward driver = turn-off bypass)
+                yb, dc = cy + 16, rc
+                out.append(_line(xL, cy, xL, yb, WIRE, 1.3))
+                out.append(_line(xR, cy, xR, yb, WIRE, 1.3))
+                out.append(_line(xL, yb, dc - 5, yb, WIRE, 1.3))
+                out.append(_line(dc + 5, yb, xR, yb, WIRE, 1.3))
+                out.append(f"<path d='M {dc-5:.1f} {yb-5:.1f} L {dc-5:.1f} {yb+5:.1f} "
+                           f"L {dc+5:.1f} {yb:.1f} Z' fill='none' stroke='{INK}' stroke-width='1.2'/>")
+                out.append(_line(dc + 5, yb - 5, dc + 5, yb + 5, INK, 1.2))
+                out.append(_txt(dc, yb + 13, f"∥ {gd_d['ref']}", 8.5, MUTE, "middle", ital=True))
+        else:
+            out.append(_line(gx + 28, cy, bx, cy, WIRE))
         # return leg exits the box BOTTOM edge (clear of the block) and drops to the
         # return node (solid = shares CSI / non-Kelvin, grey-dashed = Kelvin tap).
         rpx = bx + bw - 16
@@ -295,9 +341,9 @@ def schematic(p):
         return "".join(out)
 
     s.append(driver(cy_hs, g_hs, y_nhs, y_sw, p["L_gate_hs"],
-                    p["R_gate_hs"], t["hs"]["kelvin"], "HS gate"))
+                    p["R_gate_hs"], t["hs"]["kelvin"], "HS gate", t["hs"].get("gate_drive")))
     s.append(driver(cy_ls, g_ls, y_nls, y_gnd, p["L_gate_ls"],
-                    p["R_gate_ls"], t["ls"]["kelvin"], "LS gate"))
+                    p["R_gate_ls"], t["ls"]["kelvin"], "LS gate", t["ls"].get("gate_drive")))
 
     # ================= title + legend =================
     board = os.path.basename(t.get("pcb", "") or "")

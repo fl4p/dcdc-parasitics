@@ -72,6 +72,39 @@ def _unique_nets(pads):
     return out
 
 
+def gate_network(board, gate_net, owner_refs):
+    """Discrete gate-drive parts between the gate net and the driver net.
+
+    Detects a series gate resistor and an anti-parallel diode by connectivity: any
+    part (not the FET itself) with a pad on the FET-side gate net; its other pad is
+    the driver-side net. Returns dict(r=..., d=..., driver_net=...) where r/d are
+    each dict(ref, value, driver_net) or None. These are annotated on the schematic
+    for context — FastHenry meshes only copper, so R/D are not part of the extraction.
+    """
+    r = d = driver_net = None
+    owners = set(owner_refs)
+    for fp in board.GetFootprints():
+        ref = fp.GetReference()
+        if ref in owners:
+            continue
+        nets = [p.GetNetname() for p in fp.Pads() if p.GetNetname()]
+        if gate_net not in nets:
+            continue
+        others = [n for n in nets if n != gate_net]
+        if not others:
+            continue
+        drv = others[0]
+        entry = dict(ref=ref, value=fp.GetValue(), driver_net=drv)
+        up = ref.upper()
+        if up.startswith("R") and r is None:
+            r = entry
+            driver_net = driver_net or drv
+        elif up.startswith("D") and d is None:
+            d = entry
+            driver_net = driver_net or drv
+    return dict(r=r, d=d, driver_net=driver_net)
+
+
 def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
              hs_gate=None, ls_gate=None, hs_kelvin=None, ls_kelvin=None):
     """Return a topology dict. Raises ValueError if the half-bridge is ambiguous."""
@@ -151,10 +184,12 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
         hs=dict(refs=[r["ref"] for r in hs], gate=hs_gate_net,
                 drain=vin_net, source=sw, kelvin=hs_kv,
                 gate_return=source_net("hs") if not hs_kv else "KELVIN",
+                gate_drive=gate_network(board, hs_gate_net, [r["ref"] for r in hs]),
                 pads={r["ref"]: r["pads"] for r in hs}),
         ls=dict(refs=[r["ref"] for r in ls], gate=ls_gate_net,
                 drain=sw, source=gnd, kelvin=ls_kv,
                 gate_return=source_net("ls") if not ls_kv else "KELVIN",
+                gate_drive=gate_network(board, ls_gate_net, [r["ref"] for r in ls]),
                 pads={r["ref"]: r["pads"] for r in ls}),
         cin=cin,
     )
@@ -174,6 +209,15 @@ def _report(topo):
         print(f"    drain/source : {d['drain']} / {d['source']}")
         print(f"    gate return  : {d['gate_return']}"
               f"  ({'Kelvin -> CSI excluded' if d['kelvin'] else 'shared source -> CSI in gate loop'})")
+        gdw = d.get("gate_drive") or {}
+        gr, gd = gdw.get("r"), gdw.get("d")
+        parts = []
+        if gr:
+            parts.append(f"Rg {gr['ref']}={gr['value']}")
+        if gd:
+            parts.append(f"anti-parallel D {gd['ref']}={gd['value']}")
+        print(f"    gate drive   : {' , '.join(parts) or '(no series R/D found — direct drive)'}"
+              + (f"  from {gdw.get('driver_net')}" if gdw.get("driver_net") else ""))
     print(f"Cin (Vin<->GND)  : {', '.join(topo['cin']) or '(none found)'}")
 
 

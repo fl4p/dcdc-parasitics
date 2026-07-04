@@ -117,6 +117,9 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   extracted network: each parasitic as a labelled coil, the two common-source
   source-leads in red, and the input-cap bank showing which caps the model ported
   (parallel legs with their current split) vs. board caps left out of the loop.
+  The discrete **gate network** (series Rg and any anti-parallel diode, auto-found
+  on the gate net) is annotated for context — copper-only FastHenry does not model
+  it, so the coil's `R` is the trace resistance (`Cu`), distinct from the gate Rg.
 
 ## Requirements & config
 
