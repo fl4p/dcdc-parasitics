@@ -61,7 +61,16 @@ def subckt(p):
         "* CSI is the shared source-lead branch (Lscs_*). Drive HS gate between",
         "* HSG and SW for non-Kelvin (CSI in loop), or HSG-HSKEL for Kelvin.",
     ]
-    for w in warn:
+    if p.get("n_cin", 1) > 1:
+        kind = "physical (cap ESL/ESR)" if p.get("L_loop_physical") is not None \
+            else "ideal-cap copper-only (lower bound)"
+        lines.append(
+            f"* L_loop = {p['L_loop']*nH:.3g} nH: effective {p['n_cin']} input caps in "
+            f"parallel ({','.join(t.get('cin_used', []))}), {kind}.")
+        lines.append(
+            f"*   bracket: single nearest cap {p['L_loop_single']*nH:.3g} nH (upper) >= "
+            f"truth >= ideal-cap {p.get('L_loop_ideal', p['L_loop'])*nH:.3g} nH (lower).")
+    for w in warn + (p.get("reduce_warn") or []):
         lines.append(f"* WARNING: {w}")
     lines += [
         "* ------------------------------------------------------------------",
@@ -94,10 +103,23 @@ def markdown(p):
         f"{'Kelvin sense (CSI excluded)' if t['hs']['kelvin'] else 'non-Kelvin (CSI in gate loop)'}",
         f"- **LS** {', '.join(t['ls']['refs'])} — gate `{t['ls']['gate']}` — "
         f"{'Kelvin sense (CSI excluded)' if t['ls']['kelvin'] else 'non-Kelvin (CSI in gate loop)'}",
+        f"- **Cin ported** (in order, nearest→): {', '.join(t.get('cin_used', [])) or '(single nearest)'}"
+        + (f" — {p['n_cin']} caps in parallel" if p.get('n_cin', 1) > 1 else ""),
         "",
         "| Parasitic | Value |",
         "|---|---|",
-        f"| Commutation loop L (Cin→HS→SW→LS→GND) | **{L(p['L_loop'])}** |",
+        f"| Commutation loop L (Cin→HS→SW→LS→GND){' — %d caps ‖' % p['n_cin'] if p.get('n_cin', 1) > 1 else ''} | **{L(p['L_loop'])}** |",
+    ]
+    if p.get("n_cin", 1) > 1:
+        # SW-peak L is bracketed: single-cap (upper) ≥ truth ≥ ideal-cap copper-only (lower)
+        lines.append(
+            f"| ⤷ single nearest cap alone — **upper bound** | {L(p['L_loop_single'])} |")
+        lines.append(
+            f"| ⤷ ideal-cap parallel (copper only) — **lower bound** | {L(p.get('L_loop_ideal', p['L_loop']))} |")
+        if p.get("L_loop_physical") is not None:
+            lines.append(
+                f"| ⤷ with cap ESL {p['cin_esl']*1e9:.2g} nH / ESR {p['cin_esr']*1e3:.2g} mΩ — **physical** | {L(p['L_loop_physical'])} |")
+    lines += [
         f"| Commutation loop R (@ {p['freq_Hz']:.2g} Hz) | {p['R_loop']*1e3:.2f} mΩ |",
         f"| HS common-source inductance | **{L(p['csi_hs'])}** |",
         f"| LS common-source inductance | **{L(p['csi_ls'])}** |",
@@ -126,10 +148,41 @@ def markdown(p):
         "aggravates shoot-through. Use `parasitics.lib` in a gate-drive/DPT sim; use "
         "`L_loop` with device Coss for switch-node peak-voltage / ringing.",
     ]
+
+    split = p.get("current_split") or {}
+    if len(split) > 1:
+        lines += [
+            "",
+            "## Input-cap current split (at the ring frequency)",
+            "",
+            "Fraction of the total commutation current each ported cap carries "
+            "(from `y = Zc⁻¹·1`). The parallel loop L is bracketed **single-cap "
+            "(upper) ≥ truth ≥ ideal-cap copper-only (lower)**; the truth sits near "
+            "the lower bound when cap ESL ≪ per-cap branch L. Ideal caps assume each "
+            "MLCC is a short — pass `--cin-esl/--cin-esr` for the physical split.",
+            "",
+            "| Cap | current share |",
+            "|---|---|",
+        ]
+        for ref, s in split.items():
+            lines.append(f"| {ref} | {s['mag']*100:.0f}% |")
+
+    excl = t.get("cin_excluded_bulk") or []
+    warns = p.get("reduce_warn") or []
+    if excl or warns:
+        lines.append("")
+        lines.append("## Notes")
+        lines.append("")
+        if excl:
+            lines.append(f"- Bulk caps excluded (≥10 µF, ineffective at the edge): "
+                         f"{', '.join(excl)}. Re-run with `--include-bulk-cin` to keep them.")
+        for wm in warns:
+            lines.append(f"- ⚠️ {wm}")
+
     return "\n".join(lines) + "\n"
 
 
-def emit_all(p, outdir):
+def emit_all(p, outdir, svg=False):
     os.makedirs(outdir, exist_ok=True)
     sub, warn = subckt(p)
     with open(os.path.join(outdir, "parasitics.lib"), "w") as f:
@@ -138,6 +191,9 @@ def emit_all(p, outdir):
         json.dump(p, f, indent=2)
     with open(os.path.join(outdir, "report.md"), "w") as f:
         f.write(markdown(p))
+    if svg:
+        import emit_svg
+        emit_svg.emit_svg(p, os.path.join(outdir, "schematic.svg"))
     return warn
 
 

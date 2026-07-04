@@ -39,19 +39,23 @@ def run_geom(args, pitch, outdir):
     inp = os.path.join(outdir, f"model_{pitch:g}.inp")
     cmd = [KICAD_PY, os.path.join(HERE, "kicad_geom.py"), args.pcb,
            "--sw", args.sw, "--gnd", args.gnd, "--pitch", str(pitch),
+           "--cin-parallel", str(args.cin_parallel),
            "--lead-mm", str(args.lead_mm), "--nwinc", str(args.nwinc),
            "--nhinc", str(args.nhinc), "-o", inp]
     for flag, val in (("--vin", args.vin), ("--hs-gate", args.hs_gate),
                       ("--ls-gate", args.ls_gate)):
         if val:
             cmd += [flag, val]
-    for flag, vals in (("--hs-ref", args.hs_ref), ("--ls-ref", args.ls_ref)):
+    for flag, vals in (("--hs-ref", args.hs_ref), ("--ls-ref", args.ls_ref),
+                       ("--cin-refs", args.cin_refs)):
         if vals:
             cmd += [flag] + vals
     if args.hs_kelvin:
         cmd.append("--hs-kelvin")
     if args.ls_kelvin:
         cmd.append("--ls-kelvin")
+    if args.include_bulk_cin:
+        cmd.append("--include-bulk-cin")
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
@@ -75,10 +79,23 @@ def main():
     ap.add_argument("--ls-kelvin", action="store_true", help="LS gate uses Kelvin source")
     ap.add_argument("--pitch", type=float, nargs="+", default=[1.0],
                     help="pour mesh pitch(es) mm; multiple -> convergence sweep")
+    ap.add_argument("--cin-parallel", type=int, default=1,
+                    help="port the N nearest input caps in parallel for the "
+                         "effective (accurate) commutation-loop L; 1 = nearest-cap only")
+    ap.add_argument("--cin-refs", nargs="*",
+                    help="explicit input-cap refdes to port (overrides nearest-N)")
+    ap.add_argument("--include-bulk-cin", action="store_true",
+                    help="also port bulk electrolytics (>=10uF); default excludes them")
+    ap.add_argument("--cin-esl", type=float, default=0.0,
+                    help="per-cap ESL (nH) added to each branch -> physical current "
+                         "split at f_ring; 0 = ideal-cap copper-only lower bound")
+    ap.add_argument("--cin-esr", type=float, default=0.0, help="per-cap ESR (mOhm)")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length mm")
     ap.add_argument("--nwinc", type=int, default=1, help="skin sub-mesh width (>1: slower, more HF-accurate)")
     ap.add_argument("--nhinc", type=int, default=1, help="skin sub-mesh height")
     ap.add_argument("--plateau", type=float, default=5e6, help="L-plateau frequency Hz")
+    ap.add_argument("--svg", action="store_true",
+                    help="also write schematic.svg (half-bridge + parasitics)")
     ap.add_argument("-o", "--out", required=True, help="output directory")
     args = ap.parse_args()
 
@@ -91,11 +108,17 @@ def main():
         inp, side = run_geom(args, pitch, workdir)
         meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"))
         p = solve_reduce.solve(inp, side["ports"], side["topo"], meta,
-                               plateau=args.plateau, suffix=f"p{i}")
+                               plateau=args.plateau, suffix=f"p{i}",
+                               cin_ports=side.get("cin_ports"),
+                               cin_esl=args.cin_esl * 1e-9, cin_esr=args.cin_esr * 1e-3)
         results.append((pitch, p))
+        extra = ""
+        if p.get("n_cin", 1) > 1:
+            extra = (f"  (single-cap {p['L_loop_single']*1e9:.2f} nH -> "
+                     f"{p['n_cin']} caps || {p['L_loop']*1e9:.2f} nH)")
         print(f"pitch {pitch:>4} mm : L_loop={p['L_loop']*1e9:6.2f} nH  "
               f"CSI_hs={p['csi_hs']*1e9:5.2f} nH  CSI_ls={p['csi_ls']*1e9:5.2f} nH  "
-              f"L_gate_hs={p['L_gate_hs']*1e9:5.2f} nH")
+              f"L_gate_hs={p['L_gate_hs']*1e9:5.2f} nH{extra}")
 
     if len(results) > 1:
         ll = [p["L_loop"] for _, p in results]
@@ -104,8 +127,9 @@ def main():
               f"{[f'{pt}' for pt, _ in results]}")
 
     pitch, p = results[-1]  # finest
-    warn = emit.emit_all(p, args.out)
-    print(f"\nwrote {args.out}/parasitics.lib, parasitics.json, report.md "
+    warn = emit.emit_all(p, args.out, svg=args.svg)
+    arts = "parasitics.lib, parasitics.json, report.md" + (", schematic.svg" if args.svg else "")
+    print(f"\nwrote {args.out}/{{{arts}}} "
           f"(pitch {pitch} mm, plateau {p['freq_Hz']:g} Hz)")
     for w in warn:
         print(f"  WARNING: {w}")

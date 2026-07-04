@@ -64,13 +64,111 @@ def pick_plateau(zc, target=5e6):
     return f, zc[f]
 
 
-def reduce_parasitics(zc, ports, topo, meta, plateau=5e6):
+def _eff_commutation(Z, cin_idx, zcap=None):
+    """Effective 2-terminal commutation impedance of the input caps driven in
+    parallel (common voltage across every Cin port, other ports open).
+
+    For N cap ports with complex port matrix Zc, driving all at the same voltage
+    V gives port currents I = V*Zc^-1*1, total I_tot = V*(1^T Zc^-1 1), so the
+    effective impedance seen by the FET commutation current is
+
+        Z_eff = V / I_tot = 1 / (1^T Zc^-1 1).
+
+    This folds in every mutual Mij between the cap-return loops exactly; for N=1
+    it degenerates to Zc[0,0] (the single-cap loop). With `zcap` (a per-cap
+    complex branch impedance ESR+jw*ESL) it adds each cap's own parasitics in
+    series, making the current split physical at the ring frequency instead of
+    the ideal-cap (copper-only) limit.
+
+    Solves Zc x = 1 (never forms an explicit inverse — Zc can be ill-conditioned
+    when caps are closely coupled). Returns (Z_eff, y, denom, cond, weights),
+    where y are the branch currents, weights = y/denom sum to 1 (the current
+    split), and cond is the 2-norm condition number for a reliability check."""
+    Zc = Z[np.ix_(cin_idx, cin_idx)].astype(complex)
+    if zcap is not None:
+        Zc = Zc + np.diag(zcap)
+    ones = np.ones(len(cin_idx), dtype=complex)
+    y = np.linalg.solve(Zc, ones)
+    denom = complex(y.sum())
+    cond = float(np.linalg.cond(Zc))
+    return 1.0 / denom, y, denom, cond, y / denom
+
+
+def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
+                      cin_esl=0.0, cin_esr=0.0):
     f, Z = pick_plateau(zc, plateau)
     w = 2 * np.pi * f
     L = Z.imag / w
     R = Z.real
     idx = {p: i for i, p in enumerate(ports)}
-    ip, ih, il = idx["P_pwr"], idx.get("P_ghs"), idx.get("P_gls")
+    ih, il = idx.get("P_ghs"), idx.get("P_gls")
+
+    if not cin_ports:
+        cin_ports = ["P_pwr"]
+    cin_idx = [idx[c] for c in cin_ports if c in idx]
+    if not cin_idx:
+        cin_idx = [idx["P_pwr"]] if "P_pwr" in idx else [0]
+
+    # optional per-cap branch impedance (ESR + jw*ESL) -> physical current split
+    def zcap_at(wf):
+        if cin_esl <= 0 and cin_esr <= 0:
+            return None
+        return np.array([cin_esr + 1j * wf * cin_esl] * len(cin_idx), dtype=complex)
+
+    # headline reduction (physical if ESL/ESR given, else ideal copper-only)
+    Zeff, y, denom, cond, weights = _eff_commutation(Z, cin_idx, zcap_at(w))
+    L_loop = float(Zeff.imag / w)
+    R_loop = float(Zeff.real)
+    # bracket: ideal copper-only (lower bound) and nearest single cap (upper bound)
+    Zeff0, _, _, _, _ = _eff_commutation(Z, cin_idx, None)
+    L_loop_ideal = float(Zeff0.imag / w)
+    i0 = cin_idx[0]
+    L_loop_single = float(Z[i0, i0].imag / w)
+    per_cap_L = {ports[j]: float(Z[j, j].imag / w) for j in cin_idx}
+
+    # per-frequency effective L/R across the whole sweep (confirm the plateau)
+    sweep = []
+    for ff in sorted(zc.keys()):
+        Zf = zc[ff]
+        wf = 2 * np.pi * ff
+        Ze, _, _, cf, _ = _eff_commutation(Zf, cin_idx, zcap_at(wf))
+        sweep.append(dict(f=ff, L_eff=float(Ze.imag / wf),
+                          R_eff=float(Ze.real), cond=cf))
+
+    # current split keyed by refdes (cin_used order matches cin_ports order)
+    refs = (topo or {}).get("cin_used", []) if isinstance(topo, dict) else []
+    split = {}
+    for k, ci in enumerate(cin_idx):
+        name = refs[k] if k < len(refs) else ports[ci]
+        wk = complex(weights[k])
+        split[name] = dict(re=wk.real, im=wk.imag, mag=abs(wk))
+
+    warn = []
+    if cond > 1e6:
+        warn.append(f"Zc ill-conditioned (cond={cond:.1e}) — parallel reduction "
+                    f"unreliable; check cap ports / near-coincident caps")
+    neg = [n for n, s in split.items() if s["re"] < -1e-3]
+    if neg:
+        warn.append(f"negative current share on {neg} — circulating current "
+                    f"between coupled caps; review port polarity / geometry")
+    if len(cin_idx) > 1 and L_loop_ideal > L_loop_single + 1e-12:
+        warn.append("effective loop L exceeds single-cap L — unexpected for "
+                    "parallel caps; check mutual signs / port polarity")
+    if len(cin_idx) > 1 and L_loop_ideal < L_loop_single / len(cin_idx) - 1e-12:
+        # positively-coupled parallel caps can't drop below the uncoupled floor
+        warn.append(f"effective loop L ({L_loop_ideal*1e9:.2f} nH) is below the "
+                    f"uncoupled parallel floor ({L_loop_single/len(cin_idx)*1e9:.2f} nH) "
+                    f"— likely reversed cap-port polarity or a mutual-sign error")
+
+    def eff_csi(g):
+        """Effective common-source mutual: gate-loop voltage per unit *total*
+        commutation current, using the parallel-cap current distribution y.
+        Reduces to |L[pwr,gate]| when a single cap is ported."""
+        if g is None:
+            return 0.0
+        m = Z[g, cin_idx]                      # gate<->each-cap coupling row
+        Zmg = complex(np.dot(m, y) / denom)
+        return abs(Zmg.imag / w)
 
     def LL(a, b):
         return float(L[a, b]) if (a is not None and b is not None) else 0.0
@@ -78,23 +176,32 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6):
     def RR(a):
         return float(R[a, a]) if a is not None else 0.0
 
+    physical = cin_esl > 0 or cin_esr > 0
     p = dict(
         freq_Hz=f,
-        L_loop=LL(ip, ip), R_loop=RR(ip),
+        L_loop=L_loop, R_loop=R_loop,
+        L_loop_ideal=L_loop_ideal,            # copper-only lower bound
+        L_loop_single=L_loop_single,          # nearest single cap, upper bound
+        L_loop_physical=(L_loop if physical else None),
+        per_cap_L=per_cap_L, current_split=split,
+        cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond, reduce_warn=warn,
+        L_eff_sweep=sweep, n_cin=len(cin_idx),
         L_gate_hs=LL(ih, ih), R_gate_hs=RR(ih),
         L_gate_ls=LL(il, il), R_gate_ls=RR(il),
-        csi_hs=abs(LL(ip, ih)),
-        csi_ls=abs(LL(ip, il)),
+        csi_hs=eff_csi(ih),
+        csi_ls=eff_csi(il),
         m_gate=LL(ih, il),
-        port_L=L.tolist(), port_R=R.tolist(), ports=ports,
+        port_L=L.tolist(), port_R=R.tolist(), ports=ports, cin_ports=cin_ports,
         topo=topo, meta=meta,
     )
     return p
 
 
-def solve(inp, ports, topo, meta, plateau=5e6, suffix="dcdc"):
+def solve(inp, ports, topo, meta, plateau=5e6, suffix="dcdc", cin_ports=None,
+          cin_esl=0.0, cin_esr=0.0):
     zc = parse_zc(run_fasthenry(inp, suffix=suffix))
-    return reduce_parasitics(zc, ports, topo, meta, plateau)
+    return reduce_parasitics(zc, ports, topo, meta, plateau, cin_ports=cin_ports,
+                             cin_esl=cin_esl, cin_esr=cin_esr)
 
 
 if __name__ == "__main__":

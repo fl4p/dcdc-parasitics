@@ -30,6 +30,8 @@ the discovered topology for the reduce step.
 import argparse
 import json
 import os
+import re
+import sys
 
 import pcbnew
 
@@ -75,6 +77,7 @@ class Model:
         self.segs = []            # (name, na, nb, w, h)
         self.equivs = []          # (na, nb)
         self.ports = []           # (label, na, nb)
+        self.cin_ports = ["P_pwr"]  # labels of the commutation (Cin) ports
         self._ni = 0
         self._si = 0
 
@@ -389,7 +392,8 @@ def _roi(board, topo, margin=8.0):
     return (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
 
 
-def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0):
+def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
+          cin_refs=None, include_bulk=False):
     zmap = layer_z_map(board)
     model = Model()
     power_nets = {topo["sw"], topo["vin"], topo["gnd"]}
@@ -405,15 +409,24 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0):
     build_fet(board, model, zmap, topo, "hs", lead_mm)
     build_fet(board, model, zmap, topo, "ls", lead_mm)
 
-    # Cin pad stacks (create nodes now so the global stitch bonds them to the pours)
-    cinp, cinm = cin_port_nodes(board, model, zmap, topo)
+    # Cin pad stacks (create nodes now so the global stitch bonds them to the pours).
+    # With cin_parallel>1 the N nearest ceramics each get their own port, so the
+    # solve captures their mutual coupling and the reduce step forms the true
+    # parallel loop L (not the pessimistic single-cap bound).
+    cins = cin_ports(board, model, zmap, topo, n=cin_parallel,
+                     refs=cin_refs, include_bulk=include_bulk)
 
     # bond every track/via/pad node into the pour mesh on its net+layer
     model.stitch_zones(pitch)
 
     # ---- ports ----
-    if cinp and cinm:
-        model.port("P_pwr", cinp, cinm)
+    cin_labels = []
+    for i, (_ref, vn, gn) in enumerate(cins):
+        label = "P_pwr" if i == 0 else f"P_pwr{i}"
+        model.port(label, vn, gn)
+        cin_labels.append(label)
+    model.cin_ports = cin_labels
+    topo["cin_used"] = [ref for ref, _, _ in cins]
     for role, label in (("hs", "P_ghs"), ("ls", "P_gls")):
         d = topo[role]
         drv = gate_driver_node(board, model, zmap, d["gate"])
@@ -423,30 +436,72 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0):
     return model
 
 
-def cin_port_nodes(board, model, zmap, topo):
-    """Pick the Cin nearest the FETs; return its Vin-pad and GND-pad nodes."""
-    # FET centroid
+def _cap_farads(fp):
+    """Parse a cap footprint's value field to farads. Returns None if unparseable
+    (e.g. 'DNP', a part number). Handles '100n', '4u7', '10uF', '1nF', '470µF'."""
+    v = (fp.GetValue() or "").strip().replace("µ", "u").replace("Ω", "")
+    m = re.search(r"([\d]+)([pnum]?)(?:F)?[.,]?(\d*)", v, re.I) \
+        or re.search(r"([\d.]+)\s*([pnum]?)F?", v, re.I)
+    if not m:
+        return None
+    mult = dict(p=1e-12, n=1e-9, u=1e-6, m=1e-3)
+    # KiCad "R/units" style: digit-unit-digit means unit is the decimal point (4u7 = 4.7u)
+    if m.lastindex and m.lastindex >= 3 and m.group(2) and m.group(3):
+        val = float(f"{m.group(1)}.{m.group(3)}")
+        return val * mult.get(m.group(2).lower(), 1.0)
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    return val * mult.get((m.group(2) or "").lower(), 1.0)
+
+
+def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False,
+              bulk_uf=10.0):
+    """Return up to `n` (ref, vin_node, gnd_node) for input caps bridging
+    Vin<->GND, ordered nearest-first by distance to the FET centroid. Ports are
+    ALWAYS (Vin-pad -> GND-pad) so every cap port has identical polarity (a
+    reversed port would silently corrupt the mutuals).
+
+    - `refs` (explicit refdes list) overrides the nearest-N heuristic entirely.
+    - bulk electrolytics (value >= `bulk_uf` uF) are excluded by default: above
+      their SRF they cannot source the tens-of-MHz commutation edge, and they
+      only add conductors/mesh cost. Pass include_bulk=True to keep them.
+    n==1 (no refs) reproduces the old single-cap port."""
     fps = [fp for fp in board.GetFootprints()
            if fp.GetReference() in (topo["hs"]["refs"] + topo["ls"]["refs"])]
     cx = sum(mm(fp.GetPosition().x) for fp in fps) / len(fps)
     cy = sum(mm(fp.GetPosition().y) for fp in fps) / len(fps)
-    best = None
+    want = set(refs) if refs else None
+    cand, excluded_bulk = [], []
     for fp in board.GetFootprints():
-        if fp.GetReference() not in topo["cin"]:
+        ref = fp.GetReference()
+        if want is not None:
+            if ref not in want:
+                continue
+        elif ref not in topo["cin"]:
             continue
         nets = {p.GetNetname() for p in fp.Pads()}
         if not ({topo["vin"], topo["gnd"]} <= nets):
             continue
+        if want is None and not include_bulk:
+            farads = _cap_farads(fp)
+            if farads is not None and farads >= bulk_uf * 1e-6:
+                excluded_bulk.append(ref)
+                continue
         p = fp.GetPosition()
         dsq = (mm(p.x) - cx) ** 2 + (mm(p.y) - cy) ** 2
-        if best is None or dsq < best[0]:
-            best = (dsq, fp)
-    if best is None:
-        return None, None
-    fp = best[1]
-    vn, _ = _pad_node_stack(board, model, zmap, fp, topo["vin"])
-    gn, _ = _pad_node_stack(board, model, zmap, fp, topo["gnd"])
-    return vn, gn
+        cand.append((dsq, ref, fp))
+    cand.sort(key=lambda t: t[0])
+    take = cand if refs else cand[:max(1, n)]
+    out = []
+    for _, ref, fp in take:
+        vn, _ = _pad_node_stack(board, model, zmap, fp, topo["vin"])
+        gn, _ = _pad_node_stack(board, model, zmap, fp, topo["gnd"])
+        if vn and gn:
+            out.append((ref, vn, gn))
+    topo["cin_excluded_bulk"] = excluded_bulk
+    return out
 
 
 def main():
@@ -462,6 +517,12 @@ def main():
     ap.add_argument("--hs-kelvin", action="store_true")
     ap.add_argument("--ls-kelvin", action="store_true")
     ap.add_argument("--pitch", type=float, default=1.0, help="pour mesh pitch (mm)")
+    ap.add_argument("--cin-parallel", type=int, default=1,
+                    help="port the N nearest input caps in parallel (effective loop L)")
+    ap.add_argument("--cin-refs", nargs="*",
+                    help="explicit input-cap refdes to port (overrides nearest-N)")
+    ap.add_argument("--include-bulk-cin", action="store_true",
+                    help="also port bulk electrolytics (>=10uF); default excludes them")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--nwinc", type=int, default=1, help="filament width sub-mesh (skin; >1 slower, more HF-accurate)")
     ap.add_argument("--nhinc", type=int, default=1, help="filament height sub-mesh (skin)")
@@ -474,18 +535,28 @@ def main():
         hs_ref=args.hs_ref, ls_ref=args.ls_ref,
         hs_gate=args.hs_gate, ls_gate=args.ls_gate,
         hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
-    model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm)
+    model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm,
+                  cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
+                  include_bulk=args.include_bulk_cin)
     stats = model.write(args.out, nwinc=args.nwinc, nhinc=args.nhinc)
     # sidecar: port order + topology for the reduce step
     ports = [lbl for lbl, _, _ in model.ports]
-    side = dict(ports=ports, topo={k: (v if not isinstance(v, dict) else
-                                        {kk: vv for kk, vv in v.items() if not kk.startswith("_") and kk != "pads"})
-                                    for k, v in topo.items()},
+    cin_used = topo.get("cin_used", [])
+    cin_warn = None
+    if len(cin_used) < args.cin_parallel:
+        cin_warn = (f"requested --cin-parallel {args.cin_parallel} but only "
+                    f"{len(cin_used)} eligible Cin ported ({', '.join(cin_used) or 'none'})")
+        sys.stderr.write("WARNING: " + cin_warn + "\n")
+    side = dict(ports=ports, cin_ports=getattr(model, "cin_ports", ["P_pwr"]),
+                cin_used=cin_used, cin_requested=args.cin_parallel, cin_warn=cin_warn,
+                topo={k: (v if not isinstance(v, dict) else
+                          {kk: vv for kk, vv in v.items() if not kk.startswith("_") and kk != "pads"})
+                      for k, v in topo.items()},
                 pitch=args.pitch, lead_mm=args.lead_mm)
     with open(args.out + ".ports.json", "w") as f:
         json.dump(side, f, indent=2)
     print(f"wrote {args.out}: {stats['nodes']} nodes, {stats['segs']} segs, "
-          f"ports={ports}")
+          f"ports={ports}  Cin(in order)={cin_used}")
 
 
 if __name__ == "__main__":

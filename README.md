@@ -33,6 +33,47 @@ shared source-lead partial inductance. Whether the gate return taps the die-sour
 encoded by where the gate-return node is placed (default: non-Kelvin / worst case;
 force with `--hs-kelvin` / `--ls-kelvin`).
 
+### Parallel input caps (`--cin-parallel N`)
+
+By default `P_pwr` sits across the **single nearest** ceramic — a *conservative
+upper bound* on the loop L, because it ignores the other input caps that share the
+commutation current. Since inductances in parallel combine reciprocally, the real
+effective loop L is **lower**, so the single-cap number over-estimates SW-node
+overshoot. `--cin-parallel N` ports the **N nearest** input ceramics in the same
+solve, so FastHenry returns their full mutual matrix, and the reduce step forms the
+true effective 2-terminal commutation impedance under a common-voltage drive
+(every cap pad pair at the same SW-node voltage, gates open):
+
+```
+Z_eff = 1 / (1ᵀ Zc⁻¹ 1)          (Zc = N×N cap-port submatrix)
+```
+
+which folds in every branch-to-branch mutual `Mᵢⱼ` exactly (not a naive `1/ΣLᵢ`),
+solved as `Zc x = 1` (never an explicit inverse; `cond(Zc)` is reported and a
+warning fires if it is ill-conditioned). The CSI mutual is likewise re-weighted by
+the parallel-cap current split `y = Zc⁻¹·1`, which is reported per refdes.
+
+**The SW-peak loop L is a bracket, not one number:**
+
+| bound | meaning |
+|---|---|
+| `L_loop_single` (upper) | nearest single cap alone — pessimistic |
+| `L_loop_ideal` (lower) | all N caps ‖, treated as ideal shorts (copper only) |
+| `L_loop_physical` | with per-cap ESL/ESR (`--cin-esl`/`--cin-esr`) — the real split |
+
+The truth sits between the bounds, near the lower one when cap ESL ≪ per-cap branch
+L. At the ring frequency the ceramics are above SRF and look like ESL (~0.3–1 nH),
+which is comparable to the per-cap copper branch L, so pass `--cin-esl` for a
+physical number; without it you still bracket the truth. All three land in the
+report/JSON. Port polarity is fixed (always Vin→GND) so a reversed cap can't
+silently corrupt the mutuals; a spuriously-low effective L still trips a warning.
+
+**Cap selection.** Default is nearest-by-centroid-distance (deterministic, shown in
+the manifest); **bulk electrolytics (≥ 10 µF) are excluded** — above their SRF they
+can't source the tens-of-MHz edge (`--include-bulk-cin` to keep them). Override the
+heuristic entirely with `--cin-refs C17 C18 C9 C16`. If you request more caps than
+exist, it warns and solves with what it found rather than silently clamping.
+
 Meshing: tracks → filaments; copper pours → a gridded filament mesh clipped to the
 real filled polygon (and to an ROI around the FETs/Cin, so far copper is skipped);
 vias → vertical filaments; THT pads and FET leads → vertical stubs to a die plane.
@@ -46,8 +87,10 @@ copper); a union-find prune keeps only port-reachable copper. `L = Im(Z)/2πf`,
 ```sh
 python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
         [--pitch 2.0 1.0] [--lead-mm 3.0] [--vin NET] \
+        [--cin-parallel 4 | --cin-refs C17 C18 C9 C16] [--include-bulk-cin] \
+        [--cin-esl 0.5 --cin-esr 3] \
         [--hs-ref Q1 --ls-ref Q2] [--hs-gate NET --ls-gate NET] \
-        [--hs-kelvin] [--ls-kelvin] -o OUTDIR
+        [--hs-kelvin] [--ls-kelvin] [--svg] -o OUTDIR
 ```
 
 Multiple `--pitch` values run a mesh-convergence sweep (report drift; finest used
