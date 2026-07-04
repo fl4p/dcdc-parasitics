@@ -1,7 +1,7 @@
 # parasitics — KiCad → FastHenry power-stage extractor
 
 Extracts the **half-bridge power-stage parasitic inductances and resistances**
-straight from a KiCad `.kicad_pcb`, for two jobs:
+straight from a KiCad `.kicad_pcb`, for three jobs:
 
 1. **HS gate-drive / shoot-through analysis** — the high-side gate loop overlaps
    the high-di/dt commutation path through the FET **source lead**, so that
@@ -9,6 +9,13 @@ straight from a KiCad `.kicad_pcb`, for two jobs:
    drive. This tool measures it.
 2. **Switch-node peak-voltage / ringing** — the commutation-loop inductance that,
    with the FET Coss, sets the SW overshoot and ring frequency.
+3. **Power-loss / efficiency modelling** — the extracted **resistances** are the
+   copper contribution to the I²R budget: the commutation-loop R (conduction loss
+   in the hot-loop copper + FET leads) and the gate-loop R. At the default
+   `--nwinc=nhinc=1` the reported R is ≈ the DC/low-frequency copper resistance
+   (uniform current); raise the skin sub-mesh (`--nwinc/--nhinc > 1`) for the
+   **AC resistance** at the switching/ripple frequency, and the per-frequency
+   `L_eff_sweep` in the JSON shows R rising across the band.
 
 You give it the **switch-node net** and the **GND net**; everything else (HS/LS
 FETs, Vin rail, gate nets, input caps) is auto-discovered from connectivity, with
