@@ -93,8 +93,20 @@ python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
         [--pitch 2.0 1.0] [--lead-mm 3.0] [--vin NET] \
         [--cin-parallel 4 | --cin-refs C17 C18 C9 C16] [--include-bulk-cin] \
         [--cin-esl 0.5 --cin-esr 3] \
-        [--hs-ref Q1 --ls-ref Q2] [--hs-gate NET --ls-gate NET] \
-        [--hs-kelvin] [--ls-kelvin] [--svg] -o OUTDIR
+        [--hs-ref Q1 Q3 --ls-ref Q2] [--hs-gate NET --ls-gate NET] \
+        [--hs-kelvin] [--ls-kelvin] [--weld-tol 0.6] [--margin 8] [--svg] -o OUTDIR
+```
+
+`--hs-ref`/`--ls-ref` take **multiple** refdes for paralleled switches (e.g.
+`--hs-ref Q1 Q3`). `--weld-tol` fuses same-net nodes within N mm (mesh
+de-fragmentation, see below); `--margin` sets the pour-meshing ROI around the
+FETs/Cin.
+
+Example — Fugu2 (2-layer buck, paralleled HS, explicit HF cap bank):
+
+```sh
+python3 extract_parasitics.py .../Fugu2.kicad_pcb --sw SW --gnd BuckGND --vin Solar+ \
+        --hs-ref Q1 Q3 --ls-ref Q2 --cin-refs C9 C16 C17 C18 C21 C22 --pitch 2.0 -o out/
 ```
 
 Multiple `--pitch` values run a mesh-convergence sweep (report drift; finest used
@@ -131,10 +143,40 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   -Wno-implicit-int -Wno-return-type -Wno-deprecated-non-prototype' make`.
 - Python 3 with `numpy` for the solve/reduce step.
 
+## Paralleled switches
+
+`--hs-ref`/`--ls-ref` accept several refdes (e.g. `--hs-ref Q1 Q3`). Each
+paralleled FET contributes its own drain and source lead stubs; the dies are
+tied to one node, so between the rails you get the drain leads in parallel and
+the source leads in parallel, and **FastHenry solves the real current split** —
+the lower-inductance (shorter) device carries more current, so `L_loop` is the
+impedance-weighted parallel value, *not* a naïve `L/2` and *not* the
+shorter-path-only value. Two caveats:
+
+- **Ideal channel.** Tying the dies models `Rds_on = 0`, so the split is set by
+  copper/lead impedance alone. That is the dominant term at the commutation edge
+  (good for SW-peak/di-dt) but ignores the `Rds_on` that equalises the split at
+  low frequency — `L_loop` is the HF, channel-ideal value.
+- **CSI is the parallel combination.** The reported `CSI_hs` is the paralleled
+  source leads, but each device's gate-return current flows through *its own*
+  source lead, so the CSI a single gate driver feels is **higher** than reported.
+  Only the first FET's gate loop is ported (gate skew not modelled). For accurate
+  parallel-pair gate-drive CSI, port that device's own source segment.
+
 ## Limitations / notes
 
 - FastHenry is magnetoquasistatic (L/R only) — Coss resonance stays in SPICE; the
   emitted subckt is parasitics-only, combine with device models downstream.
+- **Mesh de-fragmentation.** Nets with no pour (gate) or split power fills can
+  fragment (a track ending inside a pad, touching fills) → an all-NaN solve.
+  `Model.weld(--weld-tol, default 0.6 mm)` fuses same-net+layer nodes within that
+  radius (< pour pitch, so it never welds across the mesh grid); vias are modelled
+  for every net. Needed for 2-layer boards; raise `--weld-tol` if a port stays
+  disconnected (the geometry step prints node/segment/port counts).
+- **Cap auto-select can mis-pick.** Nearest-by-centroid may land on a far or
+  poorly-connected cap (on Fugu2 it chose a 1 µF 13 mm away on an isolated plane
+  pocket). Pin the real HF ceramics with `--cin-refs …` when the auto pick looks
+  wrong or the loop won't close.
 - FET **exposed-lead** length is modelled (`--lead-mm`); package-internal source
   inductance (datasheet) adds to CSI and should be included separately.
 - Gate-return **Kelvin detection is not automatic** — defaults to non-Kelvin
@@ -145,8 +187,17 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   pitch on a small board is a few thousand filaments and solves in minutes; drop
   to `--pitch 3` for a quick look, `--pitch 1` (slower) when you need accuracy.
 
+## Tests
+
+`python3 test_parasitics.py` — stdlib + numpy unit tests for the pure layers
+(SVG formatting/rendering, the reduction maths: single-cap, parallel effective L,
+common-source mutual, and the `weld` de-fragmentation). The pcbnew/FastHenry
+geometry+solve path is covered by running on the real boards below.
+
 ## Validation
 
-Developed/validated against `mppt-2420-hc` (4-layer buck; SW `/DC/DC/SW_NODE`,
-HS `Q1`, LS `Q2`): loop L ≈ 7.8 nH, CSI_hs ≈ 0.65 nH, CSI_ls ≈ 1.3 nH at 2 mm
-pitch — physically sane magnitudes for a compact half-bridge.
+- `mppt-2420-hc` (4-layer buck; SW `/DC/DC/SW_NODE`, HS `Q1`, LS `Q2`): loop L
+  ≈ 8.5 nH, CSI_hs ≈ 0.71 nH, CSI_ls ≈ 1.36 nH, gate Rg `R1/R2 = 3R3` at 2 mm.
+- `Fugu2` (2-layer buck, paralleled HS `Q1∥Q3`, LS `Q2`, 6-cap HF bank): loop L
+  ≈ 8.2 nH (6 caps ‖), CSI_hs ≈ 0.43 nH, CSI_ls ≈ 1.25 nH, gate Rg `R4/R10 = 4.7`
+  — exercises paralleled FETs, the weld pass, and multi-cap reduction.
