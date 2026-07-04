@@ -25,10 +25,13 @@ import subprocess
 import sys
 import tempfile
 
-import emit
-import solve_reduce
-
 HERE = os.path.dirname(os.path.abspath(__file__))
+LIB = os.path.join(HERE, "lib")
+sys.path.insert(0, LIB)  # library modules live in lib/; root holds only this CLI
+
+import emit  # noqa: E402
+import solve_reduce  # noqa: E402
+
 KICAD_PY = os.environ.get(
     "KICAD_PY",
     "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3")
@@ -37,7 +40,7 @@ KICAD_PY = os.environ.get(
 def run_geom(args, pitch, outdir):
     """Invoke kicad_geom.py under KiCad python; return (inp_path, sidecar)."""
     inp = os.path.join(outdir, f"model_{pitch:g}.inp")
-    cmd = [KICAD_PY, os.path.join(HERE, "kicad_geom.py"), args.pcb,
+    cmd = [KICAD_PY, os.path.join(LIB, "kicad_geom.py"), args.pcb,
            "--sw", args.sw, "--gnd", args.gnd, "--pitch", str(pitch),
            "--cin-parallel", str(args.cin_parallel),
            "--lead-mm", str(args.lead_mm), "--nwinc", str(args.nwinc),

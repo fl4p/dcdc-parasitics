@@ -12,8 +12,9 @@ parallel law, the coupled 2-port formula, CSI degeneracy, reversed-port polarity
 import os
 import sys
 
-# tests live in test/; import the modules from the parent package dir
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# tests live in test/; the library modules live in ../lib
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 
 import numpy as np  # noqa: E402
 

@@ -38,13 +38,15 @@ node fix); every track/via/pad bonded to its pour; union-find prune to
 port-reachable copper. `L = Im(Z)/2πf`, `R = Re(Z)` at a low-MHz plateau.
 `nwinc/nhinc` default to 1 (fast; L-plateau barely affected) — raise for HF R.
 
-## Files (`parasitics/`)
+## Files
 
-- `fet_discovery.py` — pcbnew auto-ID of HS/LS FETs, Vin, gate nets, Cin, Kelvin.
-- `kicad_geom.py` — pcbnew → multiport FastHenry `.inp` (mesh engine).
-- `solve_reduce.py` — run fasthenry, parse Zc.mat, reduce to named parasitics.
-- `emit.py` — parasitics → `parasitics.lib` (shared-branch CSI) + `.json` + `report.md`.
-- `extract_parasitics.py` — CLI orchestrator (KiCad-python geom + system-python solve).
+- `extract_parasitics.py` — CLI orchestrator (KiCad-python geom + system-python
+  solve); the only entry point at the repo root.
+- `lib/kicad_geom.py` — pcbnew → multiport FastHenry `.inp` (mesh engine).
+- `lib/fet_discovery.py` — pcbnew auto-ID of HS/LS FETs, Vin, gate nets, Cin, Kelvin.
+- `lib/solve_reduce.py` — run fasthenry, parse Zc.mat, reduce to named parasitics.
+- `lib/emit.py` — parasitics → `parasitics.lib` (shared-branch CSI) + `.json` + `report.md`.
+- `lib/emit_svg.py` — parasitics → `schematic.svg`.
 
 ## Verification
 

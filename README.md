@@ -150,6 +150,27 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   on the gate net) is annotated for context — copper-only FastHenry does not model
   it, so the coil's `R` is the trace resistance (`Cu`), distinct from the gate Rg.
 
+## Layout
+
+`extract_parasitics.py` at the repo root is the only entry point (the CLI). It
+runs the two-interpreter pipeline: the geometry step (`lib/kicad_geom.py`) under
+KiCad's python, the solve/reduce/emit under system python.
+
+```
+extract_parasitics.py   # CLI entry point (orchestrates the two interpreters)
+lib/
+  kicad_geom.py         # pcbnew -> multiport FastHenry .inp (KiCad python)
+  fet_discovery.py      # auto-ID FETs / Vin / gate nets / Cin / gate network
+  solve_reduce.py       # run fasthenry, parse Zc.mat -> named parasitics
+  emit.py               # -> parasitics.lib / .json / report.md
+  emit_svg.py           # -> schematic.svg
+test/                   # unit tests (stdlib + numpy)
+docs/                   # rendered example(s)
+```
+
+Each `lib/` module also has a small `__main__` for standalone/debug use (e.g.
+`python3 lib/emit_svg.py parasitics.json > schematic.svg`).
+
 ## Requirements & config
 
 - **KiCad** (pcbnew) — the geometry step runs under KiCad's bundled python. Path
