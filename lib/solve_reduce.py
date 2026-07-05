@@ -130,15 +130,24 @@ def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map) -> "dict | None":
             for j, b in enumerate(cin_idx) if i != j]
     offR = [Rm[a, b] for i, a in enumerate(cin_idx)
             for j, b in enumerate(cin_idx) if i != j]
-    L_shared = float(np.mean(offL))
-    R_shared = float(np.mean(offR))
+    # Shared trunk = the common floor. Use the off-diagonal mean (mutual = trunk in
+    # a clean single-trunk topology), but NEVER above the smallest self-L, so every
+    # private branch Lb_i = L[i,i] - L_shared stays >= 0 — a negative branch
+    # inductance is non-physical for the SPICE cin_network. With heterogeneous caps
+    # (bulk self-L >> mlcc) the raw off-diagonal mean can exceed the mlcc diagonals;
+    # the min-clamp pins the trunk to the nearest cap (its Lb -> 0). Homogeneous
+    # banks (mean off-diag < min diag) are unaffected.
+    min_diagL = float(min(Lm[a, a] for a in cin_idx))
+    min_diagR = float(min(Rm[a, a] for a in cin_idx))
+    L_shared = min(float(np.mean(offL)), min_diagL)
+    R_shared = min(float(np.mean(offR)), min_diagR)
     L_spread = float(np.std(offL))
     branches = []
     for k, a in enumerate(cin_idx):
         ref = refs[k] if k < len(refs) else f"P{a}"
         branches.append(dict(ref=ref, cls=(cls_map or {}).get(ref, "mlcc"),
-                             Lb=float(Lm[a, a]) - L_shared,
-                             Rb=float(Rm[a, a]) - R_shared))
+                             Lb=max(0.0, float(Lm[a, a]) - L_shared),
+                             Rb=max(0.0, float(Rm[a, a]) - R_shared)))
     return dict(branches=branches, L_shared=L_shared, R_shared=R_shared,
                 L_spread=L_spread)
 

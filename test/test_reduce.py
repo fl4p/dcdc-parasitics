@@ -208,6 +208,24 @@ p13 = sr.reduce_parasitics({1e5: Zl, 5e6: Zp}, allports, {"cin_used": ["C1", "C2
 check("no cin_net => cin_branches is None (no partial-bank leak)",
       p13.get("cin_branches") is None, f"{p13.get('cin_branches')}")
 
+# 14. Heterogeneous bank (bulk self-L >> mlcc) pulls the off-diagonal mean above
+#     the mlcc diagonals; the trunk must clamp to min-diag so NO Lb goes negative
+#     (the real Fugu2 C11/C12 finding).
+Lmat = np.array([[8.5, 8.5, 10.0], [8.5, 8.6, 10.0], [10.0, 10.0, 15.0]]) * 1e-9
+Zh = 1j * (2 * np.pi * 5e6) * Lmat.astype(complex)
+cap3 = ["P_pwr", "P_pwr1", "P_pwr2"]
+topo14 = {"cin_net": [{"ref": "C1", "cls": "mlcc", "label": "P_pwr"},
+                      {"ref": "C2", "cls": "mlcc", "label": "P_pwr1"},
+                      {"ref": "CB", "cls": "bulk", "label": "P_pwr2"}]}
+p14 = sr.reduce_parasitics({1e5: Zh, 5e6: Zh}, cap3, topo14, {},
+                           plateau=5e6, cin_ports=cap3)
+b14 = {b["ref"]: b for b in p14["cin_branches"]}
+check("heterogeneous: no negative Lb (mean-offdiag 9.5 > min-diag 8.5)",
+      all(b["Lb"] >= 0 for b in p14["cin_branches"]),
+      ", ".join(f'{r}={b14[r]["Lb"]*1e9:.2f}' for r in ["C1", "C2", "CB"]))
+check("heterogeneous: trunk clamped to min diagonal",
+      abs(p14["cin_L_shared"] - 8.5e-9) < 1e-15, f'{p14["cin_L_shared"]*1e9:.3f} nH')
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")
