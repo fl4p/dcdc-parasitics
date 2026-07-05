@@ -126,6 +126,12 @@ def main():
         print(f"pitch {pitch:>4} mm : L_loop={p['L_loop']*1e9:6.2f} nH  "
               f"CSI_hs={p['csi_hs']*1e9:5.2f} nH  CSI_ls={p['csi_ls']*1e9:5.2f} nH  "
               f"L_gate_hs={p['L_gate_hs']*1e9:5.2f} nH{extra}")
+        if p.get("r_hs") is not None:
+            cr = (p.get("cond_ref") or {}).get("ref", "?")
+            print(f"            R_conduction (LF, bulk={cr}): "
+                  f"HS={p['r_hs']*1e3:.2f} mOhm  LS={p['r_ls']*1e3:.2f} mOhm  "
+                  f"SW-spread={p.get('r_sw', 0)*1e3:.2f} mOhm   "
+                  f"(ring R_loop={p['R_loop']*1e3:.2f} mOhm)")
 
     if len(results) > 1:
         ll = [p["L_loop"] for _, p in results]

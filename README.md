@@ -10,12 +10,14 @@ straight from a KiCad `.kicad_pcb`, for three jobs:
 2. **Switch-node peak-voltage / ringing** — the commutation-loop inductance that,
    with the FET Coss, sets the SW overshoot and ring frequency.
 3. **Power-loss / efficiency modelling** — the extracted **resistances** are the
-   copper contribution to the I²R budget: the commutation-loop R (conduction loss
-   in the hot-loop copper + FET leads) and the gate-loop R. At the default
-   `--nwinc=nhinc=1` the reported R is ≈ the DC/low-frequency copper resistance
-   (uniform current); raise the skin sub-mesh (`--nwinc/--nhinc > 1`) for the
-   **AC resistance** at the switching/ripple frequency, and the per-frequency
-   `L_eff_sweep` in the JSON shows R rising across the band.
+   copper contribution to the I²R budget, split **per switch** (`R_hs`/`R_ls`) so
+   the conduction loss can be weighted by each switch's duty (HS by D, LS by 1−D —
+   the LS copper dominates at low duty). The loop carries current at two very
+   different frequencies, so it has **two resistances** (see *Two resistances* below):
+   the HF **ring R** (`R_loop`, MLCC-anchored, sets ring damping) and the LF
+   **conduction R** (`R_hs`/`R_ls`, bulk-anchored, near-DC). Raise the skin sub-mesh
+   (`--nwinc/--nhinc > 1`) for AC resistance at an arbitrary frequency; the
+   per-frequency `L_eff_sweep` in the JSON shows R rising across the band.
 
 You give it the **switch-node net** and the **GND net**; everything else (HS/LS
 FETs, Vin rail, gate nets, input caps) is auto-discovered from connectivity, with
@@ -37,9 +39,12 @@ One FastHenry solve with three ports yields the full mutual-inductance matrix:
 
 | Port | Across | Gives |
 |------|--------|-------|
-| `P_pwr` | nearest Cin (Vin ↔ GND) | commutation-loop L, R |
+| `P_pwr` | nearest Cin — **MLCC** (Vin ↔ GND) | commutation-loop L, HF ring R |
 | `P_ghs` | HS gate driver-end ↔ HS gate return | HS gate-loop L |
 | `P_gls` | LS gate driver-end ↔ LS gate return | LS gate-loop L |
+| `P_bulk` | nearest **bulk electrolytic** (Vin ↔ GND) | LF conduction-loop R |
+| `P_hs` | Vin(bulk) → SW, via HS leads | HS conduction R |
+| `P_ls` | SW → GND(bulk), via LS leads | LS conduction R |
 
 Both FET channels are shorted at the die plane (`.equiv drain_die source_die`)
 and each gate is closed to its source there, so `P_pwr` traces the full
@@ -95,6 +100,31 @@ per-refdes class is recorded in `cin_class`. Keep the bulk caps with
 entirely with `--cin-refs C17 C18 C9 C16`. If you request more caps than exist, it
 warns and solves with what it found rather than silently clamping.
 
+### Two resistances: HF ring vs LF conduction (per switch)
+
+The loop resistance is **not one number**, because it carries current at two
+frequencies that see different copper and different reference caps:
+
+| R | Freq | Anchored on | Used for |
+|---|---|---|---|
+| `R_loop` (ring) | ~MHz plateau | nearest **MLCC** (sources the edge) | SW-node ring Q / damping; skin-elevated |
+| `R_hs` / `R_ls` (conduction) | ~DC fundamental | nearest **bulk electrolytic** | conduction I²R, split per switch |
+
+At the 39 kHz switching fundamental the **MLCCs are ~open** and carry no conduction
+current — the fundamental is sourced and returned by the **bulk electrolytics**. So
+the conduction ports (`P_hs`/`P_ls`/`P_bulk`) anchor on the nearest bulk cap, not the
+ceramic, and their R is read at the **lowest swept frequency** (skin depth ≫ copper
+thickness there, i.e. the near-DC conduction value) rather than at the ring plateau.
+`P_hs` drives Vin(bulk) → SW through the HS drain+source leads (the die short routes
+it), so its self-R is that switch's true conduction copper; `P_ls` likewise for
+SW → GND. The residual `R_loop_cond − R_hs − R_ls` is reported as the **SW-node
+spreading R**. In the emitted `.SUBCKT` the ring `R_loop` is split across the two
+loop inductors **by the real `R_hs:R_ls` proportion** (not a 50/50 guess); a
+reconstruction check warns if the per-side conduction R exceeds the LF loop R (a
+port-polarity/SW-reference tripwire). Boards with an **all-ceramic** input bank fall
+back to the nearest ceramic for the conduction anchor (there the ceramics *do* carry
+the fundamental); the anchor refdes and class are recorded in `cond_ref`.
+
 Meshing: tracks → filaments; copper pours → a gridded filament mesh clipped to the
 real filled polygon (and to an ROI around the FETs/Cin, so far copper is skipped);
 vias → vertical filaments; THT pads and FET leads → vertical stubs to a die plane.
@@ -141,6 +171,9 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   Kelvin (CSI excluded). Add your Cin across `VIN–GND` and device models for a
   gate-drive/DPT or SW-overshoot sim.
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
+  Conduction fields: `r_hs`, `r_ls` (per-switch conduction R), `r_loop_cond` (LF
+  loop R), `r_sw` (SW spreading residual), `r_cond_freq` (the freq they were read
+  at), and `cond_ref` (`{ref, cls}` — the bulk cap they anchor on).
 - **`report.md`** — table + a topology sketch of where CSI sits.
 - **`schematic.svg`** (with `--svg`) — a standalone half-bridge drawing of the
   extracted network: each parasitic as a labelled coil, the two common-source

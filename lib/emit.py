@@ -48,6 +48,16 @@ def subckt(p):
     if p["L_gate_ls"] - csi_ls < 0:
         warn.append("CSI_ls exceeds LS gate-loop L (clamped)")
 
+    # per-side loop R: total is the HF ring R_loop (plateau, damping), split by the
+    # real LF conduction proportion (r_hs:r_ls) when available, else 50/50.
+    r_hs, r_ls = p.get("r_hs"), p.get("r_ls")
+    if r_hs and r_ls and (r_hs + r_ls) > 0:
+        frac_hs = r_hs / (r_hs + r_ls)
+    else:
+        frac_hs = 0.5
+    rser_hs = p["R_loop"] * frac_hs
+    rser_ls = p["R_loop"] * (1.0 - frac_hs)
+
     t = p["topo"]
     L = lambda v: _fmt(v * nH)  # noqa: E731  henries -> 'nH-number'
     lines = [
@@ -77,9 +87,9 @@ def subckt(p):
     lines += [
         "* ------------------------------------------------------------------",
         ".SUBCKT pwrstage VIN SW GND HSG LSG HSKEL LSKEL",
-        f"Lloop_hs VIN  nHS   {L(loop_hs)}n Rser={_fmt(p['R_loop']/2)}",
+        f"Lloop_hs VIN  nHS   {L(loop_hs)}n Rser={_fmt(rser_hs)}",
         f"Lscs_hs  nHS  SW    {L(csi_hs)}n            ; HS source lead (SHARED = CSI)",
-        f"Lloop_ls SW   nLS   {L(loop_ls)}n Rser={_fmt(p['R_loop']/2)}",
+        f"Lloop_ls SW   nLS   {L(loop_ls)}n Rser={_fmt(rser_ls)}",
         f"Lscs_ls  nLS  GND   {L(csi_ls)}n            ; LS source lead (SHARED = CSI)",
         f"Lghs     HSG  nHS   {L(lghs_rest)}n Rser={_fmt(p['R_gate_hs'])}  ; HS gate branch (driver->die)",
         f"Lgls     LSG  nLS   {L(lgls_rest)}n Rser={_fmt(p['R_gate_ls'])}  ; LS gate branch",
@@ -123,8 +133,22 @@ def markdown(p):
                 f"| ⤷ with cap ESL {p['cin_esl']*1e9:.2g} nH / ESR {p['cin_esr']*1e3:.2g} mΩ — **physical** | {L(p['L_loop_physical'])} |")
     cu_t = p['meta'].get('cu_temp')
     rtemp = f", {cu_t:g} °C Cu" if cu_t not in (None, 20.0) else ""
+    # conduction R rows (LF, bulk-anchored, per switch) — only if the ports solved
+    cond_rows = []
+    if p.get("r_hs") is not None and p.get("r_ls") is not None:
+        fdc = p.get("r_cond_freq") or 0.0
+        cref = p.get("cond_ref") or {}
+        anchor = f" — anchored on {cref.get('ref')} ({cref.get('cls')})" if cref else ""
+        cond_rows = [
+            f"| ⤷ HS conduction R (Vin→SW via HS, @ {fdc:.2g} Hz{anchor}) | **{p['r_hs']*1e3:.2f} mΩ** |",
+            f"| ⤷ LS conduction R (SW→GND via LS, @ {fdc:.2g} Hz) | **{p['r_ls']*1e3:.2f} mΩ** |",
+        ]
+        if p.get("r_sw") is not None:
+            cond_rows.append(
+                f"| ⤷ SW-node spreading R (residual) | {p['r_sw']*1e3:.2f} mΩ |")
     lines += [
-        f"| Commutation loop R (@ {p['freq_Hz']:.2g} Hz{rtemp}) | {p['R_loop']*1e3:.2f} mΩ |",
+        f"| Commutation loop R (HF ring @ {p['freq_Hz']:.2g} Hz{rtemp}) | {p['R_loop']*1e3:.2f} mΩ |",
+        *cond_rows,
         f"| HS common-source inductance | **{L(p['csi_hs'])}** |",
         f"| LS common-source inductance | **{L(p['csi_ls'])}** |",
         f"| HS gate-loop L | {L(p['L_gate_hs'])} |",
@@ -152,6 +176,25 @@ def markdown(p):
         "aggravates shoot-through. Use `parasitics.lib` in a gate-drive/DPT sim; use "
         "`L_loop` with device Coss for switch-node peak-voltage / ringing.",
     ]
+
+    if p.get("r_hs") is not None:
+        lines += [
+            "",
+            "## Two resistances, two frequencies",
+            "",
+            "The loop carries current at two very different frequencies, so it has two "
+            "resistances — don't use one for the other:",
+            "",
+            f"- **Ring R** ({p['R_loop']*1e3:.2f} mΩ @ {p['freq_Hz']:.2g} Hz) — the HF "
+            "commutation-edge loop, anchored on the nearest **MLCC**, skin-elevated. "
+            "Sets the switch-node ringing Q / damping.",
+            f"- **Conduction R** (HS {p['r_hs']*1e3:.2f} / LS {p['r_ls']*1e3:.2f} mΩ @ "
+            f"{p.get('r_cond_freq', 0):.2g} Hz) — the near-DC fundamental, anchored on the "
+            "**bulk electrolytics** (the MLCCs are ~open at the switching fundamental and "
+            "carry no conduction current). This is the copper the loss tool multiplies by "
+            "I²: HS by D, LS by (1−D) — so at **low duty the LS conduction R dominates** "
+            "the copper budget. The two sides are split by real geometry, not 50/50.",
+        ]
 
     split = p.get("current_split") or {}
     if len(split) > 1:

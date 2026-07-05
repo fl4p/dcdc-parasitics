@@ -115,6 +115,34 @@ check("ESL yields physical point", phys["L_loop_physical"] is not None
       and abs(phys["L_loop"] - ideal["L_loop"]) > 1e-12,
       f"ideal={ideal['L_loop']*1e9:.3f} phys={phys['L_loop']*1e9:.3f} nH")
 
+# 9. Conduction split: per-side R read at the LOWEST freq; r_hs+r_ls+r_sw == loop.
+rows = ["P_pwr", "P_ghs", "P_gls", "P_bulk", "P_hs", "P_ls"]
+ix = {p: i for i, p in enumerate(rows)}
+n = len(rows)
+Rhs, Rls, Rsw = 1.2e-3, 3.4e-3, 0.4e-3      # ohms (asymmetric: LS heavier)
+Zlo = np.zeros((n, n), dtype=complex)
+Zlo[ix["P_hs"], ix["P_hs"]] = Rhs
+Zlo[ix["P_ls"], ix["P_ls"]] = Rls
+Zlo[ix["P_bulk"], ix["P_bulk"]] = Rhs + Rls + Rsw
+for k in range(n):                          # add inductive part (must not affect R)
+    Zlo[k, k] += 1j * (2 * np.pi * 1e5) * 5e-9
+zc9 = {1e5: Zlo, 5e6: Zlo * 50}             # min key 1e5 = conduction read point
+topo9 = {"cond_ref": {"ref": "C10", "cls": "bulk"}}
+pc = sr.reduce_parasitics(zc9, rows, topo9, {}, plateau=5e6, cin_ports=["P_pwr"])
+check("conduction R_hs at f_dc", abs(pc["r_hs"] - Rhs) < 1e-12, f"{pc['r_hs']*1e3:.3f} mΩ")
+check("conduction R_ls at f_dc", abs(pc["r_ls"] - Rls) < 1e-12, f"{pc['r_ls']*1e3:.3f} mΩ")
+check("SW spreading residual", abs(pc["r_sw"] - Rsw) < 1e-12, f"{pc['r_sw']*1e3:.3f} mΩ")
+check("cond_ref passthrough", (pc.get("cond_ref") or {}).get("ref") == "C10")
+
+# 10. Reconstruction guard: r_hs+r_ls exceeding the LF loop R must warn.
+Zbad = Zlo.copy()
+Zbad[ix["P_bulk"], ix["P_bulk"]] = (Rhs + Rls - 0.5e-3) + 1j * (2 * np.pi * 1e5) * 5e-9
+pb = sr.reduce_parasitics({1e5: Zbad, 5e6: Zbad * 50}, rows, topo9, {},
+                          plateau=5e6, cin_ports=["P_pwr"])
+check("conduction over-budget warns",
+      any("conduction" in w for w in pb["reduce_warn"]),
+      "; ".join(pb["reduce_warn"]) or "(no warning!)")
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

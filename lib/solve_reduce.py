@@ -8,12 +8,19 @@ order emitted by kicad_geom.py: [P_pwr, P_ghs, P_gls].
 
 Reduced parasitics (at the low-MHz plateau):
     L_loop      = L[pwr,pwr]           commutation-loop inductance (SW peak V)
-    R_loop      = R[pwr,pwr]
+    R_loop      = R[pwr,pwr]           HF ring-loop R (MLCC-anchored, skin-elevated)
     L_gate_hs   = L[ghs,ghs]           HS gate-loop inductance
     L_gate_ls   = L[gls,gls]
     csi_hs      = |L[pwr,ghs]|         HS common-source inductance (shared source lead)
     csi_ls      = |L[pwr,gls]|
     m_gate      = L[ghs,gls]
+
+Conduction-loss R (at the LOWEST swept freq ~= DC, bulk-electrolytic-anchored, so
+the MLCCs — near-open at the 39 kHz fundamental — are excluded):
+    r_hs        = R[hs,hs]             HS conduction copper (Vin_bulk -> SW via HS)
+    r_ls        = R[ls,ls]             LS conduction copper (SW -> GND_bulk via LS)
+    r_loop_cond = R[bulk,bulk]         full LF conduction loop over the bulk cap
+    r_sw        = r_loop_cond-r_hs-r_ls   SW-node spreading residual
 """
 import os
 import re
@@ -95,7 +102,7 @@ def _eff_commutation(Z, cin_idx, zcap=None):
 
 
 def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
-                      cin_esl=0.0, cin_esr=0.0):
+                      cin_esl=0.0, cin_esr=0.0) -> dict:
     f, Z = pick_plateau(zc, plateau)
     w = 2 * np.pi * f
     L = Z.imag / w
@@ -160,6 +167,30 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                     f"uncoupled parallel floor ({L_loop_single/len(cin_idx)*1e9:.2f} nH) "
                     f"— likely reversed cap-port polarity or a mutual-sign error")
 
+    # ---- conduction-path resistances (LF, per-side) ----
+    # Read R at the LOWEST swept frequency: there the skin depth (>2 mm at 100 kHz)
+    # dwarfs the copper thickness, so this is the DC/fundamental conduction R, not
+    # the skin-elevated ring-plateau R_loop. P_hs/P_ls are anchored on the bulk cap
+    # (the fundamental source), so r_hs/r_ls are each switch's true conduction
+    # copper; P_bulk is the full LF loop, and r_sw is the SW-node spreading residual.
+    f_dc = min(zc.keys())
+    R_dc = zc[f_dc].real
+
+    def rdc(label):
+        i = idx.get(label)
+        return float(R_dc[i, i]) if i is not None else None
+
+    r_hs, r_ls, r_loop_cond = rdc("P_hs"), rdc("P_ls"), rdc("P_bulk")
+    r_sw = None
+    if r_hs is not None and r_ls is not None and r_loop_cond is not None:
+        r_sw = r_loop_cond - r_hs - r_ls
+        if r_sw < -0.05e-3:   # -0.05 mOhm tolerance
+            warn.append(
+                f"conduction R_hs+R_ls ({(r_hs + r_ls) * 1e3:.2f} mOhm) exceeds LF "
+                f"loop R ({r_loop_cond * 1e3:.2f} mOhm) — check P_hs/P_ls port "
+                f"polarity or SW-node reference")
+    cond_ref = (topo or {}).get("cond_ref") if isinstance(topo, dict) else None
+
     def eff_csi(g):
         """Effective common-source mutual: gate-loop voltage per unit *total*
         commutation current, using the parallel-cap current distribution y.
@@ -188,6 +219,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         L_eff_sweep=sweep, n_cin=len(cin_idx),
         L_gate_hs=LL(ih, ih), R_gate_hs=RR(ih),
         L_gate_ls=LL(il, il), R_gate_ls=RR(il),
+        r_hs=r_hs, r_ls=r_ls, r_loop_cond=r_loop_cond, r_sw=r_sw,
+        r_cond_freq=f_dc, cond_ref=cond_ref,
         csi_hs=eff_csi(ih),
         csi_ls=eff_csi(il),
         m_gate=LL(ih, il),
@@ -216,6 +249,9 @@ if __name__ == "__main__":
     p = reduce_parasitics(zc, args.ports.split(","), {}, {}, args.plateau)
     nH = 1e9
     print(f"plateau f = {p['freq_Hz']:g} Hz")
-    print(f"L_loop    = {p['L_loop']*nH:7.2f} nH   R_loop = {p['R_loop']*1e3:.2f} mOhm")
+    print(f"L_loop    = {p['L_loop']*nH:7.2f} nH   R_loop = {p['R_loop']*1e3:.2f} mOhm (HF ring)")
     print(f"L_gate_hs = {p['L_gate_hs']*nH:7.2f} nH   L_gate_ls = {p['L_gate_ls']*nH:7.2f} nH")
     print(f"CSI_hs    = {p['csi_hs']*nH:7.2f} nH   CSI_ls    = {p['csi_ls']*nH:7.2f} nH")
+    if p.get("r_hs") is not None:
+        print(f"R_hs      = {p['r_hs']*1e3:7.2f} mOhm R_ls   = {p['r_ls']*1e3:.2f} mOhm "
+              f"(LF conduction @ {p['r_cond_freq']:g} Hz, SW spread {p.get('r_sw',0)*1e3:.2f} mOhm)")

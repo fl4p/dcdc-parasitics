@@ -2,12 +2,21 @@
 """KiCad PCB -> multiport FastHenry input for power-stage parasitic extraction.
 
 Runs under KiCad's bundled python (pcbnew). Builds ONE FastHenry model of the
-half-bridge power copper with three ports so a single solve yields the full
+half-bridge power copper with a handful of ports so a single solve yields the full
 mutual-inductance matrix:
 
-    Port 1  P_pwr  : across the nearest Cin (Vin+ <-> GND-)   -> commutation loop
-    Port 2  P_ghs  : HS gate driver-end <-> HS gate return    -> HS gate loop
-    Port 3  P_gls  : LS gate driver-end <-> LS gate return    -> LS gate loop
+    Port  P_pwr  : across the nearest Cin (Vin+ <-> GND-)   -> commutation loop
+    Port  P_ghs  : HS gate driver-end <-> HS gate return    -> HS gate loop
+    Port  P_gls  : LS gate driver-end <-> LS gate return    -> LS gate loop
+
+Plus conduction ports for the LF per-switch R split (see conduction_ref):
+    Port  P_bulk : across the nearest BULK electrolytic     -> LF conduction loop
+    Port  P_hs   : Vin(bulk) -> HS SW pad (via HS leads)     -> HS conduction R
+    Port  P_ls   : LS SW pad -> GND(bulk) (via LS leads)     -> LS conduction R
+
+The HF loop (P_pwr) anchors on the ceramic that sources the commutation edge; the
+LF conduction R (P_hs/P_ls) anchors on the bulk cap that sources the 39 kHz
+fundamental — R read at the lowest swept freq (~DC) vs the plateau for L/ring-R.
 
 Both FET channels are shorted at the die plane (`.equiv drain_die source_die`)
 and each gate is closed to its source at the die (`.equiv gate_die source_die`),
@@ -370,7 +379,7 @@ def build_fet(board, model, zmap, topo, role, lead_mm):
     # paralleled FETs may sit on separate gate nets (Net-(Q1-G) vs Net-(Q3-G)), so
     # their gates are not required or modeled here.
     die_src = die_drn = die_gate = None
-    src_pad_node = None
+    src_pad_node = drn_pad_node = None
     for ref in refs:
         fp = fps[ref]
         dn, dpos = _pad_node_stack(board, model, zmap, fp, d["drain"])
@@ -394,12 +403,14 @@ def build_fet(board, model, zmap, topo, role, lead_mm):
             model.equiv(gref, sref)
             die_src, die_drn, die_gate = sref, dref, gref
             src_pad_node = sn
+            drn_pad_node = dn
         else:
             model.equiv(die_src, sref)
             model.equiv(die_drn, dref)
     d["_die_src"] = die_src
     d["_die_gate"] = die_gate
     d["_src_pad_node"] = src_pad_node
+    d["_drn_pad_node"] = drn_pad_node
     return d
 
 
@@ -468,6 +479,11 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     cins = cin_ports(board, model, zmap, topo, n=cin_parallel,
                      refs=cin_refs, include_bulk=include_bulk)
 
+    # LF conduction anchor: nearest bulk electrolytic (sources the 39 kHz
+    # fundamental). Create its pad nodes now so the stitch/weld below bonds them
+    # into the pours — the conduction ports reference these below.
+    cref = conduction_ref(board, model, zmap, topo, prefer="bulk")
+
     # bond every track/via/pad node into the pour mesh on its net+layer, then weld
     # near-coincident endpoints interning missed (pad-centre vs trace-end, touching
     # fills) — essential for nets with no pour (gate) and multi-fill power planes.
@@ -488,6 +504,22 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
         ret = d["_die_src"] if d["kelvin"] else d["_src_pad_node"]
         if drv and ret:
             model.port(label, drv, ret)
+
+    # ---- conduction ports (LF, per-side R for conduction-loss attribution) ----
+    # Anchored on the bulk cap (cref), not the HF MLCC: P_hs drives Vin(bulk)->SW
+    # through HS's drain+source leads (die short routes it), P_ls drives SW->GND
+    # (bulk) through LS. Their DC self-R is each switch's true conduction copper;
+    # P_bulk is the full LF loop over the bulk cap for the reconstruction check.
+    if cref:
+        cond_ref, cvn_dc, cgn_dc, cond_klass = cref
+        hs_sw = topo["hs"].get("_src_pad_node")   # HS source pad (on SW)
+        ls_sw = topo["ls"].get("_drn_pad_node")   # LS drain pad (on SW)
+        model.port("P_bulk", cvn_dc, cgn_dc)
+        if hs_sw:
+            model.port("P_hs", cvn_dc, hs_sw)
+        if ls_sw:
+            model.port("P_ls", ls_sw, cgn_dc)
+        topo["cond_ref"] = dict(ref=cond_ref, cls=cond_klass)
     return model
 
 
@@ -567,6 +599,45 @@ def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False):
         cap_filter=("all (bulk included)" if include_bulk or refs
                     else "package/type: MLCC only, electrolytic excluded"))
     return out
+
+
+def conduction_ref(board, model, zmap, topo, prefer="bulk"):
+    """Anchor node pair for the LOW-frequency conduction loop -> (ref, vin_node,
+    gnd_node, klass), nearest cap of the preferred class to the FET centroid.
+
+    The 39 kHz fundamental switch current is sourced/returned by the **bulk
+    electrolytics** — the MLCCs are near-open at the fundamental and carry only the
+    HF commutation edge — so conduction-copper R must be referenced to the bulk
+    caps, NOT the nearest ceramic (which anchors the HF commutation loop). Prefers
+    `klass==prefer` (bulk); falls back to the nearest ceramic for all-ceramic input
+    banks (where the ceramics do carry the fundamental). Creates the cap's pad-node
+    stacks so a later stitch/weld bonds them into the pours — call this BEFORE
+    stitch_zones()."""
+    fps = [fp for fp in board.GetFootprints()
+           if fp.GetReference() in (topo["hs"]["refs"] + topo["ls"]["refs"])]
+    cx = sum(mm(fp.GetPosition().x) for fp in fps) / len(fps)
+    cy = sum(mm(fp.GetPosition().y) for fp in fps) / len(fps)
+    cand = []
+    for fp in board.GetFootprints():
+        ref = fp.GetReference()
+        if ref not in topo["cin"]:
+            continue
+        nets = {p.GetNetname() for p in fp.Pads()}
+        if not ({topo["vin"], topo["gnd"]} <= nets):
+            continue
+        klass = _cap_class(fp)
+        p = fp.GetPosition()
+        dsq = (mm(p.x) - cx) ** 2 + (mm(p.y) - cy) ** 2
+        cand.append((klass != prefer, dsq, ref, fp, klass))  # preferred class first, then nearest
+    if not cand:
+        return None
+    cand.sort(key=lambda t: (t[0], t[1]))
+    _, _, ref, fp, klass = cand[0]
+    vn, _ = _pad_node_stack(board, model, zmap, fp, topo["vin"])
+    gn, _ = _pad_node_stack(board, model, zmap, fp, topo["gnd"])
+    if not (vn and gn):
+        return None
+    return ref, vn, gn, klass
 
 
 def main():
