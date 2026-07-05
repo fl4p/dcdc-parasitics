@@ -125,6 +125,22 @@ port-polarity/SW-reference tripwire). Boards with an **all-ceramic** input bank 
 back to the nearest ceramic for the conduction anchor (there the ceramics *do* carry
 the fundamental); the anchor refdes and class are recorded in `cond_ref`.
 
+### Input-cap branch network (`--emit-cin-network`)
+
+For the loss tool's **Cin ESR / input-ripple** model, `--emit-cin-network` ports the
+**full input bank** (bulk + mlcc) individually (`P_cin_<ref>`, separate from the
+MLCC-only HF `P_pwr` so `L_loop` is untouched) and decomposes the port matrix into a
+**shared Vin/GND trunk + one private branch per cap**: with a common trunk feeding
+every cap, `L[i,i] = L_shared + Lb_i` and `L[i,j] ≈ L_shared`, so `L_shared` is the
+off-diagonal mean and `Lb_i = L[i,i] − L_shared` (same for R at the conduction
+freq). The result is `cin_branches` + `cin_L_shared`/`cin_R_shared` in the JSON.
+
+This is **copper only** — parasitics stays parts-DB-free. The loss tool owns the
+complete `cin_network` subckt: it enriches each `ref` with its datasheet C/ESR/ESL
+from its parts DB and assembles `Lb_<ref>`(copper) in series with `Cel_<ref>`(bulk)
+or `Cmlcc_<ref>`(mlcc). `Rb` is **branch copper**, distinct from dielectric ESR. If
+the off-diagonal spread is high (the single-trunk model fits poorly), it warns.
+
 Meshing: tracks → filaments; copper pours → a gridded filament mesh clipped to the
 real filled polygon (and to an ROI around the FETs/Cin, so far copper is skipped);
 vias → vertical filaments; THT pads and FET leads → vertical stubs to a die plane.
@@ -139,7 +155,7 @@ copper); a union-find prune keeps only port-reachable copper. `L = Im(Z)/2πf`,
 python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
         [--pitch 2.0 1.0] [--lead-mm 3.0] [--vin NET] \
         [--cin-parallel 4 | --cin-refs C17 C18 C9 C16] [--include-bulk-cin] \
-        [--cin-esl 0.5 --cin-esr 3] \
+        [--cin-esl 0.5 --cin-esr 3] [--emit-cin-network] \
         [--hs-ref Q1 Q3 --ls-ref Q2] [--hs-gate NET --ls-gate NET] \
         [--hs-kelvin] [--ls-kelvin] [--weld-tol 0.6] [--margin 8] [--svg] -o OUTDIR
 ```
@@ -173,7 +189,10 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
   Conduction fields: `r_hs`, `r_ls` (per-switch conduction R), `r_loop_cond` (LF
   loop R), `r_sw` (SW spreading residual), `r_cond_freq` (the freq they were read
-  at), and `cond_ref` (`{ref, cls}` — the bulk cap they anchor on).
+  at), and `cond_ref` (`{ref, cls}` — the bulk cap they anchor on). With
+  `--emit-cin-network`: `cin_branches` (`[{ref, cls, Lb, Rb}]` — per-cap copper
+  branch) + `cin_L_shared`/`cin_R_shared` (the shared Vin/GND trunk); the loss
+  tool fills each cap's datasheet C/ESR/ESL from dslib and assembles `cin_network`.
 - **`report.md`** — table + a topology sketch of where CSI sits.
 - **`schematic.svg`** (with `--svg`) — a standalone half-bridge drawing of the
   extracted network: each parasitic as a labelled coil, the two common-source

@@ -59,6 +59,8 @@ def run_geom(args, pitch, outdir):
         cmd.append("--ls-kelvin")
     if args.include_bulk_cin:
         cmd.append("--include-bulk-cin")
+    if args.emit_cin_network:
+        cmd.append("--emit-cin-network")
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
@@ -89,6 +91,9 @@ def main():
                     help="explicit input-cap refdes to port (overrides nearest-N)")
     ap.add_argument("--include-bulk-cin", action="store_true",
                     help="also port bulk electrolytics (>=10uF); default excludes them")
+    ap.add_argument("--emit-cin-network", action="store_true",
+                    help="port the full input-cap bank for the per-cap branch "
+                         "decomposition (cin_branches in JSON) the loss tool consumes")
     ap.add_argument("--cin-esl", type=float, default=0.0,
                     help="per-cap ESL (nH) added to each branch -> physical current "
                          "split at f_ring; 0 = ideal-cap copper-only lower bound")

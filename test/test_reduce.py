@@ -143,6 +143,60 @@ check("conduction over-budget warns",
       any("conduction" in w for w in pb["reduce_warn"]),
       "; ".join(pb["reduce_warn"]) or "(no warning!)")
 
+# 11. cin branch decomposition: shared Vin/GND trunk + private branch per cap.
+L_sh, Lb = 8e-9, [2e-9, 3e-9, 5e-9]
+R_sh, Rb = 0.5e-3, [1e-3, 2e-3, 0.5e-3]
+m = len(Lb)
+capports = ["P_pwr", "P_pwr1", "P_pwr2"]
+Zpl = np.zeros((m, m), dtype=complex)     # plateau (L info)
+Zlo2 = np.zeros((m, m), dtype=complex)    # low freq (R info)
+wpl = 2 * np.pi * 5e6
+for a in range(m):
+    for b in range(m):
+        Lij = L_sh + (Lb[a] if a == b else 0.0)
+        Rij = R_sh + (Rb[a] if a == b else 0.0)
+        Zpl[a, b] = 1j * wpl * Lij
+        Zlo2[a, b] = Rij + 1j * (2 * np.pi * 1e5) * Lij
+topo11 = {"cin_used": ["C1", "C2", "C3"],
+          "cin_class": {"C1": "bulk", "C2": "bulk", "C3": "mlcc"}}
+p11 = sr.reduce_parasitics({1e5: Zlo2, 5e6: Zpl}, capports, topo11, {},
+                           plateau=5e6, cin_ports=capports)
+brs = {b["ref"]: b for b in p11["cin_branches"]}
+check("cin L_shared trunk", abs(p11["cin_L_shared"] - L_sh) < 1e-15,
+      f"{p11['cin_L_shared']*1e9:.3f} nH")
+check("cin Lb per cap (diag - trunk)",
+      all(abs(brs[r]["Lb"] - Lb[i]) < 1e-15 for i, r in enumerate(["C1", "C2", "C3"])),
+      ", ".join(f"{brs[r]['Lb']*1e9:.2f}" for r in ["C1", "C2", "C3"]))
+check("cin Rb per cap at f_dc",
+      all(abs(brs[r]["Rb"] - Rb[i]) < 1e-12 for i, r in enumerate(["C1", "C2", "C3"])),
+      ", ".join(f"{brs[r]['Rb']*1e3:.2f}" for r in ["C1", "C2", "C3"]))
+check("cin class passthrough",
+      brs["C1"]["cls"] == "bulk" and brs["C3"]["cls"] == "mlcc")
+
+# 12. cin_net label path: HF L_loop stays single-cap (P_pwr) while the branch
+#     decomposition spans bulk caps that are NOT in cin_ports.
+L_sh2, Lb2 = 6e-9, [1e-9, 2e-9, 4e-9]
+allports = ["P_pwr", "P_cin_C2", "P_cin_C3"]
+Zp = np.zeros((3, 3), dtype=complex)
+Zl = np.zeros((3, 3), dtype=complex)
+for a in range(3):
+    for b in range(3):
+        Lij = L_sh2 + (Lb2[a] if a == b else 0.0)
+        Zp[a, b] = 1j * (2 * np.pi * 5e6) * Lij
+        Zl[a, b] = (1e-3 if a == b else 0.5e-3) + 1j * (2 * np.pi * 1e5) * Lij
+topo12 = {"cin_net": [{"ref": "C1", "cls": "mlcc", "label": "P_pwr"},
+                      {"ref": "C2", "cls": "bulk", "label": "P_cin_C2"},
+                      {"ref": "C3", "cls": "bulk", "label": "P_cin_C3"}]}
+p12 = sr.reduce_parasitics({1e5: Zl, 5e6: Zp}, allports, topo12, {},
+                           plateau=5e6, cin_ports=["P_pwr"])   # HF = single MLCC
+check("cin_net: HF L_loop is single-cap P_pwr",
+      abs(p12["L_loop"] - (L_sh2 + Lb2[0])) < 1e-15, f"{p12['L_loop']*1e9:.3f} nH")
+check("cin_net: decomposition spans all 3 caps",
+      len(p12["cin_branches"]) == 3 and
+      {b["ref"] for b in p12["cin_branches"]} == {"C1", "C2", "C3"})
+check("cin_net: bulk caps classified from cin_net",
+      all(b["cls"] == "bulk" for b in p12["cin_branches"] if b["ref"] in ("C2", "C3")))
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

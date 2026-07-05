@@ -196,6 +196,27 @@ def markdown(p):
             "the copper budget. The two sides are split by real geometry, not 50/50.",
         ]
 
+    branches = p.get("cin_branches") or []
+    if branches:
+        lines += [
+            "",
+            "## Input-cap branch network (`--emit-cin-network`)",
+            "",
+            f"Per-cap **copper** decomposed into a shared Vin/GND trunk "
+            f"(**{p.get('cin_L_shared', 0)*nH:.2f} nH** / "
+            f"{p.get('cin_R_shared', 0)*1e3:.2f} mΩ) plus a private branch per cap "
+            f"(`Lb`/`Rb`, from L[i,i]−L_shared). The loss tool enriches each ref with "
+            f"its datasheet C/ESR/ESL from dslib and assembles the SPICE `cin_network`. "
+            f"`Rb` is **branch copper**, not dielectric ESR — bulk electrolytics carry "
+            f"the 39 kHz ripple ESR loss; ceramics are ~open at fsw.",
+            "",
+            "| Cap | class | branch L (`Lb`) | branch R (`Rb`) |",
+            "|---|---|---|---|",
+        ]
+        for b in branches:
+            lines.append(f"| {b['ref']} | {b['cls']} | {b['Lb']*nH:.2f} nH | "
+                         f"{b['Rb']*1e3:.3f} mΩ |")
+
     split = p.get("current_split") or {}
     if len(split) > 1:
         lines += [

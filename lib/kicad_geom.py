@@ -456,7 +456,7 @@ def _roi(board, topo, margin=8.0):
 
 
 def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
-          cin_refs=None, include_bulk=False, weld_tol=0.6):
+          cin_refs=None, include_bulk=False, weld_tol=0.6, emit_cin_network=False):
     zmap = layer_z_map(board)
     model = Model()
     power_nets = {topo["sw"], topo["vin"], topo["gnd"]}
@@ -483,6 +483,14 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     # fundamental). Create its pad nodes now so the stitch/weld below bonds them
     # into the pours — the conduction ports reference these below.
     cref = conduction_ref(board, model, zmap, topo, prefer="bulk")
+
+    # --emit-cin-network: port the FULL input bank (bulk+mlcc) individually for the
+    # per-cap branch decomposition. Nodes created here (pre-stitch) so they bond in;
+    # reuses the HF cin ports (P_pwr...) and adds P_cin_<ref> for the rest.
+    if emit_cin_network:
+        hf_labels = [(ref, "P_pwr" if i == 0 else f"P_pwr{i}")
+                     for i, (ref, _, _) in enumerate(cins)]
+        cin_network_ports(board, model, zmap, topo, hf_labels)
 
     # bond every track/via/pad node into the pour mesh on its net+layer, then weld
     # near-coincident endpoints interning missed (pad-centre vs trace-end, touching
@@ -640,6 +648,38 @@ def conduction_ref(board, model, zmap, topo, prefer="bulk"):
     return ref, vn, gn, klass
 
 
+def cin_network_ports(board, model, zmap, topo, hf_labels):
+    """Port EVERY input cap (bulk + mlcc) individually as `P_cin_<ref>`, for the
+    --emit-cin-network per-cap branch decomposition. Reuses the HF cin ports
+    already placed (hf_labels: [(ref, label)]) so the nearest MLCC isn't
+    double-ported, and adds one port for each remaining cap. Records the ordered
+    port set in topo['cin_net'] = [{ref, cls, label}] (HF ports first, then the
+    extras) for solve_reduce to decompose into shared-trunk + per-cap branch.
+
+    Must run BEFORE stitch_zones so the new cap pad nodes bond into the pours."""
+    cls_map = topo.get("cin_class", {})
+    net = [dict(ref=ref, cls=cls_map.get(ref, "mlcc"), label=lbl)
+           for ref, lbl in hf_labels]
+    have = {ref for ref, _ in hf_labels}
+    for fp in board.GetFootprints():
+        ref = fp.GetReference()
+        if ref not in topo["cin"] or ref in have:
+            continue
+        nets = {p.GetNetname() for p in fp.Pads()}
+        if not ({topo["vin"], topo["gnd"]} <= nets):
+            continue
+        vn, _ = _pad_node_stack(board, model, zmap, fp, topo["vin"])
+        gn, _ = _pad_node_stack(board, model, zmap, fp, topo["gnd"])
+        if not (vn and gn):
+            continue
+        label = f"P_cin_{ref}"
+        model.port(label, vn, gn)
+        net.append(dict(ref=ref, cls=cls_map.get(ref, _cap_class(fp)), label=label))
+        have.add(ref)
+    topo["cin_net"] = net
+    return net
+
+
 def main():
     ap = argparse.ArgumentParser(description="KiCad PCB -> multiport FastHenry .inp")
     ap.add_argument("pcb")
@@ -659,6 +699,9 @@ def main():
                     help="explicit input-cap refdes to port (overrides nearest-N)")
     ap.add_argument("--include-bulk-cin", action="store_true",
                     help="also port bulk electrolytics (>=10uF); default excludes them")
+    ap.add_argument("--emit-cin-network", action="store_true",
+                    help="port the full input-cap bank individually (P_cin_<ref>) for the "
+                         "per-cap branch decomposition consumed by the loss tool's cin_network")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--weld-tol", type=float, default=0.6,
                     help="fuse same-net nodes within this many mm (fixes pad/trace and "
@@ -681,7 +724,8 @@ def main():
         hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
     model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm, margin=args.margin,
                   cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
-                  include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol)
+                  include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol,
+                  emit_cin_network=args.emit_cin_network)
     stats = model.write(args.out, nwinc=args.nwinc, nhinc=args.nhinc,
                         sigma=sigma_at(args.cu_temp))
     # sidecar: port order + topology for the reduce step

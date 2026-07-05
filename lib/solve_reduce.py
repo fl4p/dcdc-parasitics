@@ -21,6 +21,11 @@ the MLCCs — near-open at the 39 kHz fundamental — are excluded):
     r_ls        = R[ls,ls]             LS conduction copper (SW -> GND_bulk via LS)
     r_loop_cond = R[bulk,bulk]         full LF conduction loop over the bulk cap
     r_sw        = r_loop_cond-r_hs-r_ls   SW-node spreading residual
+
+With --emit-cin-network the full input bank is ported (topo['cin_net']) and
+decomposed into a shared Vin/GND trunk + per-cap private branch (copper only):
+    cin_branches = [{ref, cls, Lb, Rb}]   per-cap branch L/R (Lb=L[i,i]-L_shared)
+    cin_L_shared, cin_R_shared            the shared trunk (loss.py adds cap C/ESR)
 """
 import os
 import re
@@ -99,6 +104,43 @@ def _eff_commutation(Z, cin_idx, zcap=None):
     denom = complex(y.sum())
     cond = float(np.linalg.cond(Zc))
     return 1.0 / denom, y, denom, cond, y / denom
+
+
+def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map) -> "dict | None":
+    """Partial-inductance decomposition of the ported input-cap bank into a shared
+    trunk + per-cap private branch, for the `--emit-cin-network` LF model.
+
+    With a single common Vin/GND trunk feeding every cap, the port L/R matrices
+    read (to first order): diagonal L[i,i] = L_shared + Lb_i, off-diagonal
+    L[i,j] = L_shared (only the trunk is common). So the trunk is the mean of the
+    off-diagonals and each private branch is diagonal minus trunk:
+
+        L_shared = mean(L[i,j], i!=j)     Lb_i = L[i,i] - L_shared
+        R_shared = mean(R[i,j], i!=j)     Rb_i = R[i,i] - R_shared   (at f_dc)
+
+    Returns per-cap {ref, cls, Lb, Rb} + the shared trunk L/R + the off-diagonal
+    spread (a high spread means the single-trunk model is a poor fit -> warn). The
+    consumer (loss.py) assembles the SPICE `cin_network` as one series trunk
+    (L_shared/R_shared) feeding each cap's branch (Lb_i/Rb_i) + its datasheet
+    C/ESR/ESL. None if <2 caps (no shared/branch split is defined)."""
+    n = len(cin_idx)
+    if n < 2:
+        return None
+    offL = [Lm[a, b] for i, a in enumerate(cin_idx)
+            for j, b in enumerate(cin_idx) if i != j]
+    offR = [Rm[a, b] for i, a in enumerate(cin_idx)
+            for j, b in enumerate(cin_idx) if i != j]
+    L_shared = float(np.mean(offL))
+    R_shared = float(np.mean(offR))
+    L_spread = float(np.std(offL))
+    branches = []
+    for k, a in enumerate(cin_idx):
+        ref = refs[k] if k < len(refs) else f"P{a}"
+        branches.append(dict(ref=ref, cls=(cls_map or {}).get(ref, "mlcc"),
+                             Lb=float(Lm[a, a]) - L_shared,
+                             Rb=float(Rm[a, a]) - R_shared))
+    return dict(branches=branches, L_shared=L_shared, R_shared=R_shared,
+                L_spread=L_spread)
 
 
 def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
@@ -191,6 +233,29 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 f"polarity or SW-node reference")
     cond_ref = (topo or {}).get("cond_ref") if isinstance(topo, dict) else None
 
+    # ---- per-cap branch decomposition for --emit-cin-network ----
+    # Uses the dedicated full-bank port set (topo['cin_net']: bulk+mlcc, one port
+    # per cap) that geometry adds only under --emit-cin-network — SEPARATE from the
+    # MLCC-only HF cin_ports above, so the L_loop reduction is never perturbed.
+    # Falls back to the HF set (single-cap -> None) when cin_net is absent.
+    cin_class = (topo or {}).get("cin_class") if isinstance(topo, dict) else None
+    cin_net = (topo or {}).get("cin_net") if isinstance(topo, dict) else None
+    if cin_net:
+        net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
+        net_refs = [e["ref"] for e in cin_net if e.get("label") in idx]
+        net_cls = {e["ref"]: e.get("cls", "mlcc") for e in cin_net}
+    else:
+        net_idx, net_refs, net_cls = cin_idx, refs, cin_class
+    cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls)
+    if cin_dec:
+        _Lsh = float(cin_dec["L_shared"])
+        _Lsp = float(cin_dec["L_spread"])
+        if _Lsh > 0 and _Lsp > 0.5 * _Lsh:
+            warn.append(
+                f"cin branch decomposition: off-diagonal L spread high "
+                f"({_Lsp*1e9:.2f} vs shared {_Lsh*1e9:.2f} nH) — single shared-trunk "
+                f"model approximate; per-cap Lb less reliable")
+
     def eff_csi(g):
         """Effective common-source mutual: gate-loop voltage per unit *total*
         commutation current, using the parallel-cap current distribution y.
@@ -221,6 +286,9 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         L_gate_ls=LL(il, il), R_gate_ls=RR(il),
         r_hs=r_hs, r_ls=r_ls, r_loop_cond=r_loop_cond, r_sw=r_sw,
         r_cond_freq=f_dc, cond_ref=cond_ref,
+        cin_branches=(cin_dec["branches"] if cin_dec else None),
+        cin_L_shared=(cin_dec["L_shared"] if cin_dec else None),
+        cin_R_shared=(cin_dec["R_shared"] if cin_dec else None),
         csi_hs=eff_csi(ih),
         csi_ls=eff_csi(il),
         m_gate=LL(ih, il),
