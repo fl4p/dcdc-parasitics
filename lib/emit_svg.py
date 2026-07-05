@@ -170,7 +170,10 @@ def schematic(p):
     # conduction R (r_hs/r_ls) is a distinct, near-DC number shown alongside.
     r_hs, r_ls = p.get("r_hs"), p.get("r_ls")
     R_loop = p.get("R_loop", 0.0)
-    frac_hs = r_hs / (r_hs + r_ls) if (r_hs and r_ls and r_hs + r_ls > 0) else 0.5
+    if r_hs is not None and r_ls is not None and r_hs + r_ls > 0:
+        frac_hs = min(1.0, max(0.0, r_hs / (r_hs + r_ls)))
+    else:
+        frac_hs = 0.5
     rser_hs = R_loop * frac_hs
     rser_ls = R_loop * (1.0 - frac_hs)
 

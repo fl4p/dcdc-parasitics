@@ -51,8 +51,8 @@ def subckt(p):
     # per-side loop R: total is the HF ring R_loop (plateau, damping), split by the
     # real LF conduction proportion (r_hs:r_ls) when available, else 50/50.
     r_hs, r_ls = p.get("r_hs"), p.get("r_ls")
-    if r_hs and r_ls and (r_hs + r_ls) > 0:
-        frac_hs = r_hs / (r_hs + r_ls)
+    if r_hs is not None and r_ls is not None and (r_hs + r_ls) > 0:
+        frac_hs = min(1.0, max(0.0, r_hs / (r_hs + r_ls)))  # clamp: never negative Rser
     else:
         frac_hs = 0.5
     rser_hs = p["R_loop"] * frac_hs

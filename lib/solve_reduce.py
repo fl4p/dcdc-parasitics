@@ -217,6 +217,10 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     # copper; P_bulk is the full LF loop, and r_sw is the SW-node spreading residual.
     f_dc = min(zc.keys())
     R_dc = zc[f_dc].real
+    if f_dc >= f:   # conduction read collapsed onto the ring plateau
+        warn.append(
+            f"conduction freq ({f_dc:g} Hz) >= plateau ({f:g} Hz) — the ring and "
+            f"conduction R collapse to one value; lower --plateau or the sweep fmin")
 
     def rdc(label):
         i = idx.get(label)
@@ -231,22 +235,30 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 f"conduction R_hs+R_ls ({(r_hs + r_ls) * 1e3:.2f} mOhm) exceeds LF "
                 f"loop R ({r_loop_cond * 1e3:.2f} mOhm) — check P_hs/P_ls port "
                 f"polarity or SW-node reference")
+    # a single negative per-switch R would emit a non-physical negative Rser
+    if (r_hs is not None and r_hs < -0.05e-3) or (r_ls is not None and r_ls < -0.05e-3):
+        warn.append(
+            f"negative per-switch conduction R (r_hs={(r_hs or 0)*1e3:.2f}, "
+            f"r_ls={(r_ls or 0)*1e3:.2f} mOhm) — numerical/geometry artifact; "
+            f"would emit a negative Rser")
     cond_ref = (topo or {}).get("cond_ref") if isinstance(topo, dict) else None
 
-    # ---- per-cap branch decomposition for --emit-cin-network ----
+    # ---- per-cap branch decomposition (ONLY under --emit-cin-network) ----
     # Uses the dedicated full-bank port set (topo['cin_net']: bulk+mlcc, one port
-    # per cap) that geometry adds only under --emit-cin-network — SEPARATE from the
-    # MLCC-only HF cin_ports above, so the L_loop reduction is never perturbed.
-    # Falls back to the HF set (single-cap -> None) when cin_net is absent.
-    cin_class = (topo or {}).get("cin_class") if isinstance(topo, dict) else None
+    # per cap) that geometry adds ONLY under --emit-cin-network — SEPARATE from the
+    # MLCC-only HF cin_ports, so the L_loop reduction is never perturbed. It must
+    # NOT fall back to the HF / --cin-parallel / --cin-refs set: that set is curated
+    # for loop-L accuracy (often MLCC-only, missing the bulk caps), so decomposing
+    # it would emit a cin_branches table mislabeled as the full bank while silently
+    # dropping the electrolytics — the exact miscompute this feature exists to
+    # prevent. cin_branches stays None unless a genuine cin_net was ported.
     cin_net = (topo or {}).get("cin_net") if isinstance(topo, dict) else None
+    cin_dec = None
     if cin_net:
         net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
         net_refs = [e["ref"] for e in cin_net if e.get("label") in idx]
         net_cls = {e["ref"]: e.get("cls", "mlcc") for e in cin_net}
-    else:
-        net_idx, net_refs, net_cls = cin_idx, refs, cin_class
-    cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls)
+        cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls)
     if cin_dec:
         _Lsh = float(cin_dec["L_shared"])
         _Lsp = float(cin_dec["L_spread"])

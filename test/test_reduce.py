@@ -158,7 +158,10 @@ for a in range(m):
         Zpl[a, b] = 1j * wpl * Lij
         Zlo2[a, b] = Rij + 1j * (2 * np.pi * 1e5) * Lij
 topo11 = {"cin_used": ["C1", "C2", "C3"],
-          "cin_class": {"C1": "bulk", "C2": "bulk", "C3": "mlcc"}}
+          "cin_class": {"C1": "bulk", "C2": "bulk", "C3": "mlcc"},
+          "cin_net": [{"ref": "C1", "cls": "bulk", "label": "P_pwr"},
+                      {"ref": "C2", "cls": "bulk", "label": "P_pwr1"},
+                      {"ref": "C3", "cls": "mlcc", "label": "P_pwr2"}]}
 p11 = sr.reduce_parasitics({1e5: Zlo2, 5e6: Zpl}, capports, topo11, {},
                            plateau=5e6, cin_ports=capports)
 brs = {b["ref"]: b for b in p11["cin_branches"]}
@@ -196,6 +199,14 @@ check("cin_net: decomposition spans all 3 caps",
       {b["ref"] for b in p12["cin_branches"]} == {"C1", "C2", "C3"})
 check("cin_net: bulk caps classified from cin_net",
       all(b["cls"] == "bulk" for b in p12["cin_branches"] if b["ref"] in ("C2", "C3")))
+
+# 13. Regression (reviewer Finding 1): WITHOUT cin_net, cin_branches must stay None
+#     even with >=2 cin_ports — never decompose the HF/cin-parallel set as if it
+#     were the full bank (that silently drops the bulk caps).
+p13 = sr.reduce_parasitics({1e5: Zl, 5e6: Zp}, allports, {"cin_used": ["C1", "C2", "C3"]},
+                           {}, plateau=5e6, cin_ports=allports)   # no cin_net in topo
+check("no cin_net => cin_branches is None (no partial-bank leak)",
+      p13.get("cin_branches") is None, f"{p13.get('cin_branches')}")
 
 print()
 if FAILS:
