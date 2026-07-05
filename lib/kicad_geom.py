@@ -511,8 +511,10 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
 
     # LF conduction anchor: nearest bulk electrolytic (sources the 39 kHz
     # fundamental). Create its pad nodes now so the stitch/weld below bonds them
-    # into the pours — the conduction ports reference these below.
-    cref = conduction_ref(board, model, zmap, topo, prefer="bulk")
+    # into the pours. Exclude the HF cin-anchor refs so an all-MLCC bank can't pick
+    # the same cap as P_pwr (which would duplicate the port -> singular Zc).
+    cref = conduction_ref(board, model, zmap, topo, prefer="bulk",
+                          exclude={ref for ref, _, _ in cins})
 
     # --emit-cin-network: port the FULL input bank (bulk+mlcc) individually for the
     # per-cap branch decomposition. Nodes created here (pre-stitch) so they bond in;
@@ -569,10 +571,22 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     dropped = model.drop_floating_ports("P_pwr")
     if dropped:
         ds = set(dropped)
-        model.cin_ports = [c for c in getattr(model, "cin_ports", []) if c not in ds]
+        hf_full = list(getattr(model, "cin_ports", []))   # pre-drop HF labels, 1:1 with cin_used
+        model.cin_ports = [c for c in hf_full if c not in ds]
+        # keep cin_used aligned with cin_ports — reduce zips them positionally to key
+        # the per-cap current split; an unfiltered cin_used silently mislabels every
+        # cap after a dropped one (and draws a leg for a cap that was dropped).
+        topo["cin_used"] = [r for l, r in zip(hf_full, topo.get("cin_used", []))
+                            if l not in ds]
         if topo.get("cin_net"):
             topo["cin_net"] = [e for e in topo["cin_net"] if e["label"] not in ds]
         topo["cin_dropped_ports"] = dropped
+        if len(dropped) > len(model.ports):
+            # more ports dropped than kept -> P_pwr's own copper is the minority
+            # island, i.e. the seed (not a distant cap) is the disconnected one.
+            sys.stderr.write(
+                "WARNING: dropped more ports than kept — the P_pwr seed net may be "
+                "the disconnected one; check --sw/--gnd nets and the nearest-Cin pad.\n")
     return model
 
 
@@ -604,11 +618,11 @@ def _cap_farads(fp):
     '470uF, 100V' -> 470e-6, '220nF' -> 220e-9), or None. Board data, not a parts
     DB — used only to display a ripple-relevance cutoff in the LF schematic."""
     import re
-    m = re.match(r"\s*([\d.]+)\s*(p|n|u|µ|m)?", str(fp.GetValue()))
-    if not m:
-        return None
+    m = re.match(r"\s*([\d.]+)\s*(p|n|u|µ|m)", str(fp.GetValue()))
+    if not m:                       # require an explicit unit: a bare number is
+        return None                 # ambiguous (100 = 100pF? 100µF?) — don't guess
     return float(m.group(1)) * {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6,
-                                "m": 1e-3}.get((m.group(2) or "u").lower(), 1e-6)
+                                "m": 1e-3}[m.group(2).lower()]
 
 
 def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False):
@@ -666,7 +680,7 @@ def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False):
     return out
 
 
-def conduction_ref(board, model, zmap, topo, prefer="bulk"):
+def conduction_ref(board, model, zmap, topo, prefer="bulk", exclude=None):
     """Anchor node pair for the LOW-frequency conduction loop -> (ref, vin_node,
     gnd_node, klass), nearest cap of the preferred class to the FET centroid.
 
@@ -677,7 +691,12 @@ def conduction_ref(board, model, zmap, topo, prefer="bulk"):
     `klass==prefer` (bulk); falls back to the nearest ceramic for all-ceramic input
     banks (where the ceramics do carry the fundamental). Creates the cap's pad-node
     stacks so a later stitch/weld bonds them into the pours — call this BEFORE
-    stitch_zones()."""
+    stitch_zones().
+
+    `exclude` (the HF cin-anchor refs) is skipped: on an all-MLCC bank the bulk
+    fallback would otherwise pick the SAME nearest cap as P_pwr, and P_bulk would
+    duplicate P_pwr's node pair -> singular Zc ("Error on factor")."""
+    skip = set(exclude or ())
     fps = [fp for fp in board.GetFootprints()
            if fp.GetReference() in (topo["hs"]["refs"] + topo["ls"]["refs"])]
     cx = sum(mm(fp.GetPosition().x) for fp in fps) / len(fps)
@@ -685,7 +704,7 @@ def conduction_ref(board, model, zmap, topo, prefer="bulk"):
     cand = []
     for fp in board.GetFootprints():
         ref = fp.GetReference()
-        if ref not in topo["cin"]:
+        if ref not in topo["cin"] or ref in skip:
             continue
         nets = {p.GetNetname() for p in fp.Pads()}
         if not ({topo["vin"], topo["gnd"]} <= nets):

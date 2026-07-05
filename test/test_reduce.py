@@ -225,6 +225,9 @@ check("heterogeneous: no negative Lb (mean-offdiag 9.5 > min-diag 8.5)",
       ", ".join(f'{r}={b14[r]["Lb"]*1e9:.2f}' for r in ["C1", "C2", "CB"]))
 check("heterogeneous: trunk clamped to min diagonal",
       abs(p14["cin_L_shared"] - 8.5e-9) < 1e-15, f'{p14["cin_L_shared"]*1e9:.3f} nH')
+check("heterogeneous: clamp warns",
+      any("clamped" in w for w in p14["reduce_warn"]),
+      "; ".join(w for w in p14["reduce_warn"] if "clamp" in w) or "(no warn!)")
 
 print()
 if FAILS:

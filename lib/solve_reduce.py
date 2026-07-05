@@ -139,9 +139,11 @@ def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map, c_map=None) -> "dict | No
     # banks (mean off-diag < min diag) are unaffected.
     min_diagL = float(min(Lm[a, a] for a in cin_idx))
     min_diagR = float(min(Rm[a, a] for a in cin_idx))
-    L_shared = min(float(np.mean(offL)), min_diagL)
+    mean_offL = float(np.mean(offL))
+    L_shared = min(mean_offL, min_diagL)
     R_shared = min(float(np.mean(offR)), min_diagR)
     L_spread = float(np.std(offL))
+    clamped = L_shared < mean_offL - 1e-18   # trunk pinned to min-diag (heterogeneous)
     branches = []
     for k, a in enumerate(cin_idx):
         ref = refs[k] if k < len(refs) else f"P{a}"
@@ -150,7 +152,7 @@ def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map, c_map=None) -> "dict | No
                              Rb=max(0.0, float(Rm[a, a]) - R_shared),
                              C=(c_map or {}).get(ref)))
     return dict(branches=branches, L_shared=L_shared, R_shared=R_shared,
-                L_spread=L_spread)
+                L_spread=L_spread, clamped=clamped)
 
 
 def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
@@ -282,6 +284,11 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 f"cin branch decomposition: off-diagonal L spread high "
                 f"({_Lsp*1e9:.2f} vs shared {_Lsh*1e9:.2f} nH) — single shared-trunk "
                 f"model approximate; per-cap Lb less reliable")
+        if cin_dec.get("clamped"):
+            warn.append(
+                "cin shared-trunk clamped to the smallest cap self-L (heterogeneous "
+                "bulk+MLCC bank: off-diagonal mean exceeded a diagonal) — per-cap Lb "
+                "near the floor is a shared-trunk-model artifact, not a real ~0 branch")
 
     def eff_csi(g):
         """Effective common-source mutual: gate-loop voltage per unit *total*
