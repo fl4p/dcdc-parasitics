@@ -44,7 +44,7 @@ def run_geom(args, pitch, outdir):
            "--sw", args.sw, "--gnd", args.gnd, "--pitch", str(pitch),
            "--cin-parallel", str(args.cin_parallel),
            "--lead-mm", str(args.lead_mm), "--nwinc", str(args.nwinc),
-           "--nhinc", str(args.nhinc), "-o", inp]
+           "--nhinc", str(args.nhinc), "--cu-temp", str(args.cu_temp), "-o", inp]
     for flag, val in (("--vin", args.vin), ("--hs-gate", args.hs_gate),
                       ("--ls-gate", args.ls_gate)):
         if val:
@@ -96,6 +96,9 @@ def main():
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length mm")
     ap.add_argument("--nwinc", type=int, default=1, help="skin sub-mesh width (>1: slower, more HF-accurate)")
     ap.add_argument("--nhinc", type=int, default=1, help="skin sub-mesh height")
+    ap.add_argument("--cu-temp", type=float, default=20.0,
+                    help="copper temperature (C) for the reported R (scales sigma, "
+                         "R ~ +0.39%%/K); isothermal, no self-heating, L unaffected")
     ap.add_argument("--plateau", type=float, default=5e6, help="L-plateau frequency Hz")
     ap.add_argument("--svg", action="store_true",
                     help="also write schematic.svg (half-bridge + parasitics)")
@@ -109,7 +112,8 @@ def main():
     results = []
     for i, pitch in enumerate(pitches):
         inp, side = run_geom(args, pitch, workdir)
-        meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"))
+        meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"),
+                    cu_temp=side.get("cu_temp"))
         p = solve_reduce.solve(inp, side["ports"], side["topo"], meta,
                                plateau=args.plateau, suffix=f"p{i}",
                                cin_ports=side.get("cin_ports"),

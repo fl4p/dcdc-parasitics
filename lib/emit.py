@@ -57,7 +57,9 @@ def subckt(p):
         f"* nets   : Vin={t.get('vin')}  SW={t.get('sw')}  GND={t.get('gnd')}",
         f"* HS={','.join(t['hs']['refs'])} ({'Kelvin' if t['hs']['kelvin'] else 'non-Kelvin'})"
         f"  LS={','.join(t['ls']['refs'])} ({'Kelvin' if t['ls']['kelvin'] else 'non-Kelvin'})",
-        f"* freq   : {p['freq_Hz']:g} Hz plateau   mesh pitch {p['meta'].get('pitch')} mm",
+        f"* freq   : {p['freq_Hz']:g} Hz plateau   mesh pitch {p['meta'].get('pitch')} mm"
+        + (f"   Cu {p['meta'].get('cu_temp'):g} C" if p['meta'].get('cu_temp') not in (None, 20.0) else ""),
+        "* R values are isothermal copper (no self-heating); L is temperature-independent.",
         "* CSI is the shared source-lead branch (Lscs_*). Drive HS gate between",
         "* HSG and SW for non-Kelvin (CSI in loop), or HSG-HSKEL for Kelvin.",
     ]
@@ -119,8 +121,10 @@ def markdown(p):
         if p.get("L_loop_physical") is not None:
             lines.append(
                 f"| ⤷ with cap ESL {p['cin_esl']*1e9:.2g} nH / ESR {p['cin_esr']*1e3:.2g} mΩ — **physical** | {L(p['L_loop_physical'])} |")
+    cu_t = p['meta'].get('cu_temp')
+    rtemp = f", {cu_t:g} °C Cu" if cu_t not in (None, 20.0) else ""
     lines += [
-        f"| Commutation loop R (@ {p['freq_Hz']:.2g} Hz) | {p['R_loop']*1e3:.2f} mΩ |",
+        f"| Commutation loop R (@ {p['freq_Hz']:.2g} Hz{rtemp}) | {p['R_loop']*1e3:.2f} mΩ |",
         f"| HS common-source inductance | **{L(p['csi_hs'])}** |",
         f"| LS common-source inductance | **{L(p['csi_ls'])}** |",
         f"| HS gate-loop L | {L(p['L_gate_hs'])} |",
