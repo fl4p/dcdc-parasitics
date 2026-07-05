@@ -198,8 +198,12 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                     f"unreliable; check cap ports / near-coincident caps")
     neg = [n for n, s in split.items() if s["re"] < -1e-3]
     if neg:
-        warn.append(f"negative current share on {neg} — circulating current "
-                    f"between coupled caps; review port polarity / geometry")
+        warn.append(
+            f"negative current share on {neg} — small circulating currents in the "
+            f"ideal-cap (copper-only) limit when the bank is tightly coupled (mutuals "
+            f"≈ self-L, sub-nH private branches). Usually not a polarity bug: pass "
+            f"--cin-esl/--cin-esr for the physical, all-positive split; if it persists "
+            f"with realistic ESL, check port polarity / geometry")
     if len(cin_idx) > 1 and L_loop_ideal > L_loop_single + 1e-12:
         warn.append("effective loop L exceeds single-cap L — unexpected for "
                     "parallel caps; check mutual signs / port polarity")
