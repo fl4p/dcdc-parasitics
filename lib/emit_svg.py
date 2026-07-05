@@ -80,6 +80,17 @@ def _cap(cx, cy, col=CAPCOL, w=2.4, gap=7, half=15):
             _line(cx - half, cy + gap, cx + half, cy + gap, col, w))
 
 
+def _res_v(cx, y0, y1, col=WIRE, w=1.8, half_w=5.0, body=0.62):
+    """Vertical resistor from (cx,y0) to (cx,y1): IEC/EU rectangle body with
+    leads. `body` is the fraction of the span occupied by the box."""
+    bl = (y1 - y0) * body
+    ya = (y0 + y1) / 2 - bl / 2
+    yb = ya + bl
+    return (_line(cx, y0, cx, ya, col, w) + _line(cx, yb, cx, y1, col, w) +
+            f"<rect x='{cx-half_w:.1f}' y='{ya:.1f}' width='{2*half_w:.1f}' "
+            f"height='{bl:.1f}' fill='white' stroke='{col}' stroke-width='{w}'/>")
+
+
 def _nfet(cx, cy, ref, col=INK):
     """N-channel MOSFET, current vertical (drain top, source bottom), gate right.
     Returns (svg, drain_xy, source_xy, gate_xy). Includes the intrinsic body
@@ -161,15 +172,17 @@ def schematic(p):
     xdrv = 640        # gate drivers
     y_vin, y_gnd = 108, 560
 
-    # vertical y-plan (see module notes)
-    y_lh0, y_lh1 = 122, 168
-    cy_hs = 202
-    y_nhs = 262
-    y_lsh0, y_lsh1 = 274, 320
-    y_sw = 340
-    y_lsl0, y_lsl1 = 352, 398
-    cy_ls = 432
-    y_nls = 492
+    # vertical y-plan (see module notes). A resistor band (y_rl0..y_rl1) sits
+    # between the VIN rail and Lloop_hs to carry the lumped commutation-loop R.
+    y_rl0, y_rl1 = 116, 146
+    y_lh0, y_lh1 = 150, 192
+    cy_hs = 226
+    y_nhs = 284
+    y_lsh0, y_lsh1 = 294, 332
+    y_sw = 350
+    y_lsl0, y_lsl1 = 360, 402
+    cy_ls = 436
+    y_nls = 494
     y_lsl_cs0, y_lsl_cs1 = 504, 542
 
     s = [f"<svg xmlns='http://www.w3.org/2000/svg' width='{W}' height='{H}' "
@@ -240,7 +253,15 @@ def schematic(p):
         s.append(_txt(gx, cy_cap + 31, "modeled loop", 9, MUTE, "middle", ital=True))
 
     # ================= HS side =================
-    s.append(_line(xc, y_vin, xc, y_lh0, WIRE))
+    # lumped commutation-loop copper resistance (one aggregate R_loop; the model
+    # resolves a single value — the .lib splits it R_loop/2 per side arbitrarily).
+    s.append(_line(xc, y_vin, xc, y_rl0, WIRE))
+    s.append(_res_v(xc, y_rl0, y_rl1))
+    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 - 2, "R_loop", 11.5, INK, "end", "bold"))
+    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 12, f"{_fmtR(p.get('R_loop', 0.0))}", 11, INK, "end"))
+    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 24, "loop copper (÷2/side in .lib)", 8.5,
+                  MUTE, "end", ital=True))
+    s.append(_line(xc, y_rl1, xc, y_lh0, WIRE))
     s.append(_coil_v(xc, y_lh0, y_lh1))
     s.append(_txt(xc - 14, (y_lh0+y_lh1)/2 - 2, "Lloop_hs", 11.5, INK, "end", "bold"))
     s.append(_txt(xc - 14, (y_lh0+y_lh1)/2 + 12, f"{_fmtL(loop_hs)}", 11, INK, "end"))
