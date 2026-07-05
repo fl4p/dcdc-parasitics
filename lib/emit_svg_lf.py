@@ -31,10 +31,18 @@ def _fmtR(o):
     return f"{o*1e3:.2f} mΩ"
 
 
-def schematic_lf(p):
-    br = p.get("cin_branches") or []
-    if not br:
+def schematic_lf(p, min_uf=4.7):
+    br_all = p.get("cin_branches") or []
+    if not br_all:
         return None
+    # LF ripple cutoff: bulk electrolytics always shown; a ceramic below `min_uf`
+    # has impedance ~1/(2*pi*fsw*C) in the ohms and carries negligible fundamental
+    # ripple (a 1 uF is ~4 ohm vs a 470 uF's ~33 mOhm ESR -> <0.5% of the current),
+    # so collapse it into a footnote instead of cluttering the ripple picture.
+    thr = min_uf * 1e-6
+    br = [b for b in br_all
+          if b["cls"] == "bulk" or b.get("C") is None or b["C"] >= thr]
+    hidden = [b for b in br_all if b not in br]
     t = p.get("topo", {})
     n = len(br)
     bw = 100
@@ -100,8 +108,18 @@ def schematic_lf(p):
         # labels
         s.append(_txt(x + 9, (y_l0 + y_l1) / 2 + 3, _fmtL(b["Lb"]).replace(" ", ""), 8.5, col, "start"))
         s.append(_txt(x + 9, (y_r0 + y_r1) / 2 + 3, _fmtR(b["Rb"]).replace(" ", ""), 8.5, col, "start"))
-        s.append(_txt(x, y_cap + 26, "C/ESR", 8, MUTE, "middle", ital=True))
-        s.append(_txt(x, y_cap + 37, "→dslib", 8, MUTE, "middle", ital=True))
+        cval = b.get("C")
+        s.append(_txt(x, y_cap + 26, f"{cval*1e6:g}µF" if cval else "C", 9, col, "middle", "bold"))
+        s.append(_txt(x, y_cap + 37, "ESR→dslib", 7.5, MUTE, "middle", ital=True))
+
+    # omitted (sub-cutoff) ceramics — a footnote, not clutter in the ripple picture
+    if hidden:
+        refs = ", ".join(b["ref"] for b in hidden)
+        sc = sum((b.get("C") or 0) for b in hidden)
+        s.append(_txt(x0 - 20, y_gnd + 26,
+                      f"+ {len(hidden)} ceramic(s) < {min_uf:g} µF hidden "
+                      f"({refs}; Σ {sc*1e6:.1f} µF) — negligible ripple at fsw (≈ open)",
+                      10, MUTE, "start", ital=True))
 
     # ---- legend + conduction note ----
     ly = H - 40

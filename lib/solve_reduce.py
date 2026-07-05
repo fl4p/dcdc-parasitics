@@ -106,7 +106,7 @@ def _eff_commutation(Z, cin_idx, zcap=None):
     return 1.0 / denom, y, denom, cond, y / denom
 
 
-def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map) -> "dict | None":
+def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map, c_map=None) -> "dict | None":
     """Partial-inductance decomposition of the ported input-cap bank into a shared
     trunk + per-cap private branch, for the `--emit-cin-network` LF model.
 
@@ -147,7 +147,8 @@ def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map) -> "dict | None":
         ref = refs[k] if k < len(refs) else f"P{a}"
         branches.append(dict(ref=ref, cls=(cls_map or {}).get(ref, "mlcc"),
                              Lb=max(0.0, float(Lm[a, a]) - L_shared),
-                             Rb=max(0.0, float(Rm[a, a]) - R_shared)))
+                             Rb=max(0.0, float(Rm[a, a]) - R_shared),
+                             C=(c_map or {}).get(ref)))
     return dict(branches=branches, L_shared=L_shared, R_shared=R_shared,
                 L_spread=L_spread)
 
@@ -271,7 +272,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
         net_refs = [e["ref"] for e in cin_net if e.get("label") in idx]
         net_cls = {e["ref"]: e.get("cls", "mlcc") for e in cin_net}
-        cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls)
+        net_c = {e["ref"]: e.get("C") for e in cin_net}
+        cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls, net_c)
     if cin_dec:
         _Lsh = float(cin_dec["L_shared"])
         _Lsp = float(cin_dec["L_spread"])

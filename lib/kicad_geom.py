@@ -599,6 +599,18 @@ def _cap_class(fp):
     return "mlcc"
 
 
+def _cap_farads(fp):
+    """Nominal capacitance (F) parsed from the footprint Value field (e.g.
+    '470uF, 100V' -> 470e-6, '220nF' -> 220e-9), or None. Board data, not a parts
+    DB — used only to display a ripple-relevance cutoff in the LF schematic."""
+    import re
+    m = re.match(r"\s*([\d.]+)\s*(p|n|u|µ|m)?", str(fp.GetValue()))
+    if not m:
+        return None
+    return float(m.group(1)) * {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6,
+                                "m": 1e-3}.get((m.group(2) or "u").lower(), 1e-6)
+
+
 def cin_ports(board, model, zmap, topo, n=1, refs=None, include_bulk=False):
     """Return up to `n` (ref, vin_node, gnd_node) for input caps bridging
     Vin<->GND, ordered nearest-first by distance to the FET centroid. Ports are
@@ -709,12 +721,19 @@ def cin_network_ports(board, model, zmap, topo, hf_labels, anchors=None):
 
     Must run BEFORE stitch_zones so the new cap pad nodes bond into the pours."""
     cls_map = topo.get("cin_class", {})
-    net = [dict(ref=ref, cls=cls_map.get(ref, "mlcc"), label=lbl)
-           for ref, lbl in hf_labels]
+    fp_by_ref = {fp.GetReference(): fp for fp in board.GetFootprints()
+                 if fp.GetReference() in topo["cin"]}
+
+    def _entry(ref, cls, lbl):
+        fp = fp_by_ref.get(ref)
+        return dict(ref=ref, cls=cls, label=lbl,
+                    C=(_cap_farads(fp) if fp else None))
+
+    net = [_entry(ref, cls_map.get(ref, "mlcc"), lbl) for ref, lbl in hf_labels]
     have = {ref for ref, _ in hf_labels}
     for ref, lbl, cls in (anchors or []):
         if ref not in have:
-            net.append(dict(ref=ref, cls=cls, label=lbl))
+            net.append(_entry(ref, cls, lbl))
             have.add(ref)
     for fp in board.GetFootprints():
         ref = fp.GetReference()
@@ -729,7 +748,7 @@ def cin_network_ports(board, model, zmap, topo, hf_labels, anchors=None):
             continue
         label = f"P_cin_{ref}"
         model.port(label, vn, gn)
-        net.append(dict(ref=ref, cls=cls_map.get(ref, _cap_class(fp)), label=label))
+        net.append(_entry(ref, cls_map.get(ref, _cap_class(fp)), label))
         have.add(ref)
     topo["cin_net"] = net
     return net
