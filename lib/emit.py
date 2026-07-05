@@ -263,6 +263,9 @@ def emit_all(p, outdir, svg=False):
     if svg:
         import emit_svg
         emit_svg.emit_svg(p, os.path.join(outdir, "schematic.svg"))
+        if p.get("cin_branches"):        # full-bank --emit-cin-network run: LF view too
+            import emit_svg_lf
+            emit_svg_lf.emit_svg_lf(p, os.path.join(outdir, "cin_network.svg"))
     return warn
 
 
