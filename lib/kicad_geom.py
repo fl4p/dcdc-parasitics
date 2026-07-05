@@ -209,6 +209,36 @@ class Model:
         self.equivs = [e for e in self.equivs if e[0] in seen and e[1] in seen]
         return seen
 
+    def drop_floating_ports(self, seed_label="P_pwr"):
+        """Remove any port whose copper is NOT in the same connected component as
+        the seed port. A single floating/disconnected port (e.g. a distant bulk cap
+        whose pad never bonds into the meshed pour at a coarse pitch) makes
+        FastHenry's ENTIRE solve NaN — so drop it and report, never let it poison
+        every result. Returns the dropped labels."""
+        if not self.ports:
+            return []
+        seed = next(((a, b) for lbl, a, b in self.ports if lbl == seed_label), None)
+        if seed is None:
+            seed = (self.ports[0][1], self.ports[0][2])
+        adj = {}
+        for _, a, b, _, _ in self.segs:
+            adj.setdefault(a, set()).add(b); adj.setdefault(b, set()).add(a)
+        for a, b in self.equivs:
+            adj.setdefault(a, set()).add(b); adj.setdefault(b, set()).add(a)
+        seen, stack = set(), [seed[0], seed[1]]
+        while stack:
+            n = stack.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            stack.extend(adj.get(n, ()))
+        kept, dropped = [], []
+        for lbl, a, b in self.ports:
+            (kept if (a in seen and b in seen) else dropped).append(
+                (lbl, a, b) if (a in seen and b in seen) else lbl)
+        self.ports = kept
+        return dropped
+
     def write(self, path, fmin=1e5, fmax=1e8, ndec=3, nwinc=1, nhinc=1, sigma=SIGMA):
         keep = self.prune()
         lines = [
@@ -490,7 +520,11 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     if emit_cin_network:
         hf_labels = [(ref, "P_pwr" if i == 0 else f"P_pwr{i}")
                      for i, (ref, _, _) in enumerate(cins)]
-        cin_network_ports(board, model, zmap, topo, hf_labels)
+        # the LF conduction anchor cap is ported as P_bulk (below) — fold it into
+        # cin_net under that label so it isn't double-ported (its P_cin_<ref> would
+        # duplicate P_bulk on the same node pair and make FastHenry singular).
+        anchors = [(cref[0], "P_bulk", cref[3])] if cref else []
+        cin_network_ports(board, model, zmap, topo, hf_labels, anchors)
 
     # bond every track/via/pad node into the pour mesh on its net+layer, then weld
     # near-coincident endpoints interning missed (pad-centre vs trace-end, touching
@@ -528,6 +562,17 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
         if ls_sw:
             model.port("P_ls", ls_sw, cgn_dc)
         topo["cond_ref"] = dict(ref=cond_ref, cls=cond_klass)
+
+    # drop any port disconnected from the commutation loop (e.g. a distant bulk cap
+    # whose pad never bonds into the pour at this pitch) — one floating port NaNs the
+    # entire FastHenry solve. Keep the topo/cin_net manifests consistent.
+    dropped = model.drop_floating_ports("P_pwr")
+    if dropped:
+        ds = set(dropped)
+        model.cin_ports = [c for c in getattr(model, "cin_ports", []) if c not in ds]
+        if topo.get("cin_net"):
+            topo["cin_net"] = [e for e in topo["cin_net"] if e["label"] not in ds]
+        topo["cin_dropped_ports"] = dropped
     return model
 
 
@@ -648,19 +693,29 @@ def conduction_ref(board, model, zmap, topo, prefer="bulk"):
     return ref, vn, gn, klass
 
 
-def cin_network_ports(board, model, zmap, topo, hf_labels):
+def cin_network_ports(board, model, zmap, topo, hf_labels, anchors=None):
     """Port EVERY input cap (bulk + mlcc) individually as `P_cin_<ref>`, for the
-    --emit-cin-network per-cap branch decomposition. Reuses the HF cin ports
-    already placed (hf_labels: [(ref, label)]) so the nearest MLCC isn't
-    double-ported, and adds one port for each remaining cap. Records the ordered
-    port set in topo['cin_net'] = [{ref, cls, label}] (HF ports first, then the
-    extras) for solve_reduce to decompose into shared-trunk + per-cap branch.
+    --emit-cin-network per-cap branch decomposition. Records the ordered port set
+    in topo['cin_net'] = [{ref, cls, label}] for solve_reduce to decompose into
+    shared-trunk + per-cap branch.
+
+    Caps already ported ELSEWHERE must be reused, not re-ported — a second
+    `.external` on the same node pair makes FastHenry's Zc singular ("Error on
+    factor"). Two such sets are folded in under their existing labels:
+      - hf_labels [(ref, label)]  : the HF commutation ports (P_pwr...)
+      - anchors  [(ref, label, cls)] : the LF conduction anchor (P_bulk), whose cap
+        (the nearest bulk electrolytic) would otherwise collide with its P_cin_<ref>.
+    Both are added to cin_net under their existing label and skipped in the port loop.
 
     Must run BEFORE stitch_zones so the new cap pad nodes bond into the pours."""
     cls_map = topo.get("cin_class", {})
     net = [dict(ref=ref, cls=cls_map.get(ref, "mlcc"), label=lbl)
            for ref, lbl in hf_labels]
     have = {ref for ref, _ in hf_labels}
+    for ref, lbl, cls in (anchors or []):
+        if ref not in have:
+            net.append(dict(ref=ref, cls=cls, label=lbl))
+            have.add(ref)
     for fp in board.GetFootprints():
         ref = fp.GetReference()
         if ref not in topo["cin"] or ref in have:
@@ -726,6 +781,13 @@ def main():
                   cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
                   include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol,
                   emit_cin_network=args.emit_cin_network)
+    dropped = topo.get("cin_dropped_ports")
+    if dropped:
+        sys.stderr.write(
+            f"WARNING: dropped {len(dropped)} port(s) disconnected from the loop at "
+            f"pitch {args.pitch} mm: {', '.join(dropped)} — their copper never bonded "
+            f"into the meshed pour (distant bulk cap?). Lower --pitch / raise "
+            f"--weld-tol / --margin to include them.\n")
     stats = model.write(args.out, nwinc=args.nwinc, nhinc=args.nhinc,
                         sigma=sigma_at(args.cu_temp))
     # sidecar: port order + topology for the reduce step
