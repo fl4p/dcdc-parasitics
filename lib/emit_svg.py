@@ -165,6 +165,14 @@ def schematic(p):
     csi_ls = max(p.get("csi_ls", 0.0), 0.0)
     rest = max(p["L_loop"] - csi_hs - csi_ls, 0.0)
     loop_hs = loop_ls = rest / 2.0
+    # ring R_loop is split across the two loop branches by the real conduction
+    # proportion r_hs:r_ls (not 50/50), matching emit.py's subckt; the LF per-switch
+    # conduction R (r_hs/r_ls) is a distinct, near-DC number shown alongside.
+    r_hs, r_ls = p.get("r_hs"), p.get("r_ls")
+    R_loop = p.get("R_loop", 0.0)
+    frac_hs = r_hs / (r_hs + r_ls) if (r_hs and r_ls and r_hs + r_ls > 0) else 0.5
+    rser_hs = R_loop * frac_hs
+    rser_ls = R_loop * (1.0 - frac_hs)
 
     W, H = 860, 660
     xc = 380          # FET column
@@ -253,13 +261,14 @@ def schematic(p):
         s.append(_txt(gx, cy_cap + 31, "modeled loop", 9, MUTE, "middle", ital=True))
 
     # ================= HS side =================
-    # lumped commutation-loop copper resistance (one aggregate R_loop; the model
-    # resolves a single value — the .lib splits it R_loop/2 per side arbitrarily).
+    # commutation-loop copper R — the HF *ring* R_loop, split across the two loop
+    # branches by the real r_hs:r_ls conduction proportion (this is the HS share).
     s.append(_line(xc, y_vin, xc, y_rl0, WIRE))
     s.append(_res_v(xc, y_rl0, y_rl1))
-    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 - 2, "R_loop", 11.5, INK, "end", "bold"))
-    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 12, f"{_fmtR(p.get('R_loop', 0.0))}", 11, INK, "end"))
-    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 24, "loop copper (÷2/side in .lib)", 8.5,
+    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 - 2, "R_loop·hs", 11.5, INK, "end", "bold"))
+    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 12, f"{_fmtR(rser_hs)}", 11, INK, "end"))
+    s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 24,
+                  f"ring R_loop {_fmtR(R_loop)}, r_hs:r_ls split", 8.5,
                   MUTE, "end", ital=True))
     s.append(_line(xc, y_rl1, xc, y_lh0, WIRE))
     s.append(_coil_v(xc, y_lh0, y_lh1))
@@ -289,6 +298,8 @@ def schematic(p):
     s.append(_coil_v(xc, y_lsl0, y_lsl1))
     s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 - 2, "Lloop_ls", 11.5, INK, "end", "bold"))
     s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 + 12, f"{_fmtL(loop_ls)}", 11, INK, "end"))
+    s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 + 24,
+                  f"ring R_loop·ls {_fmtR(rser_ls)}", 8.5, MUTE, "end", ital=True))
     fet_ls, d_ls, sc_ls, g_ls = _nfet(xc, cy_ls, "∥".join(t["ls"]["refs"]) or "Q_LS")
     s.append(_line(xc, y_lsl1, d_ls[0], d_ls[1], WIRE))
     s.append(fet_ls)
@@ -387,6 +398,12 @@ def schematic(p):
     else:
         loop_txt = f"Commutation loop L = {_fmtL(p['L_loop'])}  (R = {_fmtR(p.get('R_loop',0))})"
     s.append(_txt(20, 62, loop_txt, 12, INK, "start", "bold"))
+    if r_hs is not None and r_ls is not None:
+        s.append(_txt(
+            20, 80,
+            f"Two R: ring R_loop {_fmtR(R_loop)} (HF, split HS {_fmtR(rser_hs)} / "
+            f"LS {_fmtR(rser_ls)})   ·   conduction r_hs {_fmtR(r_hs)} / "
+            f"r_ls {_fmtR(r_ls)} (LF, ×D / ×(1−D))", 10.5, "#0a7a52", "start"))
 
     # legend (bottom-left)
     ly = H - 46
