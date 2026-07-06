@@ -136,23 +136,27 @@ def run_geom(args, pitch, outdir):
         sys.stderr.write(r.stdout + r.stderr)
         raise SystemExit(f"kicad_geom failed (pitch {pitch})")
     side = json.load(open(inp + ".ports.json"))
-    warn_missing_gate_ports(side, pitch)
+    require_gate_ports(side, pitch)
     return inp, side
 
 
-def warn_missing_gate_ports(side, pitch):
-    """Warn when missing gate-loop ports will force reported CSI to zero."""
+def require_gate_ports(side, pitch):
+    """Fail hard when missing gate-loop ports would force reported CSI to zero.
+
+    kicad_geom.validate_required_ports already rejects this before FastHenry, so
+    a ports sidecar that reaches here without P_ghs/P_gls means the child bypassed
+    that gate. Refuse to emit a bogus 0.00 nH CSI rather than warn and continue."""
     ports = set(side.get("ports") or [])
     dropped = set((side.get("topo") or {}).get("cin_dropped_ports") or [])
     missing = [p for p in ("P_ghs", "P_gls") if p not in ports]
     if not missing:
         return
     dropped_txt = " dropped by geometry connectivity pruning" if dropped.intersection(missing) else ""
-    sys.stderr.write(
-        f"WARNING: missing gate-loop port(s) at pitch {pitch:g} mm: "
+    raise SystemExit(
+        f"missing gate-loop port(s) at pitch {pitch:g} mm: "
         f"{', '.join(missing)}{dropped_txt}; reported CSI for those side(s) "
-        "will be 0.00 nH. Check gate-net connectivity / gate-driver endpoint "
-        "selection; this is not evidence of zero common-source inductance.\n")
+        "would be 0.00 nH. Check gate-net connectivity / gate-driver endpoint "
+        "selection; this is not evidence of zero common-source inductance.")
 
 
 def build_parser():

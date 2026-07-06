@@ -163,18 +163,21 @@ out: out
     assert e.code
 
 
-def test_missing_gate_ports_warns_about_zero_csi():
-    err = StringIO()
+def test_missing_gate_ports_hard_fails():
     side = {
         "ports": ["P_pwr", "P_bulk"],
         "topo": {"cin_dropped_ports": ["P_ghs", "P_gls"]},
     }
-    with redirect_stderr(err):
-        extract_parasitics.warn_missing_gate_ports(side, 2.0)
-    msg = err.getvalue()
+    e = _expect_exit(lambda: extract_parasitics.require_gate_ports(side, 2.0))
+    msg = str(e.code)
     assert "missing gate-loop port(s)" in msg
     assert "P_ghs, P_gls" in msg
     assert "0.00 nH" in msg
+
+
+def test_present_gate_ports_pass():
+    side = {"ports": ["P_pwr", "P_ghs", "P_gls"], "topo": {}}
+    extract_parasitics.require_gate_ports(side, 2.0)  # no raise
 
 
 def main():
