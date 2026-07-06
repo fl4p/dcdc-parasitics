@@ -91,6 +91,16 @@ def _res_v(cx, y0, y1, col=WIRE, w=1.8, half_w=5.0, body=0.62):
             f"height='{bl:.1f}' fill='white' stroke='{col}' stroke-width='{w}'/>")
 
 
+def _res_h(cy, x0, x1, col=WIRE, w=1.8, half_h=5.0, body=0.55):
+    """Horizontal resistor from (x0,cy) to (x1,cy): IEC/EU rectangle body + leads."""
+    bl = (x1 - x0) * body
+    xa = (x0 + x1) / 2 - bl / 2
+    xb = xa + bl
+    return (_line(x0, cy, xa, cy, col, w) + _line(xb, cy, x1, cy, col, w) +
+            f"<rect x='{xa:.1f}' y='{cy-half_h:.1f}' width='{bl:.1f}' "
+            f"height='{2*half_h:.1f}' fill='white' stroke='{col}' stroke-width='{w}'/>")
+
+
 def _nfet(cx, cy, ref, col=INK):
     """N-channel MOSFET, current vertical (drain top, source bottom), gate right.
     Returns (svg, drain_xy, source_xy, gate_xy). Includes the intrinsic body
@@ -185,10 +195,14 @@ def schematic(p):
     # proportion r_hs:r_ls (not 50/50), matching emit.py's subckt; the LF per-switch
     # conduction R (r_hs/r_ls) is a distinct, near-DC number shown alongside.
     r_hs, r_ls = _num(p.get("r_hs")), _num(p.get("r_ls"))
-    R_loop = _num(p.get("R_loop")) or 0.0
-    if r_hs is not None and r_ls is not None and r_hs + r_ls > 0:
-        frac_hs = min(1.0, max(0.0, r_hs / (r_hs + r_ls)))
+    R_loop = max(_num(p.get("R_loop")) or 0.0, 0.0)          # floor-clamp like the L side
+    # one None-check drives both the frac split and the title "Two R" line, so the
+    # two guards can't drift apart (and r_hs/r_ls narrow to float inside).
+    if r_hs is not None and r_ls is not None:
+        have_rsplit = True
+        frac_hs = min(1.0, max(0.0, r_hs / (r_hs + r_ls))) if r_hs + r_ls > 0 else 0.5
     else:
+        have_rsplit = False
         frac_hs = 0.5
     rser_hs = R_loop * frac_hs
     rser_ls = R_loop * (1.0 - frac_hs)
@@ -365,6 +379,10 @@ def schematic(p):
         # -> Lghs coil -> [series Rg ∥ anti-parallel D] -> driver output pin (no jog).
         out.append(_line(gx, cy, gx + 8, cy, WIRE))
         out.append(_coil_h(cy, gx + 8, gx + 28, WIRE))
+        # gate-trace copper series R (Rser on Lghs/Lgls) — a real element in the
+        # subckt, drawn as its own glyph like the loop R; distinct from any discrete
+        # gate Rg drawn further right toward the driver.
+        out.append(_res_h(cy, gx + 28, gx + 50, WIRE))
         out.append(_txt((gx + 8 + gx + 28) / 2, cy - 8, tag.split()[0] + " gate", 9.5,
                         INK, "middle"))
         out.append(_txt(gx + 66, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
@@ -376,7 +394,7 @@ def schematic(p):
             # the FastHenry extraction (copper only) — drawn for context.
             xL, xR = bx - 92, bx - 32
             rc, bw2, bh2 = (xL + xR) / 2, 30, 11
-            out.append(_line(gx + 28, cy, xL, cy, WIRE))
+            out.append(_line(gx + 50, cy, xL, cy, WIRE))
             out.append(_line(xR, cy, bx, cy, WIRE))
             if gd_r:
                 out.append(_line(xL, cy, rc - bw2 / 2, cy, WIRE))
@@ -399,7 +417,7 @@ def schematic(p):
                 out.append(_line(dc + 5, yb - 5, dc + 5, yb + 5, INK, 1.2))
                 out.append(_txt(dc, yb + 13, f"∥ {gd_d['ref']}", 8.5, MUTE, "middle", ital=True))
         else:
-            out.append(_line(gx + 28, cy, bx, cy, WIRE))
+            out.append(_line(gx + 50, cy, bx, cy, WIRE))
         # return leg exits the box BOTTOM edge (clear of the block) and drops to the
         # return node (solid = shares CSI / non-Kelvin, grey-dashed = Kelvin tap).
         rpx = bx + bw - 16
@@ -434,7 +452,7 @@ def schematic(p):
     else:
         loop_txt = f"Commutation loop L = {_fmtL(L_loop)}  (R = {_fmtR(R_loop)})"
     s.append(_txt(20, 62, loop_txt, 12, INK, "start", "bold"))
-    if r_hs is not None and r_ls is not None:
+    if have_rsplit:
         s.append(_txt(
             20, 80,
             f"Two R: ring R_loop {_fmtR(R_loop)} (HF, split HS {_fmtR(rser_hs)} / "
