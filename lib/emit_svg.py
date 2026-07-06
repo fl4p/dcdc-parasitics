@@ -122,7 +122,7 @@ def _nfet(cx, cy, ref, col=INK):
     s.append(f"<path d='M {bx-6:.1f} {cy+4:.1f} l 12 0 l -6 -12 z' "
              f"fill='none' stroke='{MUTE}' stroke-width='1.4'/>")  # triangle up
     s.append(_line(bx - 6, cy - 8, bx + 6, cy - 8, MUTE, 1.4))     # cathode bar
-    s.append(_txt(gx + 2, cy + 18, ref, 13, INK, "start", "bold"))
+    s.append(_txt(gx + 2, cy + 18, _clip(ref, 16), 13, INK, "start", "bold"))
     s.append(_txt(bx - 10, cy + 46, "body diode", 9.5, MUTE, "middle", ital=True))
     return "".join(s), (dx, cy - 34), (dx, cy + 34), (gx, cy)
 
@@ -158,18 +158,34 @@ def _rkm(v):
     return v
 
 
+def _num(v):
+    """Coerce to float, or None if absent/null/non-numeric. Robust against the
+    JSON schema's `null`-for-not-computed convention on the standalone path."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clip(s, n):
+    """Truncate an over-long label so it can't run off the fixed-width canvas."""
+    s = str(s)
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
 def schematic(p):
     t = p["topo"]
     m = p.get("meta", {})
-    csi_hs = max(p.get("csi_hs", 0.0), 0.0)
-    csi_ls = max(p.get("csi_ls", 0.0), 0.0)
-    rest = max(p["L_loop"] - csi_hs - csi_ls, 0.0)
+    csi_hs = max(_num(p.get("csi_hs")) or 0.0, 0.0)
+    csi_ls = max(_num(p.get("csi_ls")) or 0.0, 0.0)
+    L_loop = _num(p.get("L_loop")) or 0.0
+    rest = max(L_loop - csi_hs - csi_ls, 0.0)
     loop_hs = loop_ls = rest / 2.0
     # ring R_loop is split across the two loop branches by the real conduction
     # proportion r_hs:r_ls (not 50/50), matching emit.py's subckt; the LF per-switch
     # conduction R (r_hs/r_ls) is a distinct, near-DC number shown alongside.
-    r_hs, r_ls = p.get("r_hs"), p.get("r_ls")
-    R_loop = p.get("R_loop", 0.0)
+    r_hs, r_ls = _num(p.get("r_hs")), _num(p.get("r_ls"))
+    R_loop = _num(p.get("R_loop")) or 0.0
     if r_hs is not None and r_ls is not None and r_hs + r_ls > 0:
         frac_hs = min(1.0, max(0.0, r_hs / (r_hs + r_ls)))
     else:
@@ -177,24 +193,26 @@ def schematic(p):
     rser_hs = R_loop * frac_hs
     rser_ls = R_loop * (1.0 - frac_hs)
 
-    W, H = 860, 660
+    W, H = 860, 692
     xc = 380          # FET column
     xcap = 200        # Cin bank (near rail); parallel legs grow left of here
     xdrv = 640        # gate drivers
-    y_vin, y_gnd = 108, 560
+    y_vin, y_gnd = 108, 592
 
-    # vertical y-plan (see module notes). A resistor band (y_rl0..y_rl1) sits
-    # between the VIN rail and Lloop_hs to carry the lumped commutation-loop R.
+    # vertical y-plan (see module notes). A resistor band carries each side's share
+    # of the lumped ring R_loop: y_rl0..y_rl1 on HS (VIN→Lloop_hs), y_rls0..y_rls1 on
+    # LS (SW→Lloop_ls) — symmetric, matching emit.py's Rser on Lloop_hs / Lloop_ls.
     y_rl0, y_rl1 = 116, 146
     y_lh0, y_lh1 = 150, 192
     cy_hs = 226
     y_nhs = 284
     y_lsh0, y_lsh1 = 294, 332
     y_sw = 350
-    y_lsl0, y_lsl1 = 360, 402
-    cy_ls = 436
-    y_nls = 494
-    y_lsl_cs0, y_lsl_cs1 = 504, 542
+    y_rls0, y_rls1 = 358, 388
+    y_lsl0, y_lsl1 = 392, 434
+    cy_ls = 468
+    y_nls = 526
+    y_lsl_cs0, y_lsl_cs1 = 536, 574
 
     s = [f"<svg xmlns='http://www.w3.org/2000/svg' width='{W}' height='{H}' "
          f"viewBox='0 0 {W} {H}'>",
@@ -205,7 +223,8 @@ def schematic(p):
     cy_cap = (y_vin + y_gnd) / 2
     cin_all = t.get("cin", []) or []
     cin_used = t.get("cin_used") or (cin_all[:1] if cin_all else [])
-    n_used = int(p.get("n_cin", len(cin_used) or 1))
+    _ncin = _num(p.get("n_cin"))
+    n_used = int(_ncin) if _ncin else (len(cin_used) or 1)
     split = p.get("current_split") or {}
     others = [c for c in cin_all if c not in set(cin_used)]
 
@@ -231,7 +250,7 @@ def schematic(p):
     s.append(_line(x_left, y_gnd, xdrv+60, y_gnd, WIRE, 2.6))
     def _rail(word, net):
         net = _leaf(net)
-        return word if not net or net.upper() == word else f"{word}  {net}"
+        return word if not net or net.upper() == word else f"{word}  {_clip(net, 16)}"
     s.append(_txt(xdrv+64, y_vin+4, _rail("VIN", t.get("vin")), 12, INK, "start", "bold"))
     s.append(_txt(xdrv+64, y_gnd+4, _rail("GND", t.get("gnd")), 12, INK, "start", "bold"))
 
@@ -245,7 +264,9 @@ def schematic(p):
         sh = split.get(ref)
         if n_used > 1 and sh:
             s.append(_txt(cxk, cy_cap + 22, f"{sh['mag']*100:.0f}%", 9.5, CAPCOL, "middle"))
-    if n_used <= 1:
+    if not disp:
+        s.append(_txt(xcap, cy_cap + 22, "(no Cin in model)", 9.5, MUTE, "middle", ital=True))
+    elif n_used <= 1:
         s.append(_txt(xcap, cy_cap + 22, "nearest (in loop)", 9.5, CAPCOL, "middle"))
     else:
         tag = f"{n_used} caps ∥" + (f" (+{collapsed} more ported)" if collapsed else "")
@@ -283,8 +304,10 @@ def schematic(p):
     # source -> nHS node
     s.append(_line(sc_hs[0], sc_hs[1], xc, y_nhs, WIRE))
     s.append(_dot(xc, y_nhs))
-    s.append(_txt(xc - 12, y_nhs - 4, "nHS", 10.5, INK, "end", ital=True))
-    s.append(_txt(xc - 12, y_nhs + 9, "(HS die-src)", 9, MUTE, "end", ital=True))
+    # die-source node = exposed HSKEL pin (0 Ω Rhskel in the subckt); Kelvin gate
+    # return taps here, non-Kelvin taps SW below Lscs_hs.
+    s.append(_txt(xc - 12, y_nhs - 4, "nHS · HSKEL", 10.5, INK, "end", ital=True))
+    s.append(_txt(xc - 12, y_nhs + 9, "(HS die-src pin)", 9, MUTE, "end", ital=True))
     # Lscs_hs (CSI, red) nHS -> SW
     s.append(_coil_v(xc, y_lsh0, y_lsh1, CSI, 2.4))
     s.append(_line(xc, y_nhs, xc, y_lsh0, WIRE))
@@ -297,19 +320,26 @@ def schematic(p):
     s.append(_txt(xc - 24, y_sw + 4, _leaf(t.get("sw", "")), 12, INK, "end", "bold"))
 
     # ================= LS side =================
-    s.append(_line(xc, y_sw, xc, y_lsl0, WIRE))
+    # ring R_loop LS share — a real resistor symbol symmetric to the HS side (both
+    # are first-class Rser on Lloop_hs/Lloop_ls in emit.py's subckt). rser_ls is
+    # often the LARGER half (frac_hs<0.5 at any duty below 50%), so it must be drawn
+    # as a component, not demoted to a caption.
+    s.append(_line(xc, y_sw, xc, y_rls0, WIRE))
+    s.append(_res_v(xc, y_rls0, y_rls1))
+    s.append(_txt(xc - 14, (y_rls0+y_rls1)/2 - 2, "R_loop·ls", 11.5, INK, "end", "bold"))
+    s.append(_txt(xc - 14, (y_rls0+y_rls1)/2 + 12, f"{_fmtR(rser_ls)}", 11, INK, "end"))
+    s.append(_line(xc, y_rls1, xc, y_lsl0, WIRE))
     s.append(_coil_v(xc, y_lsl0, y_lsl1))
     s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 - 2, "Lloop_ls", 11.5, INK, "end", "bold"))
     s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 + 12, f"{_fmtL(loop_ls)}", 11, INK, "end"))
-    s.append(_txt(xc - 14, (y_lsl0+y_lsl1)/2 + 24,
-                  f"ring R_loop·ls {_fmtR(rser_ls)}", 8.5, MUTE, "end", ital=True))
     fet_ls, d_ls, sc_ls, g_ls = _nfet(xc, cy_ls, "∥".join(t["ls"]["refs"]) or "Q_LS")
     s.append(_line(xc, y_lsl1, d_ls[0], d_ls[1], WIRE))
     s.append(fet_ls)
     s.append(_line(sc_ls[0], sc_ls[1], xc, y_nls, WIRE))
     s.append(_dot(xc, y_nls))
-    s.append(_txt(xc - 12, y_nls - 4, "nLS", 10.5, INK, "end", ital=True))
-    s.append(_txt(xc - 12, y_nls + 9, "(LS die-src)", 9, MUTE, "end", ital=True))
+    # die-source node = exposed LSKEL pin (0 Ω Rlskel in the subckt)
+    s.append(_txt(xc - 12, y_nls - 4, "nLS · LSKEL", 10.5, INK, "end", ital=True))
+    s.append(_txt(xc - 12, y_nls + 9, "(LS die-src pin)", 9, MUTE, "end", ital=True))
     s.append(_coil_v(xc, y_lsl_cs0, y_lsl_cs1, CSI, 2.4))
     s.append(_line(xc, y_nls, xc, y_lsl_cs0, WIRE))
     s.append(_txt(xc - 14, (y_lsl_cs0+y_lsl_cs1)/2 - 2, "Lscs_ls", 11.5, CSI, "end", "bold"))
@@ -378,10 +408,12 @@ def schematic(p):
         out.append(_line(rpx, ret_y, xc, ret_y, WIRE, 1.6, dash=dash))
         return "".join(out)
 
-    s.append(driver(cy_hs, g_hs, y_nhs, y_sw, p["L_gate_hs"],
-                    p["R_gate_hs"], t["hs"]["kelvin"], "HS gate", t["hs"].get("gate_drive")))
-    s.append(driver(cy_ls, g_ls, y_nls, y_gnd, p["L_gate_ls"],
-                    p["R_gate_ls"], t["ls"]["kelvin"], "LS gate", t["ls"].get("gate_drive")))
+    s.append(driver(cy_hs, g_hs, y_nhs, y_sw, _num(p.get("L_gate_hs")) or 0.0,
+                    _num(p.get("R_gate_hs")) or 0.0, t["hs"]["kelvin"], "HS gate",
+                    t["hs"].get("gate_drive")))
+    s.append(driver(cy_ls, g_ls, y_nls, y_gnd, _num(p.get("L_gate_ls")) or 0.0,
+                    _num(p.get("R_gate_ls")) or 0.0, t["ls"]["kelvin"], "LS gate",
+                    t["ls"].get("gate_drive")))
 
     # ================= title + legend =================
     board = os.path.basename(t.get("pcb", "") or "")
@@ -394,12 +426,13 @@ def schematic(p):
            f"{p['freq_Hz']:.2g} Hz plateau, {m.get('pitch','?')} mm mesh, "
            f"{m.get('lead_mm','?')} mm lead")
     s.append(_txt(20, 44, sub, 11, MUTE, "start"))
-    if int(p.get("n_cin", 1)) > 1:
-        loop_txt = (f"Commutation loop L = {_fmtL(p['L_loop'])} "
-                    f"({int(p['n_cin'])} caps ∥;  single-cap bound {_fmtL(p['L_loop_single'])})"
-                    f"   R = {_fmtR(p.get('R_loop',0))}")
+    if n_used > 1:
+        single = _num(p.get("L_loop_single")) or L_loop
+        loop_txt = (f"Commutation loop L = {_fmtL(L_loop)} "
+                    f"({n_used} caps ∥;  single-cap bound {_fmtL(single)})"
+                    f"   R = {_fmtR(R_loop)}")
     else:
-        loop_txt = f"Commutation loop L = {_fmtL(p['L_loop'])}  (R = {_fmtR(p.get('R_loop',0))})"
+        loop_txt = f"Commutation loop L = {_fmtL(L_loop)}  (R = {_fmtR(R_loop)})"
     s.append(_txt(20, 62, loop_txt, 12, INK, "start", "bold"))
     if r_hs is not None and r_ls is not None:
         s.append(_txt(
