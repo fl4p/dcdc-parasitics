@@ -163,6 +163,31 @@ python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
         [--hs-kelvin] [--ls-kelvin] [--weld-tol 0.6] [--margin 8] [--svg] -o OUTDIR
 ```
 
+All CLI arguments can also be supplied from YAML:
+
+```sh
+python3 extract_parasitics.py --config fugu2-parasitics.yaml
+```
+
+YAML keys use the argparse destination names (`hs_ref`, `cin_parallel`,
+`emit_cin_network`, etc.). Command-line arguments override YAML values, including
+boolean options via `--no-svg`, `--no-hs-kelvin`, and the other `--no-*` forms.
+
+```yaml
+pcb: .../Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+hs_ref: [Q1, Q3]
+ls_ref: [Q2]
+cin_refs: [C9, C16, C17, C18, C21, C22]
+pitch: [2.0, 1.0]
+emit_cin_network: true
+weld_tol: 0.6
+margin: 8.0
+out: out/
+```
+
 `--hs-ref`/`--ls-ref` take **multiple** refdes for paralleled switches (e.g.
 `--hs-ref Q1 Q3`). `--weld-tol` fuses same-net nodes within N mm (mesh
 de-fragmentation, see below); `--margin` sets the pour-meshing ROI around the
@@ -243,7 +268,8 @@ Each `lib/` module also has a small `__main__` for standalone/debug use (e.g.
   Build the FastFieldSolvers fork; on a modern clang toolchain use e.g.
   `CFLAGS='-O -DFOUR -m64 -std=gnu89 -fcommon -Wno-implicit-function-declaration
   -Wno-implicit-int -Wno-return-type -Wno-deprecated-non-prototype' make`.
-- Python 3 with `numpy` for the solve/reduce step.
+- Python 3 with `numpy` for the solve/reduce step; `PyYAML` is needed when using
+  `--config`.
 
 ## Paralleled switches
 
@@ -300,6 +326,7 @@ Stdlib + numpy unit tests for the pure layers (no KiCad/FastHenry) live in
 `test/`:
 
 ```sh
+python3 test/test_extract_config.py  # --config YAML parsing/defaults/overrides
 python3 test/test_parasitics.py   # SVG formatting/rendering, reduction, weld
 python3 test/test_reduce.py       # --cin-parallel reduction vs closed-form
 ```

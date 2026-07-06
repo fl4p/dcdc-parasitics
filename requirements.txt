@@ -1,5 +1,6 @@
 # pip dependencies for the system-python solve/reduce/emit step
 numpy
+PyYAML
 
 # NOT installable via pip — provided externally (see README.md):
 #   pcbnew    : bundled with KiCad; the geometry step runs under KiCad's own
