@@ -132,7 +132,7 @@ def _nfet(cx, cy, ref, col=INK):
     s.append(f"<path d='M {bx-6:.1f} {cy+4:.1f} l 12 0 l -6 -12 z' "
              f"fill='none' stroke='{MUTE}' stroke-width='1.4'/>")  # triangle up
     s.append(_line(bx - 6, cy - 8, bx + 6, cy - 8, MUTE, 1.4))     # cathode bar
-    s.append(_txt(cx + 8, cy + 44, _clip(ref, 16), 13, INK, "middle", "bold"))
+    s.append(_txt(cx + 8, cy + 44, _clip(ref, 16), 13, INK, "left", "bold"))
     s.append(_txt(bx - 22, cy + 46, "body diode", 9.5, MUTE, "middle", ital=True))
     return "".join(s), (dx, cy - 34), (dx, cy + 34), (gx, cy)
 
