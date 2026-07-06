@@ -326,6 +326,8 @@ def main():
     workdir = tempfile.mkdtemp(prefix="dcdc_par_")
     pcb_input = args.pcb
     args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir)
+    pcb_sha256 = pcb_source.file_sha256(args.pcb)
+    config_sha256 = pcb_source.file_sha256(args.config) if args.config else None
 
     pitches = sorted(set(args.pitch), reverse=True)  # coarse -> fine
     results = []
@@ -334,7 +336,9 @@ def main():
         meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"),
                     cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
                     lf_freq=side.get("lf_freq"),
-                    pcb_source=pcb_input, pcb_resolved=args.pcb)
+                    pcb_source=pcb_input, pcb_resolved=args.pcb,
+                    pcb_sha256=pcb_sha256,
+                    extract_config=args.config, extract_config_sha256=config_sha256)
         p = solve_reduce.solve(inp, side["ports"], side["topo"], meta,
                                plateau=args.plateau, suffix=f"p{i}",
                                cin_ports=side.get("cin_ports"),

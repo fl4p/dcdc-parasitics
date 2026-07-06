@@ -1,4 +1,5 @@
 """Resolve local or URL KiCad PCB inputs to a local file path."""
+import hashlib
 import os
 import subprocess
 import urllib.error
@@ -44,6 +45,15 @@ def download_url(url, path):
         if r.returncode != 0:
             detail = (r.stderr or r.stdout or str(e)).strip()
             raise SystemExit(f"{url}: failed to download PCB: {detail}")
+
+
+def file_sha256(path):
+    """Return the SHA-256 hex digest of a local file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def resolve_pcb_path(pcb, workdir, downloader=download_url):

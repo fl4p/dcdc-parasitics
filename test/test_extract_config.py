@@ -117,6 +117,14 @@ def test_resolve_pcb_path_downloads_url_to_workdir():
     assert calls == [("https://github.com/org/repo/raw/main/hw/board.kicad_pcb", got)]
 
 
+def test_file_sha256_hashes_input_bytes():
+    fd, path = tempfile.mkstemp()
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(b"dcdc-tools")
+    got = pcb_source.file_sha256(path)
+    assert got == "474d28ed4d32e42f9077c162f3210eb518049d32eb8a2f1fbe1c03e229654f74"
+
+
 def test_unknown_yaml_key_fails():
     cfg = _yaml("""
 pcb: board.kicad_pcb

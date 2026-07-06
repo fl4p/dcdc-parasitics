@@ -263,6 +263,9 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   Kelvin (CSI excluded). Add your Cin across `VIN–GND` and device models for a
   gate-drive/DPT or SW-overshoot sim.
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
+  `meta.pcb_sha256` records the SHA-256 of the resolved `.kicad_pcb` input so
+  downstream tools can detect stale extraction artifacts. When extracted through
+  `--config`, `meta.extract_config_sha256` records that YAML file's SHA-256 too.
   CSI fields: `csi_hs` / `csi_ls` are side-specific source-lead mutuals used in
   the emitted subckt; `csi_hs_loop` / `csi_ls_loop` are the full-loop mutuals for
   diagnostics.
