@@ -229,6 +229,40 @@ check("heterogeneous: clamp warns",
       any("clamped" in w for w in p14["reduce_warn"]),
       "; ".join(w for w in p14["reduce_warn"] if "clamp" in w) or "(no warn!)")
 
+# 15. Trunk-excluded switch-side residuals (cin_network double-count contract):
+#     L_loop/r_hs/r_ls are the FULL bulk-anchored loop and overlap the cin trunk, so
+#     consumers with cin_network must place the *_switch residuals in Lloop instead.
+#     L_loop_switch = L_loop - cin_L_shared; the trunk R_shared is subtracted ONCE,
+#     allocated per-side proportional to r_hs:r_ls (so the two subtractions sum to
+#     exactly cin_R_shared — never double-subtracting the shared return).
+w_pl15, w_dc15 = 2 * np.pi * 5e6, 2 * np.pi * 1e5
+# plateau L (nH): P_pwr self 7, P_cin_C2 self 9, shared off-diag 6 -> cin_L_shared 6
+Lpl15 = np.array([[7, 0, 0, 6], [0, 3, 0, 0],
+                  [0, 0, 3, 0], [6, 0, 0, 9]]) * 1e-9
+Zpl15 = 1j * w_pl15 * Lpl15.astype(complex)
+# DC R (mOhm): r_hs=3 (P_hs diag), r_ls=6 (P_ls diag); P_pwr<->P_cin_C2 off-diag 6
+# -> cin_R_shared 6 (diagonals 8 >= 6, unclamped)
+Rdc15 = np.array([[8, 0, 0, 6], [0, 3, 0, 0],
+                  [0, 0, 6, 0], [6, 0, 0, 8]]) * 1e-3
+Zdc15 = Rdc15.astype(complex) + 1j * w_dc15 * Lpl15.astype(complex)
+ports15 = ["P_pwr", "P_hs", "P_ls", "P_cin_C2"]
+topo15 = {"cin_net": [{"ref": "C1", "cls": "mlcc", "label": "P_pwr"},
+                      {"ref": "C2", "cls": "bulk", "label": "P_cin_C2"}]}
+p15 = sr.reduce_parasitics({1e5: Zdc15, 5e6: Zpl15}, ports15, topo15, {},
+                           plateau=5e6, cin_ports=["P_pwr"])
+check("residual: L_loop_switch = L_loop - cin_L_shared",
+      abs(p15["L_loop_switch"] - 1e-9) < 1e-15, f'{p15["L_loop_switch"]*1e9:.3f} nH')
+check("residual: r_hs_switch = r_hs - Rsh*r_hs/(r_hs+r_ls)",
+      abs(p15["r_hs_switch"] - 1e-3) < 1e-9, f'{p15["r_hs_switch"]*1e3:.3f} mOhm')
+check("residual: r_ls_switch = r_ls - Rsh*r_ls/(r_hs+r_ls)",
+      abs(p15["r_ls_switch"] - 2e-3) < 1e-9, f'{p15["r_ls_switch"]*1e3:.3f} mOhm')
+check("residual: trunk subtracted exactly once (sum = r_hs+r_ls-R_shared)",
+      abs((p15["r_hs_switch"] + p15["r_ls_switch"])
+          - (p15["r_hs"] + p15["r_ls"] - p15["cin_R_shared"])) < 1e-12)
+# without cin_net the residuals must stay None (nothing to subtract)
+check("residual: None when no cin_net",
+      p13.get("L_loop_switch") is None and p13.get("r_hs_switch") is None)
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

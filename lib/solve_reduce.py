@@ -290,6 +290,42 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 "bulk+MLCC bank: off-diagonal mean exceeded a diagonal) — per-cap Lb "
                 "near the floor is a shared-trunk-model artifact, not a real ~0 branch")
 
+    # ---- trunk-excluded switch-side residuals (for cin_network double-count) ----
+    # L_loop / r_hs / r_ls are the FULL bulk-anchored loop and OVERLAP the cin trunk
+    # (cin_L_shared/cin_R_shared): the trunk IS the loop's shared Vin/GND leg. When the
+    # loss deck consumes cin_network it places the trunk separately, so Lloop must carry
+    # only the switch-side residual or the trunk copper is counted twice (and the ring L
+    # ~doubles). Subtract the trunk ONCE: L scalar-wise; R allocated per-side in
+    # proportion to r_hs:r_ls so the two subtractions sum to exactly cin_R_shared (never
+    # double-subtracting the shared return). Documented convention — an exact Vin-leg vs
+    # GND-leg split would need switch-node-referenced ports (a re-solve). Consumers with
+    # cin_network use *_switch in Lloop and cin_L_shared/cin_R_shared in the trunk; the
+    # trunk then correctly sees INPUT-RIPPLE current, not the full switch current.
+    L_loop_switch = r_hs_switch = r_ls_switch = None
+    if cin_dec:
+        csh_L = float(cin_dec["L_shared"])
+        csh_R = float(cin_dec["R_shared"])
+        if L_loop is not None:
+            L_loop_switch = L_loop - csh_L
+            if L_loop_switch < -0.05e-9:
+                warn.append(
+                    f"L_loop_switch negative ({L_loop_switch*1e9:.2f} nH): cin trunk "
+                    f"L_shared ({csh_L*1e9:.2f}) exceeds L_loop ({L_loop*1e9:.2f}) — "
+                    f"basis mismatch (HF nearest-MLCC loop vs full-bank trunk); clamped 0")
+            L_loop_switch = max(0.0, L_loop_switch)
+        if r_hs is not None and r_ls is not None and (r_hs + r_ls) > 0:
+            f_hs = r_hs / (r_hs + r_ls)
+            r_hs_switch = r_hs - csh_R * f_hs
+            r_ls_switch = r_ls - csh_R * (1.0 - f_hs)
+            if r_hs_switch < -0.05e-3 or r_ls_switch < -0.05e-3:
+                warn.append(
+                    f"switch-side residual R negative (r_hs_switch="
+                    f"{r_hs_switch*1e3:.2f}, r_ls_switch={r_ls_switch*1e3:.2f} mOhm): "
+                    f"cin trunk R_shared ({csh_R*1e3:.2f}) exceeds r_hs+r_ls "
+                    f"({(r_hs+r_ls)*1e3:.2f}) — trunk/loop basis mismatch; clamped 0")
+            r_hs_switch = max(0.0, r_hs_switch)
+            r_ls_switch = max(0.0, r_ls_switch)
+
     def eff_csi(g):
         """Effective common-source mutual: gate-loop voltage per unit *total*
         commutation current, using the parallel-cap current distribution y.
@@ -323,6 +359,10 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         cin_branches=(cin_dec["branches"] if cin_dec else None),
         cin_L_shared=(cin_dec["L_shared"] if cin_dec else None),
         cin_R_shared=(cin_dec["R_shared"] if cin_dec else None),
+        # trunk-excluded switch-side residuals: consumers with cin_network place THESE
+        # in Lloop_hs/ls (not L_loop/r_hs/r_ls) so the trunk copper isn't double-counted
+        L_loop_switch=L_loop_switch,
+        r_hs_switch=r_hs_switch, r_ls_switch=r_ls_switch,
         csi_hs=eff_csi(ih),
         csi_ls=eff_csi(il),
         m_gate=LL(ih, il),
