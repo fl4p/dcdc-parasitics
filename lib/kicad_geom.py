@@ -184,19 +184,13 @@ class Model:
     def port(self, label, na, nb):
         self.ports.append((label, na, nb))
 
-    # ----- connectivity prune: keep nodes reachable from any port -----
-    def prune(self):
+    def component(self, seeds):
+        """Return nodes connected to `seeds` by modeled copper/equivs."""
         adj = {}
-        def link(a, b):
-            adj.setdefault(a, set()).add(b)
-            adj.setdefault(b, set()).add(a)
         for _, a, b, _, _ in self.segs:
-            link(a, b)
+            adj.setdefault(a, set()).add(b); adj.setdefault(b, set()).add(a)
         for a, b in self.equivs:
-            link(a, b)
-        seeds = set()
-        for _, a, b in self.ports:
-            seeds.add(a); seeds.add(b)
+            adj.setdefault(a, set()).add(b); adj.setdefault(b, set()).add(a)
         seen = set()
         stack = list(seeds)
         while stack:
@@ -205,6 +199,14 @@ class Model:
                 continue
             seen.add(n)
             stack.extend(adj.get(n, ()))
+        return seen
+
+    # ----- connectivity prune: keep nodes reachable from any port -----
+    def prune(self):
+        seeds = set()
+        for _, a, b in self.ports:
+            seeds.add(a); seeds.add(b)
+        seen = self.component(seeds)
         self.segs = [s for s in self.segs if s[1] in seen and s[2] in seen]
         self.equivs = [e for e in self.equivs if e[0] in seen and e[1] in seen]
         return seen
@@ -220,18 +222,7 @@ class Model:
         seed = next(((a, b) for lbl, a, b in self.ports if lbl == seed_label), None)
         if seed is None:
             seed = (self.ports[0][1], self.ports[0][2])
-        adj = {}
-        for _, a, b, _, _ in self.segs:
-            adj.setdefault(a, set()).add(b); adj.setdefault(b, set()).add(a)
-        for a, b in self.equivs:
-            adj.setdefault(a, set()).add(b); adj.setdefault(b, set()).add(a)
-        seen, stack = set(), [seed[0], seed[1]]
-        while stack:
-            n = stack.pop()
-            if n in seen:
-                continue
-            seen.add(n)
-            stack.extend(adj.get(n, ()))
+        seen = self.component(seed)
         kept, dropped = [], []
         for lbl, a, b in self.ports:
             (kept if (a in seen and b in seen) else dropped).append(
@@ -408,7 +399,7 @@ def build_fet(board, model, zmap, topo, role, lead_mm):
     # and equiv their dies. Only the FIRST FET's gate is ported (d["gate"]);
     # paralleled FETs may sit on separate gate nets (Net-(Q1-G) vs Net-(Q3-G)), so
     # their gates are not required or modeled here.
-    die_src = die_drn = die_gate = None
+    die_src = die_drn = die_gate = gate_pad_node = None
     src_pad_node = drn_pad_node = None
     for ref in refs:
         fp = fps[ref]
@@ -432,6 +423,7 @@ def build_fet(board, model, zmap, topo, role, lead_mm):
             model.seg(gn, gref, 0.5)
             model.equiv(gref, sref)
             die_src, die_drn, die_gate = sref, dref, gref
+            gate_pad_node = gn
             src_pad_node = sn
             drn_pad_node = dn
         else:
@@ -439,33 +431,59 @@ def build_fet(board, model, zmap, topo, role, lead_mm):
             model.equiv(die_drn, dref)
     d["_die_src"] = die_src
     d["_die_gate"] = die_gate
+    d["_gate_pad_node"] = gate_pad_node
     d["_src_pad_node"] = src_pad_node
     d["_drn_pad_node"] = drn_pad_node
     return d
 
 
-def gate_driver_node(board, model, zmap, net):
+def gate_driver_node(model, net, gate_pad_node):
     """Endpoint of the gate net copper farthest from the FET gate pad = driver/Rg end.
-    Returns the node at that track endpoint (interned on its layer)."""
-    endpoints = []
-    for t in board.GetTracks():
-        if t.Type() == pcbnew.PCB_VIA_T or t.GetNetname() != net:
-            continue
-        lid = t.GetLayer(); z = zmap.get(lid)
-        if z is None:
-            continue
-        for pt in (t.GetStart(), t.GetEnd()):
-            endpoints.append((lid, mm(pt.x), mm(pt.y)))
-    if not endpoints:
+
+    The board can contain disconnected same-name gate-net islands. Pick only from
+    the modeled component connected to the FET gate pad; otherwise a stray
+    dangling endpoint can create a floating gate port that later gets dropped,
+    making CSI report as zero.
+    """
+    if gate_pad_node is None:
         return None
-    # pick the endpoint with the fewest coincidences (a dangling trace end = driver side)
-    from collections import Counter
-    key = lambda e: (round(e[1] / SNAP), round(e[2] / SNAP))
-    cnt = Counter(key(e) for e in endpoints)
-    dangling = [e for e in endpoints if cnt[key(e)] == 1]
-    pick = dangling[0] if dangling else endpoints[0]
-    lid, x, y = pick
-    return model.node(net, lid, x, y, zmap[lid])
+    seen = model.component([gate_pad_node])
+    gx, gy, _ = model._pos[gate_pad_node]
+    candidates = []
+    for n in seen:
+        if n == gate_pad_node:
+            continue
+        nnet, layer = model.meta.get(n, (None, None))
+        if nnet != net or layer == "DIE":
+            continue
+        x, y, _ = model._pos[n]
+        candidates.append(((x - gx) ** 2 + (y - gy) ** 2, n))
+    if not candidates:
+        return None
+    return max(candidates)[1]
+
+
+def validate_required_ports(model, topo):
+    labels = {lbl for lbl, _, _ in model.ports}
+    missing = []
+    if "P_pwr" not in labels:
+        missing.append(
+            "P_pwr input-cap commutation port missing: no valid Vin/GND Cin was "
+            "ported; check input caps, --cin-refs, --include-bulk-cin, Vin/GND nets")
+    for role, label in (("hs", "P_ghs"), ("ls", "P_gls")):
+        if label in labels:
+            continue
+        d = topo.get(role, {})
+        gd = d.get("gate_drive") or {}
+        drv = gd.get("driver_net") or "(no driver net discovered)"
+        missing.append(
+            f"{label} gate-loop port missing: {role.upper()} gate net "
+            f"{d.get('gate')!r} is not connected in the modeled copper to a "
+            f"driver endpoint (driver net {drv}); check gate routing / vias / "
+            f"FET pad layer or override gate nets")
+    if missing:
+        raise ValueError("invalid half-bridge topology for parasitic extraction:\n  - "
+                         + "\n  - ".join(missing))
 
 
 # --------------------------------------------------------------------------- #
@@ -544,7 +562,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     topo["cin_used"] = [ref for ref, _, _ in cins]
     for role, label in (("hs", "P_ghs"), ("ls", "P_gls")):
         d = topo[role]
-        drv = gate_driver_node(board, model, zmap, d["gate"])
+        drv = gate_driver_node(model, d["gate"], d.get("_gate_pad_node"))
         ret = d["_die_src"] if d["kelvin"] else d["_src_pad_node"]
         if drv and ret:
             model.port(label, drv, ret)
@@ -587,6 +605,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
             sys.stderr.write(
                 "WARNING: dropped more ports than kept — the P_pwr seed net may be "
                 "the disconnected one; check --sw/--gnd nets and the nearest-Cin pad.\n")
+    validate_required_ports(model, topo)
     return model
 
 
@@ -810,15 +829,18 @@ def main():
     args = ap.parse_args()
 
     board = pcbnew.LoadBoard(args.pcb)
-    topo = fet_discovery.discover(
-        board, args.sw, args.gnd, vin=args.vin,
-        hs_ref=args.hs_ref, ls_ref=args.ls_ref,
-        hs_gate=args.hs_gate, ls_gate=args.ls_gate,
-        hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
-    model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm, margin=args.margin,
-                  cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
-                  include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol,
-                  emit_cin_network=args.emit_cin_network)
+    try:
+        topo = fet_discovery.discover(
+            board, args.sw, args.gnd, vin=args.vin,
+            hs_ref=args.hs_ref, ls_ref=args.ls_ref,
+            hs_gate=args.hs_gate, ls_gate=args.ls_gate,
+            hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
+        model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm, margin=args.margin,
+                      cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
+                      include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol,
+                      emit_cin_network=args.emit_cin_network)
+    except ValueError as e:
+        raise SystemExit(str(e))
     dropped = topo.get("cin_dropped_ports")
     if dropped:
         sys.stderr.write(

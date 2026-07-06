@@ -149,6 +149,10 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
             gate = gate_override
         elif len(cand) == 1:
             gate = cand[0]
+        elif not cand:
+            raise ValueError(
+                f"{rec['ref']}: invalid FET topology on {sw!r}: no separate gate net "
+                f"found (D/S/G may be shorted or the selected nets are wrong)")
         else:
             # gate = smallest board-wide pad count (signal net, not a bulk rail)
             gate = min(cand, key=lambda n: padcount.get(n, 0))
@@ -161,6 +165,31 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
         vin_net = vin
     # LS: rail is GND (known); gate is the remaining net.
     ls_gate_net, _ = classify_gate_and_rail(ls[0], gnd, ls_gate)
+
+    def validate_switch(role, recs, gate, drain, source):
+        shorts = []
+        if drain == source:
+            shorts.append("D-S")
+        if gate == source:
+            shorts.append("G-S")
+        if gate == drain:
+            shorts.append("G-D")
+        if shorts:
+            refs = ",".join(r["ref"] for r in recs)
+            raise ValueError(
+                f"{role.upper()} FET topology invalid for {refs}: "
+                f"{'/'.join(shorts)} shorted (gate={gate!r}, drain={drain!r}, "
+                f"source={source!r}); not a valid half-bridge switch")
+        first = recs[0]
+        missing = [n for n in (gate, drain, source) if n not in first["nets"]]
+        if missing:
+            raise ValueError(
+                f"{role.upper()} FET topology invalid for {first['ref']}: missing "
+                f"expected net(s) {missing}; gate={gate!r}, drain={drain!r}, "
+                f"source={source!r}")
+
+    validate_switch("hs", hs, hs_gate_net, vin_net, sw)
+    validate_switch("ls", ls, ls_gate_net, sw, gnd)
 
     # Cin: caps with one pad on Vin and one on GND.
     cin = []

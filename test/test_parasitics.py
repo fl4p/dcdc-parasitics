@@ -174,6 +174,52 @@ def test_weld_ignores_other_net_and_far():
         assert pair != {a, far}, "must not weld beyond tolerance"
 
 
+def test_gate_driver_node_ignores_disconnected_same_net_island():
+    m = kicad_geom.Model()
+    gate = m.node("GATE", 0, 0.0, 0.0, 0.0)
+    driver = m.node("GATE", 0, 5.0, 0.0, 0.0)
+    island = m.node("GATE", 0, 100.0, 0.0, 0.0)
+    m.seg(gate, driver, 0.2)
+    assert kicad_geom.gate_driver_node(m, "GATE", gate) == driver
+    assert kicad_geom.gate_driver_node(m, "GATE", gate) != island
+
+
+def test_gate_driver_node_rejects_pad_only_component():
+    m = kicad_geom.Model()
+    gate = m.node("GATE", 0, 0.0, 0.0, 0.0)
+    island = m.node("GATE", 0, 100.0, 0.0, 0.0)
+    assert kicad_geom.gate_driver_node(m, "GATE", gate) is None
+    assert kicad_geom.gate_driver_node(m, "GATE", gate) != island
+
+
+def test_required_ports_reject_missing_power_loop():
+    m = kicad_geom.Model()
+    a = m.node("GATE", 0, 0.0, 0.0, 0.0)
+    b = m.node("GATE", 0, 1.0, 0.0, 0.0)
+    m.port("P_ghs", a, b)
+    m.port("P_gls", a, b)
+    try:
+        kicad_geom.validate_required_ports(m, _topo())
+    except ValueError as e:
+        assert "P_pwr" in str(e)
+    else:
+        raise AssertionError("missing P_pwr must fail")
+
+
+def test_required_ports_reject_missing_gate_loop():
+    m = kicad_geom.Model()
+    a = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    b = m.node("GND", 0, 1.0, 0.0, 0.0)
+    m.port("P_pwr", a, b)
+    m.port("P_gls", a, b)
+    try:
+        kicad_geom.validate_required_ports(m, _topo())
+    except ValueError as e:
+        assert "P_ghs" in str(e)
+    else:
+        raise AssertionError("missing gate-loop port must fail")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     fails = 0
