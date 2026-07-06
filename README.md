@@ -1,23 +1,20 @@
 # parasitics — KiCad → FastHenry power-stage extractor
 
-Extracts the **half-bridge power-stage parasitic inductances and resistances**
-straight from a KiCad `.kicad_pcb`, for three jobs:
+Extracts the half-bridge power-stage parasitic inductances and resistances
+from a KiCad PCB for:
 
-1. **HS gate-drive / shoot-through analysis** — the high-side gate loop overlaps
-   the high-di/dt commutation path through the FET **source lead**, so that
-   shared **common-source inductance (CSI)** feeds power di/dt back into the gate
-   drive. This tool measures it.
-2. **Switch-node peak-voltage / ringing** — the commutation-loop inductance that,
-   with the FET Coss, sets the SW overshoot and ring frequency.
+1. **Switch-node ringing** — the commutation-loop inductance that,
+   with the FET Coss and Qrr, sets the SW overshoot and ring frequency.
+2. **Gate-drive analysis**: compute gate loop inductance and detect ringing 
+   issues. And the gate loop overlaps the high-di/dt commutation path through 
+   the FET **source lead**, so that shared **common-source inductance (CSI)**
+   feeds power di/dt back into the gate drive.
 3. **Power-loss / efficiency modelling** — the extracted **resistances** are the
-   copper contribution to the I²R budget, split **per switch** (`R_hs`/`R_ls`) so
+   copper contribution to the I²R budget, split **per switch** so
    the conduction loss can be weighted by each switch's duty (HS by D, LS by 1−D —
    the LS copper dominates at low duty). The loop carries current at two very
-   different frequencies, so it has **two resistances** (see *Two resistances* below):
-   the HF **ring R** (`R_loop`, MLCC-anchored, sets ring damping) and the LF
-   **conduction R** (`R_hs`/`R_ls`, bulk-anchored, near-DC). Raise the skin sub-mesh
-   (`--nwinc/--nhinc > 1`) for AC resistance at an arbitrary frequency; the
-   per-frequency `L_eff_sweep` in the JSON shows R rising across the band.
+   different frequencies (switching frequency and HF ringing), so it has [two 
+   resistances](#two-resistances-hf-ring-vs-lf-conduction).
 
 You give it the **switch-node net** and the **GND net**; everything else (HS/LS
 FETs, Vin rail, gate nets, input caps) is auto-discovered from connectivity, with
@@ -100,7 +97,7 @@ per-refdes class is recorded in `cin_class`. Keep the bulk caps with
 entirely with `--cin-refs C17 C18 C9 C16`. If you request more caps than exist, it
 warns and solves with what it found rather than silently clamping.
 
-### Two resistances: HF ring vs LF conduction (per switch)
+### Two resistances: HF ring vs LF conduction
 
 The loop resistance is **not one number**, because it carries current at two
 frequencies that see different copper and different reference caps:
@@ -124,6 +121,12 @@ reconstruction check warns if the per-side conduction R exceeds the LF loop R (a
 port-polarity/SW-reference tripwire). Boards with an **all-ceramic** input bank fall
 back to the nearest ceramic for the conduction anchor (there the ceramics *do* carry
 the fundamental); the anchor refdes and class are recorded in `cond_ref`.
+
+Both `R_loop` and `R_hs`/`R_ls` are read at a single characteristic frequency (the ring
+plateau and near-DC respectively). To get the **AC resistance at an arbitrary
+frequency**, raise the skin sub-mesh (`--nwinc/--nhinc > 1`); the per-frequency
+`L_eff_sweep` in the JSON then shows R rising across the band as skin/proximity effect
+crowds the current.
 
 ### Input-cap branch network (`--emit-cin-network`)
 
@@ -173,12 +176,21 @@ python3 extract_parasitics.py .../Fugu2.kicad_pcb --sw SW --gnd BuckGND --vin So
 ```
 
 Multiple `--pitch` values run a mesh-convergence sweep (report drift; finest used
-for the artifacts). Example (the MPPT test board):
+for the artifacts). Example (the MPPT test board — a coarse pair for a quick drift
+check):
 
 ```sh
 python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
-        --sw "/DC/DC/SW_NODE" --gnd GND --pitch 2.0 1.0 -o out/
+        --sw "/DC/DC/SW_NODE" --gnd GND --pitch 3.0 2.0 -o out/
 ```
+
+> ⚠️ **This is a 4-layer board — finer pitch gets expensive fast.** Each pitch
+> halving is ~4× the pour filaments *per layer*, and FastHenry is single-threaded
+> with a super-linear solve, so `--pitch 1.0` on this board is a **10+ minute**
+> run (`2.0` finishes in seconds). Use a coarse pair for a quick convergence check;
+> only add `--pitch 1.0` when you need the converged number and can wait, and shrink
+> `--margin` to trim the meshed ROI. `--pitch 2.0` alone already lands the validated
+> 8.5 nH loop L for this board.
 
 ### Outputs (`OUTDIR/`)
 - **`parasitics.lib`** — `.SUBCKT pwrstage VIN SW GND HSG LSG HSKEL LSKEL`. CSI is a
@@ -273,9 +285,14 @@ shorter-path-only value. Two caveats:
   (worst-case CSI); set `--hs-kelvin`/`--ls-kelvin` if the layout Kelvin-senses.
 - FET/gate discovery is heuristic; the printed topology shows what was detected —
   override with `--hs-ref/--ls-ref/--hs-gate/--ls-gate/--vin` if wrong.
-- Solve time is set by mesh density (FastHenry's iterative solver): a ~2 mm pour
-  pitch on a small board is a few thousand filaments and solves in minutes; drop
-  to `--pitch 3` for a quick look, `--pitch 1` (slower) when you need accuracy.
+- Solve time is set by mesh density (FastHenry's iterative solver, **single-threaded**
+  with a super-linear solve): a ~2 mm pour pitch on a small 2-layer board is a few
+  thousand filaments and solves in minutes; drop to `--pitch 3` for a quick look,
+  `--pitch 1` (slower) when you need accuracy. **Cost scales steeply with pitch and
+  layer count** — each pitch halving is ~4× the pour filaments *per layer*, so
+  `--pitch 1` on a 4-layer board (e.g. mppt-2420-hc) is a 10+ minute run. Shrink the
+  meshed ROI with a smaller `--margin`, or run a coarse pitch / single pitch, when it
+  drags.
 
 ## Tests
 
