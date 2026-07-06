@@ -85,7 +85,7 @@ def layer_z_map(board):
 class Model:
     """Accumulates FastHenry nodes/segments/equivs/ports with node interning."""
 
-    def __init__(self):
+    def __init__(self, cu_thickness=CU_T):
         self._nodes = {}          # key -> node name
         self._pos = {}            # node name -> (x,y,z)
         self.meta = {}            # node name -> (net, layer)
@@ -94,6 +94,7 @@ class Model:
         self.equivs = []          # (na, nb)
         self.ports = []           # (label, na, nb)
         self.cin_ports = ["P_pwr"]  # labels of the commutation (Cin) ports
+        self.cu_thickness = cu_thickness
         self._ni = 0
         self._si = 0
 
@@ -171,10 +172,12 @@ class Model:
                     welded += 1
         return welded
 
-    def seg(self, na, nb, w, h=CU_T):
+    def seg(self, na, nb, w, h=None):
         if na == nb:
             return
         self._si += 1
+        if h is None:
+            h = self.cu_thickness
         self.segs.append((f"E{self._si}", na, nb, max(w, 0.05), h))
 
     def equiv(self, na, nb):
@@ -504,9 +507,10 @@ def _roi(board, topo, margin=8.0):
 
 
 def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
+          cu_thickness=CU_T,
           cin_refs=None, include_bulk=False, weld_tol=0.6, emit_cin_network=False):
     zmap = layer_z_map(board)
-    model = Model()
+    model = Model(cu_thickness=cu_thickness)
     power_nets = {topo["sw"], topo["vin"], topo["gnd"]}
     gate_nets = {topo["hs"]["gate"], topo["ls"]["gate"]}
     nets = power_nets | gate_nets
@@ -825,8 +829,16 @@ def main():
     ap.add_argument("--cu-temp", type=float, default=20.0,
                     help="copper temperature (C) for R; scales sigma (R ~ +0.39%/K). "
                          "Isothermal — no self-heating. L is unaffected.")
+    ap.add_argument("--cu-thickness", type=float, default=CU_T,
+                    help="copper thickness in mm for FastHenry segment height")
+    ap.add_argument("--lf-freq", type=float, default=1e5,
+                    help="lowest sweep frequency Hz for LF conduction / Cin ripple R,L")
     ap.add_argument("-o", "--out", required=True, help="output .inp path")
     args = ap.parse_args()
+    if args.cu_thickness <= 0:
+        raise SystemExit("--cu-thickness must be > 0 mm")
+    if args.lf_freq <= 0:
+        raise SystemExit("--lf-freq must be > 0 Hz")
 
     board = pcbnew.LoadBoard(args.pcb)
     try:
@@ -836,6 +848,7 @@ def main():
             hs_gate=args.hs_gate, ls_gate=args.ls_gate,
             hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
         model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm, margin=args.margin,
+                      cu_thickness=args.cu_thickness,
                       cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
                       include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol,
                       emit_cin_network=args.emit_cin_network)
@@ -848,7 +861,8 @@ def main():
             f"pitch {args.pitch} mm: {', '.join(dropped)} — their copper never bonded "
             f"into the meshed pour (distant bulk cap?). Lower --pitch / raise "
             f"--weld-tol / --margin to include them.\n")
-    stats = model.write(args.out, nwinc=args.nwinc, nhinc=args.nhinc,
+    stats = model.write(args.out, fmin=args.lf_freq,
+                        nwinc=args.nwinc, nhinc=args.nhinc,
                         sigma=sigma_at(args.cu_temp))
     # sidecar: port order + topology for the reduce step
     ports = [lbl for lbl, _, _ in model.ports]
@@ -863,7 +877,8 @@ def main():
                 topo={k: (v if not isinstance(v, dict) else
                           {kk: vv for kk, vv in v.items() if not kk.startswith("_") and kk != "pads"})
                       for k, v in topo.items()},
-                pitch=args.pitch, lead_mm=args.lead_mm, cu_temp=args.cu_temp)
+                pitch=args.pitch, lead_mm=args.lead_mm, cu_temp=args.cu_temp,
+                cu_thickness=args.cu_thickness, lf_freq=args.lf_freq)
     with open(args.out + ".ports.json", "w") as f:
         json.dump(side, f, indent=2)
     print(f"wrote {args.out}: {stats['nodes']} nodes, {stats['segs']} segs, "

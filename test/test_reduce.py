@@ -197,6 +197,29 @@ check("cin Rb per cap at f_dc",
 check("cin class passthrough",
       brs["C1"]["cls"] == "bulk" and brs["C3"]["cls"] == "mlcc")
 
+# 11b. LF schematic data must come from the lowest swept frequency, not the
+#      plateau/ring matrix used for the HF loop.
+L_sh_lf, Lb_lf = 12e-9, [4e-9, 6e-9, 8e-9]
+Zlo2_lf = np.zeros((m, m), dtype=complex)
+for a in range(m):
+    for b in range(m):
+        Lij_lf = L_sh_lf + (Lb_lf[a] if a == b else 0.0)
+        Rij = R_sh + (Rb[a] if a == b else 0.0)
+        Zlo2_lf[a, b] = Rij + 1j * (2 * np.pi * 39e3) * Lij_lf
+p11b = sr.reduce_parasitics({39e3: Zlo2_lf, 5e6: Zpl}, capports, topo11, {},
+                            plateau=5e6, cin_ports=capports)
+brs_lf = {b["ref"]: b for b in p11b["cin_branches_lf"]}
+check("cin LF view uses lowest swept frequency for L_shared",
+      abs(p11b["cin_L_shared_lf"] - L_sh_lf) < 1e-15 and
+      abs(p11b["cin_L_shared"] - L_sh) < 1e-15,
+      f'lf={p11b["cin_L_shared_lf"]*1e9:.2f}nH hf={p11b["cin_L_shared"]*1e9:.2f}nH')
+check("cin LF view uses lowest swept frequency for Lb",
+      all(abs(brs_lf[r]["Lb"] - Lb_lf[i]) < 1e-15 for i, r in enumerate(["C1", "C2", "C3"])),
+      ", ".join(f"{brs_lf[r]['Lb']*1e9:.2f}" for r in ["C1", "C2", "C3"]))
+check("cin LF view records actual frequency",
+      abs(p11b["cin_branch_freq_Hz"] - 39e3) < 1e-9,
+      f'{p11b["cin_branch_freq_Hz"]:g} Hz')
+
 # 12. cin_net label path: HF L_loop stays single-cap (P_pwr) while the branch
 #     decomposition spans bulk caps that are NOT in cin_ports.
 L_sh2, Lb2 = 6e-9, [1e-9, 2e-9, 4e-9]

@@ -1,0 +1,11 @@
+pcb: https://raw.githubusercontent.com/LibreSolar/mppt-2420-lc/refs/heads/master/MPPT_charger_20A.kicad_pcb
+sw: /DCDC power stage/SW_NODE
+gnd: GND
+vin: /DCDC power stage/DCDC_IN
+hs_ref: [Q1]
+ls_ref: [Q4]
+cin_parallel: 1
+pitch: [3.0, 2.0]
+emit_cin_network: true
+svg: true
+out: out-mppt-2420-hc/

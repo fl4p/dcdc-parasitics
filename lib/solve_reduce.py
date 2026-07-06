@@ -226,13 +226,16 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                     f"— likely reversed cap-port polarity or a mutual-sign error")
 
     # ---- conduction-path resistances (LF, per-side) ----
-    # Read R at the LOWEST swept frequency: there the skin depth (>2 mm at 100 kHz)
+    # Read R/L at the LOWEST swept frequency: there the skin depth (>2 mm at 100 kHz)
     # dwarfs the copper thickness, so this is the DC/fundamental conduction R, not
     # the skin-elevated ring-plateau R_loop. P_hs/P_ls are anchored on the bulk cap
     # (the fundamental source), so r_hs/r_ls are each switch's true conduction
     # copper; P_bulk is the full LF loop, and r_sw is the SW-node spreading residual.
     f_dc = min(zc.keys())
-    R_dc = zc[f_dc].real
+    Z_lf = zc[f_dc]
+    w_lf = 2 * np.pi * f_dc
+    L_lf = Z_lf.imag / w_lf
+    R_dc = Z_lf.real
     if f_dc >= f:   # conduction read collapsed onto the ring plateau
         warn.append(
             f"conduction freq ({f_dc:g} Hz) >= plateau ({f:g} Hz) — the ring and "
@@ -270,12 +273,14 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     # prevent. cin_branches stays None unless a genuine cin_net was ported.
     cin_net = (topo or {}).get("cin_net") if isinstance(topo, dict) else None
     cin_dec = None
+    cin_dec_lf = None
     if cin_net:
         net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
         net_refs = [e["ref"] for e in cin_net if e.get("label") in idx]
         net_cls = {e["ref"]: e.get("cls", "mlcc") for e in cin_net}
         net_c = {e["ref"]: e.get("C") for e in cin_net}
         cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls, net_c)
+        cin_dec_lf = _cin_branch_decomp(L_lf, R_dc, net_idx, net_refs, net_cls, net_c)
     if cin_dec:
         _Lsh = float(cin_dec["L_shared"])
         _Lsp = float(cin_dec["L_spread"])
@@ -380,6 +385,13 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         cin_branches=(cin_dec["branches"] if cin_dec else None),
         cin_L_shared=(cin_dec["L_shared"] if cin_dec else None),
         cin_R_shared=(cin_dec["R_shared"] if cin_dec else None),
+        # LF/switching-frequency view of the same cap network, for the LF ripple
+        # schematic. Keep the historical keys above tied to the loop plateau so
+        # existing loss/deck consumers do not silently change behavior.
+        cin_branches_lf=(cin_dec_lf["branches"] if cin_dec_lf else None),
+        cin_L_shared_lf=(cin_dec_lf["L_shared"] if cin_dec_lf else None),
+        cin_R_shared_lf=(cin_dec_lf["R_shared"] if cin_dec_lf else None),
+        cin_branch_freq_Hz=f_dc,
         # trunk-excluded switch-side residuals: consumers with cin_network place THESE
         # in Lloop_hs/ls (not L_loop/r_hs/r_ls) so the trunk copper isn't double-counted
         L_loop_switch=L_loop_switch,

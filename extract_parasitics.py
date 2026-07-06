@@ -30,6 +30,7 @@ LIB = os.path.join(HERE, "lib")
 sys.path.insert(0, LIB)  # library modules live in lib/; root holds only this CLI
 
 import emit  # noqa: E402
+import pcb_source  # noqa: E402
 import solve_reduce  # noqa: E402
 
 KICAD_PY = os.environ.get(
@@ -57,6 +58,8 @@ DEFAULTS = {
     "nwinc": 1,
     "nhinc": 1,
     "cu_temp": 20.0,
+    "cu_thickness": 0.035,
+    "lf_freq": 1e5,
     "plateau": 5e6,
     "svg": False,
     "config": None,
@@ -85,6 +88,8 @@ SCALAR_TYPES = {
     "nwinc": int,
     "nhinc": int,
     "cu_temp": float,
+    "cu_thickness": float,
+    "lf_freq": float,
     "plateau": float,
     "out": str,
     "config": str,
@@ -106,6 +111,8 @@ def run_geom(args, pitch, outdir):
            "--cin-parallel", str(args.cin_parallel),
            "--lead-mm", str(args.lead_mm), "--nwinc", str(args.nwinc),
            "--nhinc", str(args.nhinc), "--cu-temp", str(args.cu_temp),
+           "--cu-thickness", str(args.cu_thickness),
+           "--lf-freq", str(args.lf_freq),
            "--weld-tol", str(args.weld_tol), "--margin", str(args.margin),
            "-o", inp]
     for flag, val in (("--vin", args.vin), ("--hs-gate", args.hs_gate),
@@ -201,6 +208,11 @@ def build_parser():
     ap.add_argument("--cu-temp", type=float, default=argparse.SUPPRESS,
                     help="copper temperature (C) for the reported R (scales sigma, "
                          "R ~ +0.39%%/K); isothermal, no self-heating, L unaffected")
+    ap.add_argument("--cu-thickness", type=float, default=argparse.SUPPRESS,
+                    help="copper thickness in mm for FastHenry segment height")
+    ap.add_argument("--lf-freq", type=float, default=argparse.SUPPRESS,
+                    help="lowest FastHenry sweep frequency Hz; set this to the "
+                         "switching frequency for LF conduction / Cin ripple copper")
     ap.add_argument("--plateau", type=float, default=argparse.SUPPRESS,
                     help="L-plateau frequency Hz")
     ap.add_argument("--svg", action=argparse.BooleanOptionalAction,
@@ -295,6 +307,10 @@ def parse_args(argv=None):
     missing = [name for name in REQUIRED_ARGS if not merged.get(name)]
     if missing:
         ap.error("missing required argument(s): " + ", ".join(missing))
+    if merged["cu_thickness"] <= 0:
+        ap.error("--cu-thickness must be > 0 mm")
+    if merged["lf_freq"] <= 0:
+        ap.error("--lf-freq must be > 0 Hz")
 
     return argparse.Namespace(**merged)
 
@@ -304,13 +320,17 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="dcdc_par_")
+    pcb_input = args.pcb
+    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir)
 
     pitches = sorted(set(args.pitch), reverse=True)  # coarse -> fine
     results = []
     for i, pitch in enumerate(pitches):
         inp, side = run_geom(args, pitch, workdir)
         meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"),
-                    cu_temp=side.get("cu_temp"))
+                    cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
+                    lf_freq=side.get("lf_freq"),
+                    pcb_source=pcb_input, pcb_resolved=args.pcb)
         p = solve_reduce.solve(inp, side["ports"], side["topo"], meta,
                                plateau=args.plateau, suffix=f"p{i}",
                                cin_ports=side.get("cin_ports"),

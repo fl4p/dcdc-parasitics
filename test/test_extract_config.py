@@ -13,6 +13,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import extract_parasitics  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "lib"))
+import pcb_source  # noqa: E402
 
 
 def _yaml(text):
@@ -43,6 +45,7 @@ ls_ref: [Q2]
 emit_cin_network: true
 weld_tol: 0.7
 margin: 6.5
+cu_thickness: 0.07
 """)
     args = extract_parasitics.parse_args(["--config", cfg])
     assert args.pcb == "/boards/Fugu2.kicad_pcb"
@@ -55,6 +58,7 @@ margin: 6.5
     assert args.emit_cin_network is True
     assert args.weld_tol == 0.7
     assert args.margin == 6.5
+    assert args.cu_thickness == 0.07
 
 
 def test_cli_overrides_yaml_scalars_lists_and_booleans():
@@ -66,6 +70,7 @@ out: old-out
 pitch: [3.0]
 hs_ref: [Q9]
 svg: true
+cu_thickness: 0.035
 """)
     args = extract_parasitics.parse_args([
         "--config", cfg,
@@ -75,6 +80,7 @@ svg: true
         "--pitch", "2.0", "1.0",
         "--hs-ref", "Q1", "Q3",
         "--no-svg",
+        "--cu-thickness", "0.07",
         "-o", "new-out",
     ])
     assert args.pcb == "/boards/new.kicad_pcb"
@@ -84,6 +90,31 @@ svg: true
     assert args.pitch == [2.0, 1.0]
     assert args.hs_ref == ["Q1", "Q3"]
     assert args.svg is False
+    assert args.cu_thickness == 0.07
+
+
+def test_github_blob_url_normalizes_to_raw():
+    url = "https://github.com/org/repo/blob/main/hw/Fugu2/Fugu2.kicad_pcb"
+    got = pcb_source.normalize_pcb_url(url)
+    assert got == "https://github.com/org/repo/raw/main/hw/Fugu2/Fugu2.kicad_pcb"
+
+
+def test_resolve_pcb_path_downloads_url_to_workdir():
+    calls = []
+    def fake_download(url, path):
+        calls.append((url, path))
+        with open(path, "wb") as fh:
+            fh.write(b"(kicad_pcb)")
+
+    workdir = tempfile.mkdtemp()
+    got = pcb_source.resolve_pcb_path(
+        "https://github.com/org/repo/blob/main/hw/board.kicad_pcb",
+        workdir,
+        downloader=fake_download)
+
+    assert got == os.path.join(workdir, "board.kicad_pcb")
+    assert os.path.exists(got)
+    assert calls == [("https://github.com/org/repo/raw/main/hw/board.kicad_pcb", got)]
 
 
 def test_unknown_yaml_key_fails():
@@ -105,6 +136,18 @@ sw: SW
 gnd: GND
 out: out
 pitch: 2.0
+""")
+    e = _expect_exit(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert e.code
+
+
+def test_invalid_copper_thickness_fails():
+    cfg = _yaml("""
+pcb: board.kicad_pcb
+sw: SW
+gnd: GND
+out: out
+cu_thickness: 0
 """)
     e = _expect_exit(lambda: extract_parasitics.parse_args(["--config", cfg]))
     assert e.code

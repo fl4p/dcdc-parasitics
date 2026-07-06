@@ -1,0 +1,14 @@
+pcb: ../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+hs_ref: [Q1, Q3]
+ls_ref: [Q2]
+cin_refs: [C9, C16, C17, C18, C21, C22]
+pitch: [2.0] #  [2.0, 1.0]
+lf_freq: 39000
+emit_cin_network: true
+weld_tol: 0.6
+margin: 8.0
+out: out-fugu2/
+svg: true

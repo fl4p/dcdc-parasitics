@@ -150,6 +150,7 @@ the off-diagonal spread is high (the single-trunk model fits poorly), it warns.
 Meshing: tracks → filaments; copper pours → a gridded filament mesh clipped to the
 real filled polygon (and to an ROI around the FETs/Cin, so far copper is skipped);
 vias → vertical filaments; THT pads and FET leads → vertical stubs to a die plane.
+Track widths come from KiCad; segment height is `--cu-thickness` (default 0.035 mm).
 Nodes are interned by `(net, layer, snapped-xy)` so coincident same-net endpoints
 merge, and every track/via/pad node is bonded to its pour (fixes fragmented
 copper); a union-find prune keeps only port-reachable copper. `L = Im(Z)/2πf`,
@@ -159,7 +160,7 @@ copper); a union-find prune keeps only port-reachable copper. `L = Im(Z)/2πf`,
 
 ```sh
 python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
-        [--pitch 2.0 1.0] [--lead-mm 3.0] [--vin NET] \
+        [--pitch 2.0 1.0] [--lead-mm 3.0] [--cu-thickness 0.035] [--lf-freq 1e5] [--vin NET] \
         [--cin-parallel 4 | --cin-refs C17 C18 C9 C16] [--include-bulk-cin] \
         [--cin-esl 0.5 --cin-esr 3] [--emit-cin-network] \
         [--hs-ref Q1 Q3 --ls-ref Q2] [--hs-gate NET --ls-gate NET] \
@@ -175,9 +176,12 @@ python3 extract_parasitics.py --config fugu2-parasitics.yaml
 YAML keys use the argparse destination names (`hs_ref`, `cin_parallel`,
 `emit_cin_network`, etc.). Command-line arguments override YAML values, including
 boolean options via `--no-svg`, `--no-hs-kelvin`, and the other `--no-*` forms.
+`pcb` may be a local path or an HTTPS URL to a public `.kicad_pcb`; GitHub
+`blob` URLs are converted to raw downloads automatically. Prefer a commit SHA in
+the URL instead of a branch name for reproducible extraction.
 
 ```yaml
-pcb: .../Fugu2.kicad_pcb
+pcb: https://github.com/org/repo/blob/<commit-sha>/hw/Fugu2/Fugu2.kicad_pcb
 sw: SW
 gnd: BuckGND
 vin: Solar+
@@ -188,6 +192,8 @@ pitch: [2.0, 1.0]
 emit_cin_network: true
 weld_tol: 0.6
 margin: 8.0
+cu_thickness: 0.035
+lf_freq: 100000
 out: out/
 ```
 
@@ -202,6 +208,36 @@ Example — Fugu2 (2-layer buck, paralleled HS, explicit HF cap bank):
 python3 extract_parasitics.py .../Fugu2.kicad_pcb --sw SW --gnd BuckGND --vin Solar+ \
         --hs-ref Q1 Q3 --ls-ref Q2 --cin-refs C9 C16 C17 C18 C21 C22 --pitch 2.0 -o out/
 ```
+
+### Interactive path viewer
+
+`visualize_paths.py` emits a standalone HTML/SVG viewer for inspecting the copper
+that participates in the extracted parasitic paths. The first view is the
+gate-drive loop: HS/LS paths can be toggled independently, with separate toggles
+for driver-output copper, FET-gate copper, source-return copper, source-lead CSI
+markers, parts, and top/bottom copper layers.
+
+```sh
+python3 visualize_paths.py .../mppt-1210-hus.kicad_pcb \
+        --sw "/DCDC power stage/SW_NODE" --gnd GND \
+        --vin "/DCDC power stage/SOLAR+" --hs-ref Q1 --ls-ref Q4 \
+        -o out/gate-loop-viewer.html
+```
+
+It also accepts YAML configs using the same argparse destination names as the
+extractor:
+
+```sh
+python3 visualize_paths.py --config fugu2-parasitics.yaml
+```
+
+Extractor-only keys such as `pitch`, `cin_refs`, and `emit_cin_network` are
+accepted and ignored, so the same board/topology config can be reused. If `out`
+points to a directory, the viewer writes `gate-loop-viewer.html` inside it.
+
+It uses the same `fet_discovery.py` topology logic as the extractor and re-execs
+itself under KiCad's bundled Python if `pcbnew` is not importable from the shell
+Python. The output is self-contained and can be opened directly in a browser.
 
 Multiple `--pitch` values run a mesh-convergence sweep (report drift; finest used
 for the artifacts). Example (the MPPT test board — a coarse pair for a quick drift
@@ -247,12 +283,14 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
 
 ## Layout
 
-`extract_parasitics.py` at the repo root is the only entry point (the CLI). It
-runs the two-interpreter pipeline: the geometry step (`lib/kicad_geom.py`) under
-KiCad's python, the solve/reduce/emit under system python.
+`extract_parasitics.py` at the repo root is the extraction CLI. It runs the
+two-interpreter pipeline: the geometry step (`lib/kicad_geom.py`) under KiCad's
+python, the solve/reduce/emit under system python. `visualize_paths.py` is the
+standalone HTML path-viewer exporter.
 
 ```
 extract_parasitics.py   # CLI entry point (orchestrates the two interpreters)
+visualize_paths.py      # -> standalone HTML PCB path viewer
 lib/
   kicad_geom.py         # pcbnew -> multiport FastHenry .inp (KiCad python)
   fet_discovery.py      # auto-ID FETs / Vin / gate nets / Cin / gate network

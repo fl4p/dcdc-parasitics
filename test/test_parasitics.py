@@ -174,6 +174,14 @@ def test_weld_ignores_other_net_and_far():
         assert pair != {a, far}, "must not weld beyond tolerance"
 
 
+def test_model_uses_configured_copper_thickness():
+    m = kicad_geom.Model(cu_thickness=0.07)
+    a = m.node("N", 0, 0.0, 0.0, 0.0)
+    b = m.node("N", 0, 1.0, 0.0, 0.0)
+    m.seg(a, b, 0.5)
+    assert m.segs[-1][4] == 0.07
+
+
 def test_gate_driver_node_ignores_disconnected_same_net_island():
     m = kicad_geom.Model()
     gate = m.node("GATE", 0, 0.0, 0.0, 0.0)

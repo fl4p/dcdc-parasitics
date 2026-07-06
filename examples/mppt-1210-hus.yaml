@@ -1,0 +1,11 @@
+pcb: ../../mppt-1210-hus/kicad/mppt-1210-hus.kicad_pcb
+sw: /DCDC power stage/SW_NODE
+gnd: GND
+vin: /DCDC power stage/SOLAR+
+hs_ref: [Q1]
+ls_ref: [Q4]
+cin_parallel: 2
+pitch: [3.0, 2.0]
+emit_cin_network: true
+svg: true
+out: out-mppt-1210-hus/

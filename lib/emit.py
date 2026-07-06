@@ -25,6 +25,16 @@ def _fmt(v, unit=""):
     return f"{v:.6g}{unit}"
 
 
+def _fmt_freq(f):
+    if not f:
+        return "LF"
+    if f >= 1e6:
+        return f"{f/1e6:g} MHz"
+    if f >= 1e3:
+        return f"{f/1e3:g} kHz"
+    return f"{f:g} Hz"
+
+
 def _split_rest(l_loop, csi_hs, csi_ls):
     """Non-shared loop inductance, split HS/LS side (arbitrary split; total is exact)."""
     rest = l_loop - csi_hs - csi_ls
@@ -198,17 +208,20 @@ def markdown(p):
             "the copper budget. The two sides are split by real geometry, not 50/50.",
         ]
 
-    branches = p.get("cin_branches") or []
+    branches = p.get("cin_branches_lf") or p.get("cin_branches") or []
     if branches:
+        cin_l = p.get("cin_L_shared_lf", p.get("cin_L_shared", 0))
+        cin_r = p.get("cin_R_shared_lf", p.get("cin_R_shared", 0))
+        cin_f = p.get("cin_branch_freq_Hz")
         lines += [
             "",
             "## Input-cap branch network (`--emit-cin-network`)",
             "",
-            f"Per-cap **copper** decomposed into a shared Vin/GND trunk "
-            f"(**{p.get('cin_L_shared', 0)*nH:.2f} nH** / "
-            f"{p.get('cin_R_shared', 0)*1e3:.2f} mΩ) plus a private branch per cap "
-            f"(`Lb`/`Rb`, from L[i,i]−L_shared). The loss tool enriches each ref with "
-            f"its datasheet C/ESR/ESL from dslib and assembles the SPICE `cin_network`. "
+            f"Per-cap **copper at {_fmt_freq(cin_f)}** decomposed into a shared "
+            f"Vin/GND trunk (**{cin_l*nH:.2f} nH** / {cin_r*1e3:.2f} mΩ) "
+            f"plus a private branch per cap "
+            f"(`Lb`/`Rb`, from L[i,i]−L_shared). These are LF copper-only values; "
+            f"each cap's C/ESR/ESL is a separate dslib term. "
             f"`Rb` is **branch copper**, not dielectric ESR — bulk electrolytics carry "
             f"the 39 kHz ripple ESR loss; ceramics are ~open at fsw.",
             "",

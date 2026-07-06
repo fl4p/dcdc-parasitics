@@ -31,8 +31,18 @@ def _fmtR(o):
     return f"{o*1e3:.2f} mΩ"
 
 
+def _fmtf(f):
+    if not f:
+        return "LF"
+    if f >= 1e6:
+        return f"{f/1e6:g} MHz"
+    if f >= 1e3:
+        return f"{f/1e3:g} kHz"
+    return f"{f:g} Hz"
+
+
 def schematic_lf(p, min_uf=4.7):
-    br_all = p.get("cin_branches") or []
+    br_all = p.get("cin_branches_lf") or p.get("cin_branches") or []
     if not br_all:
         return None
     # LF ripple cutoff: bulk electrolytics always shown; a ceramic below `min_uf`
@@ -58,12 +68,13 @@ def schematic_lf(p, min_uf=4.7):
 
     # ---- title ----
     board = os.path.basename(t.get("pcb", "") or "")
-    s.append(_txt(24, 30, f"Input-cap branch network (LF · cin_network) — {board}",
+    lf = p.get("cin_branch_freq_Hz")
+    s.append(_txt(24, 30, f"Input-cap branch network (LF @ {_fmtf(lf)} · cin_network) — {board}",
                   15, INK, "start", "bold"))
     s.append(_txt(24, 49,
-                  f"shared Vin/GND trunk {_fmtL(p.get('cin_L_shared', 0))} / "
-                  f"{_fmtR(p.get('cin_R_shared', 0))}  ·  copper only — loss.py adds "
-                  f"each cap's C/ESR/ESL from dslib", 11, MUTE, "start"))
+                  f"shared Vin/GND trunk {_fmtL(p.get('cin_L_shared_lf', p.get('cin_L_shared', 0)))} / "
+                  f"{_fmtR(p.get('cin_R_shared_lf', p.get('cin_R_shared', 0)))}  ·  "
+                  f"LF copper only — cap C/ESR/ESL are separate dslib terms", 11, MUTE, "start"))
 
     xb_last = xb0 + (n - 1) * bw
     # ---- rails ----
@@ -80,8 +91,10 @@ def schematic_lf(p, min_uf=4.7):
     s.append(_res_v(x0, y_vin + 8, y_vin + 34, TRUNK))
     s.append(_coil_v(x0, y_vin + 38, y_bus, TRUNK, 2.2))
     s.append(_txt(x0 - 12, y_vin + 26, "trunk", 11, TRUNK, "end", "bold"))
-    s.append(_txt(x0 - 12, y_vin + 40, _fmtL(p.get("cin_L_shared", 0)), 9.5, TRUNK, "end"))
-    s.append(_txt(x0 - 12, y_vin + 52, _fmtR(p.get("cin_R_shared", 0)), 9.5, TRUNK, "end"))
+    s.append(_txt(x0 - 12, y_vin + 40,
+                  _fmtL(p.get("cin_L_shared_lf", p.get("cin_L_shared", 0))), 9.5, TRUNK, "end"))
+    s.append(_txt(x0 - 12, y_vin + 52,
+                  _fmtR(p.get("cin_R_shared_lf", p.get("cin_R_shared", 0))), 9.5, TRUNK, "end"))
     # trunk bus (the common node feeding every branch)
     s.append(_line(x0, y_bus, xb_last, y_bus, WIRE, 2.2))
     s.append(_dot(x0, y_bus))
