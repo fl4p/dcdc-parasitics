@@ -132,8 +132,8 @@ def _nfet(cx, cy, ref, col=INK):
     s.append(f"<path d='M {bx-6:.1f} {cy+4:.1f} l 12 0 l -6 -12 z' "
              f"fill='none' stroke='{MUTE}' stroke-width='1.4'/>")  # triangle up
     s.append(_line(bx - 6, cy - 8, bx + 6, cy - 8, MUTE, 1.4))     # cathode bar
-    s.append(_txt(cx + 8, cy + 18, _clip(ref, 16), 13, INK, "middle", "bold"))
-    s.append(_txt(bx - 10, cy + 46, "body diode", 9.5, MUTE, "middle", ital=True))
+    s.append(_txt(cx + 8, cy + 44, _clip(ref, 16), 13, INK, "middle", "bold"))
+    s.append(_txt(bx - 22, cy + 46, "body diode", 9.5, MUTE, "middle", ital=True))
     return "".join(s), (dx, cy - 34), (dx, cy + 34), (gx, cy)
 
 
@@ -284,8 +284,8 @@ def schematic(p):
         s.append(_txt(xcap, cy_cap + 22, "nearest (in loop)", 9.5, CAPCOL, "middle"))
     else:
         tag = f"{n_used} caps ∥" + (f" (+{collapsed} more ported)" if collapsed else "")
-        s.append(_txt((used_xs[0]+used_xs[-1])/2, cy_cap + 36, tag, 9.5, CAPCOL, "middle", ital=True))
-        s.append(_txt((used_xs[0]+used_xs[-1])/2, cy_cap + 48, "share = current split", 9,
+        s.append(_txt((used_xs[0]+used_xs[-1])/2, cy_cap + 48, tag, 9.5, CAPCOL, "middle", ital=True))
+        s.append(_txt((used_xs[0]+used_xs[-1])/2, cy_cap + 61, "share = current split", 9,
                       MUTE, "middle", ital=True))
 
     # greyed caps present on the board but NOT in the modeled loop
