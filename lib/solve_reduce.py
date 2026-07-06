@@ -326,8 +326,10 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             r_hs_switch = max(0.0, r_hs_switch)
             r_ls_switch = max(0.0, r_ls_switch)
 
-    def eff_csi(g):
-        """Effective common-source mutual: gate-loop voltage per unit *total*
+    def eff_loop_csi(g):
+        """Effective gate-loop mutual to the full commutation port set.
+
+        Gate-loop voltage per unit *total*
         commutation current, using the parallel-cap current distribution y.
         Reduces to |L[pwr,gate]| when a single cap is ported."""
         if g is None:
@@ -336,6 +338,20 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         Zmg = complex(np.dot(m, y) / denom)
         return abs(Zmg.imag / w)
 
+    def side_csi(g, side_label, fallback):
+        """Common-source L for the selected switch's own power path.
+
+        P_hs/P_ls are switch-side ports and therefore measure the mutual with the
+        source lead the gate loop actually shares. Older sidecars did not have
+        those ports, so fall back to the full-loop mutual for compatibility.
+        """
+        if g is None:
+            return 0.0
+        side = idx.get(side_label)
+        if side is None:
+            return fallback
+        return abs(float(L[g, side]))
+
     def LL(a, b):
         return float(L[a, b]) if (a is not None and b is not None) else 0.0
 
@@ -343,6 +359,11 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         return float(R[a, a]) if a is not None else 0.0
 
     physical = cin_esl > 0 or cin_esr > 0
+    csi_hs_loop = eff_loop_csi(ih)
+    csi_ls_loop = eff_loop_csi(il)
+    csi_hs = side_csi(ih, "P_hs", csi_hs_loop)
+    csi_ls = side_csi(il, "P_ls", csi_ls_loop)
+
     p = dict(
         freq_Hz=f,
         L_loop=L_loop, R_loop=R_loop,
@@ -363,8 +384,10 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         # in Lloop_hs/ls (not L_loop/r_hs/r_ls) so the trunk copper isn't double-counted
         L_loop_switch=L_loop_switch,
         r_hs_switch=r_hs_switch, r_ls_switch=r_ls_switch,
-        csi_hs=eff_csi(ih),
-        csi_ls=eff_csi(il),
+        csi_hs=csi_hs,
+        csi_ls=csi_ls,
+        csi_hs_loop=csi_hs_loop,
+        csi_ls_loop=csi_ls_loop,
         m_gate=LL(ih, il),
         port_L=L.tolist(), port_R=R.tolist(), ports=ports, cin_ports=cin_ports,
         topo=topo, meta=meta,

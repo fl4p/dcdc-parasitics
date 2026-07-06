@@ -143,6 +143,27 @@ check("conduction over-budget warns",
       any("conduction" in w for w in pb["reduce_warn"]),
       "; ".join(pb["reduce_warn"]) or "(no warning!)")
 
+# 10b. CSI should use the side-specific switch ports when available. The full
+#      Vin->GND loop mutual can cancel for HS, but gate-drive CSI is the mutual
+#      with that switch's own source-lead path.
+rows10b = ["P_pwr", "P_ghs", "P_gls", "P_hs", "P_ls"]
+i10b = {p: i for i, p in enumerate(rows10b)}
+L10b = np.eye(len(rows10b)) * 5e-9
+L10b[i10b["P_pwr"], i10b["P_pwr"]] = 20e-9
+L10b[i10b["P_ghs"], i10b["P_pwr"]] = L10b[i10b["P_pwr"], i10b["P_ghs"]] = 0.02e-9
+L10b[i10b["P_gls"], i10b["P_pwr"]] = L10b[i10b["P_pwr"], i10b["P_gls"]] = 1.7e-9
+L10b[i10b["P_ghs"], i10b["P_hs"]] = L10b[i10b["P_hs"], i10b["P_ghs"]] = 1.8e-9
+L10b[i10b["P_gls"], i10b["P_ls"]] = L10b[i10b["P_ls"], i10b["P_gls"]] = 1.9e-9
+p10b = reduce(L10b, rows10b, ["P_pwr"])
+check("CSI side ports override full-loop HS cancellation",
+      abs(p10b["csi_hs"] - 1.8e-9) < 1e-15 and
+      abs(p10b["csi_hs_loop"] - 0.02e-9) < 1e-15,
+      f"side={p10b['csi_hs']*1e9:.2f} loop={p10b['csi_hs_loop']*1e9:.2f} nH")
+check("CSI side ports still report LS side mutual",
+      abs(p10b["csi_ls"] - 1.9e-9) < 1e-15 and
+      abs(p10b["csi_ls_loop"] - 1.7e-9) < 1e-15,
+      f"side={p10b['csi_ls']*1e9:.2f} loop={p10b['csi_ls_loop']*1e9:.2f} nH")
+
 # 11. cin branch decomposition: shared Vin/GND trunk + private branch per cap.
 L_sh, Lb = 8e-9, [2e-9, 3e-9, 5e-9]
 R_sh, Rb = 0.5e-3, [1e-3, 2e-3, 0.5e-3]

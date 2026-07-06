@@ -32,7 +32,7 @@ the greyed-out ones), and the auto-detected gate network (Rg).
 
 ## How it works
 
-One FastHenry solve with three ports yields the full mutual-inductance matrix:
+One FastHenry solve with multiple ports yields the full mutual-inductance matrix:
 
 | Port | Across | Gives |
 |------|--------|-------|
@@ -46,11 +46,13 @@ One FastHenry solve with three ports yields the full mutual-inductance matrix:
 Both FET channels are shorted at the die plane (`.equiv drain_die source_die`)
 and each gate is closed to its source there, so `P_pwr` traces the full
 `Cin → HS → SW → LS → GND → Cin` shoot-through loop and each gate loop shares that
-FET's source lead. **CSI then falls out as the mutual** `M(P_pwr, P_gate)` — the
-shared source-lead partial inductance. Whether the gate return taps the die-source
-(**Kelvin**, CSI excluded) or the power-source pad (**non-Kelvin**, full CSI) is
-encoded by where the gate-return node is placed (default: non-Kelvin / worst case;
-force with `--hs-kelvin` / `--ls-kelvin`).
+FET's source lead. **CSI then falls out as the side-specific mutual**
+`M(P_hs, P_ghs)` / `M(P_ls, P_gls)` — the shared source-lead partial inductance
+that the gate driver actually sees. The older full-loop mutual is still recorded
+as `csi_hs_loop` / `csi_ls_loop` in JSON for diagnostics. Whether the gate return
+taps the die-source (**Kelvin**, CSI excluded) or the power-source pad
+(**non-Kelvin**, full CSI) is encoded by where the gate-return node is placed
+(default: non-Kelvin / worst case; force with `--hs-kelvin` / `--ls-kelvin`).
 
 ### Parallel input caps (`--cin-parallel N`)
 
@@ -69,8 +71,8 @@ Z_eff = 1 / (1ᵀ Zc⁻¹ 1)          (Zc = N×N cap-port submatrix)
 
 which folds in every branch-to-branch mutual `Mᵢⱼ` exactly (not a naive `1/ΣLᵢ`),
 solved as `Zc x = 1` (never an explicit inverse; `cond(Zc)` is reported and a
-warning fires if it is ill-conditioned). The CSI mutual is likewise re-weighted by
-the parallel-cap current split `y = Zc⁻¹·1`, which is reported per refdes.
+warning fires if it is ill-conditioned). The parallel-cap current split
+`y = Zc⁻¹·1` is reported per refdes.
 
 **The SW-peak loop L is a bracket, not one number:**
 
@@ -115,12 +117,13 @@ thickness there, i.e. the near-DC conduction value) rather than at the ring plat
 `P_hs` drives Vin(bulk) → SW through the HS drain+source leads (the die short routes
 it), so its self-R is that switch's true conduction copper; `P_ls` likewise for
 SW → GND. The residual `R_loop_cond − R_hs − R_ls` is reported as the **SW-node
-spreading R**. In the emitted `.SUBCKT` the ring `R_loop` is split across the two
-loop inductors **by the real `R_hs:R_ls` proportion** (not a 50/50 guess); a
-reconstruction check warns if the per-side conduction R exceeds the LF loop R (a
-port-polarity/SW-reference tripwire). Boards with an **all-ceramic** input bank fall
-back to the nearest ceramic for the conduction anchor (there the ceramics *do* carry
-the fundamental); the anchor refdes and class are recorded in `cond_ref`.
+spreading R**. In the emitted `.SUBCKT`, `R_loop` is a single solved HF ring
+resistance; its HS/LS `Rser` placement is only a damping distribution, split by
+the LF `R_hs:R_ls` proportion. A reconstruction check warns if the per-side
+conduction R exceeds the LF loop R (a port-polarity/SW-reference tripwire).
+Boards with an **all-ceramic** input bank fall back to the nearest ceramic for the
+conduction anchor (there the ceramics *do* carry the fundamental); the anchor
+refdes and class are recorded in `cond_ref`.
 
 Both `R_loop` and `R_hs`/`R_ls` are read at a single characteristic frequency (the ring
 plateau and near-DC respectively). To get the **AC resistance at an arbitrary
@@ -224,6 +227,9 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   Kelvin (CSI excluded). Add your Cin across `VIN–GND` and device models for a
   gate-drive/DPT or SW-overshoot sim.
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
+  CSI fields: `csi_hs` / `csi_ls` are side-specific source-lead mutuals used in
+  the emitted subckt; `csi_hs_loop` / `csi_ls_loop` are the full-loop mutuals for
+  diagnostics.
   Conduction fields: `r_hs`, `r_ls` (per-switch conduction R), `r_loop_cond` (LF
   loop R), `r_sw` (SW spreading residual), `r_cond_freq` (the freq they were read
   at), and `cond_ref` (`{ref, cls}` — the bulk cap they anchor on). With

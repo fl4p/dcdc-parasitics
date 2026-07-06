@@ -72,6 +72,8 @@ def subckt(p):
         "* R values are isothermal copper (no self-heating); L is temperature-independent.",
         "* CSI is the shared source-lead branch (Lscs_*). Drive HS gate between",
         "* HSG and SW for non-Kelvin (CSI in loop), or HSG-HSKEL for Kelvin.",
+        "* Lloop_hs/Lloop_ls are a 50/50 split of the non-CSI loop L; only total L_loop is solved.",
+        "* Rser on Lloop_hs/Lloop_ls is split by LF r_hs:r_ls for damping; only total R_loop is solved.",
     ]
     if p.get("n_cin", 1) > 1:
         kind = "physical (cap ESL/ESR)" if p.get("L_loop_physical") is not None \
