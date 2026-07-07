@@ -278,7 +278,8 @@ def markdown(p):
 
     excl = t.get("cin_excluded_bulk") or []
     warns = p.get("reduce_warn") or []
-    if excl or warns:
+    depop = _depop_notes(p)
+    if excl or warns or depop:
         lines.append("")
         lines.append("## Notes")
         lines.append("")
@@ -288,8 +289,79 @@ def markdown(p):
                          f"Re-run with `--include-bulk-cin` to keep them.")
         for wm in warns:
             lines.append(f"- ⚠️ {wm}")
+        lines += depop
 
     return "\n".join(lines) + "\n"
+
+
+# Fraction of the ring current below which a ceramic input cap is doing no HF
+# decoupling work — a depopulation candidate. 2% ≈ 1/50th of the loop current;
+# below it a cap's branch is so far from the commutation loop it barely conducts.
+_RING_DEPOP_FRAC = 0.02
+
+
+def _depop_notes(p):
+    """Depopulation-candidate flag: ceramic input caps carrying negligible RING
+    current (they contribute ~no HF decoupling, so the SW peak/ring barely moves
+    if they're removed). Keyed off the `y=Zc⁻¹·1` current split.
+
+    ONLY trustworthy from the PHYSICAL split (per-cap ESL/ESR included): the
+    ideal-cap copper-only limit treats every MLCC as a short and so OVER-rates far
+    caps — flagging from it would wrongly spare exactly the caps you'd cull. So if
+    the split is ideal (no --cin-esl/--cin-esr), we refuse to name candidates and
+    instead tell the user to re-run physical.
+
+    Scoped to ceramics (bulk electrolytics carry the fsw RIPPLE, not the ring) and
+    each candidate is printed WITH its footprint C, because a large ceramic
+    (e.g. 10 µF) still does real ripple work at fsw even at ~0 ring share — the
+    ring is a necessary, not sufficient, condition for depopulation.
+
+    Classification (mlcc vs bulk) comes from `cin_branches` (an `--emit-cin-network`
+    product). WITHOUT it we cannot tell a ceramic from an electrolytic, so we NEVER
+    default a cap to ceramic — an unclassifiable sub-threshold cap is reported as a
+    can't-classify advisory (re-run with `--emit-cin-network`), never as a bare
+    `(mlcc)` candidate. That keeps the "bulk is never flagged" invariant even when
+    the split is physical but the branch data is absent."""
+    split = p.get("current_split") or {}
+    if len(split) < 2:
+        return []
+    physical = (p.get("cin_esl") or 0) > 0 or (p.get("cin_esr") or 0) > 0
+    cls_of = {b["ref"]: b.get("cls", "mlcc") for b in (p.get("cin_branches") or [])}
+    c_of = {b["ref"]: b.get("C") for b in (p.get("cin_branches") or [])}
+    # sub-threshold caps, sorted lowest-share first, skipping malformed entries.
+    sub = sorted(((r, s["mag"]) for r, s in split.items()
+                  if s.get("mag") is not None and s["mag"] < _RING_DEPOP_FRAC),
+                 key=lambda x: x[1])
+    # a cap is a candidate only if it is KNOWN ceramic; unknown class (ref absent from
+    # cin_branches) is NOT defaulted to ceramic — bulk must never be flagged.
+    cands = [(r, m) for r, m in sub if cls_of.get(r) == "mlcc"]
+    unclassifiable = [r for r, _ in sub if r not in cls_of]  # no branch data to classify
+    if not physical:
+        # ideal-cap split over-rates far caps; refuse to name candidates. Fire only when a
+        # sub-threshold cap could plausibly be a ceramic (known-mlcc or not-yet-classified),
+        # never for a known-bulk-only set.
+        if any(cls_of.get(r) != "bulk" for r, _ in sub):
+            return ["- ⚠️ ring-current split is the **ideal-cap (copper-only)** limit — "
+                    "it treats each MLCC as a short and over-rates far caps, so "
+                    "depopulation candidates are **not** flagged. Re-run with "
+                    "`--cin-esl/--cin-esr` for the physical split."]
+        return []
+    notes = []
+    for r, mag in cands:
+        c = c_of.get(r)
+        cstr = f", {c*1e9:.0f} nF" if c else ""
+        notes.append(
+            f"- 🪧 **{r}** (mlcc{cstr}) carries only **{mag*100:.1f}%** of the ring "
+            f"current (< {_RING_DEPOP_FRAC*100:.0f}%) — **depopulation candidate** for "
+            f"HF decoupling. Verify its fsw ripple role first (a large-C ceramic still "
+            f"carries ripple even at ~0 ring share).")
+    if unclassifiable:
+        notes.append(
+            f"- ℹ️ {', '.join(unclassifiable)} carry < {_RING_DEPOP_FRAC*100:.0f}% of the "
+            f"ring current but cannot be classified (no `--emit-cin-network` branch data) — "
+            f"re-run with `--emit-cin-network` to flag ceramics for depopulation "
+            f"(bulk electrolytics are never candidates).")
+    return notes
 
 
 def emit_all(p, outdir, svg=False):
