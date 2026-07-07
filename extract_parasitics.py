@@ -454,14 +454,18 @@ def write_viewer(args, inp, workdir):
     except OSError:
         copper = None
     mesh_dir = os.path.join(args.out, "mesh")
-    os.makedirs(mesh_dir, exist_ok=True)
     out_html = os.path.join(mesh_dir, "mesh.html")
     try:
+        os.makedirs(mesh_dir, exist_ok=True)
         return "mesh/mesh.html: " + mesh_viewer.build_viewer(
             inp, out_html,
             ports_json=inp + ".ports.json", copper=copper)
     except Exception as e:                      # viewer is a convenience artifact, not core
-        sys.stderr.write(f"  (mesh.html skipped: {e})\n")
+        try:                                    # don't leave an empty mesh/ dir behind
+            os.rmdir(mesh_dir)
+        except OSError:
+            pass
+        sys.stderr.write(f"  (mesh/mesh.html skipped: {e})\n")
         return None
 
 
