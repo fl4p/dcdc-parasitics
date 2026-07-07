@@ -324,12 +324,16 @@ def _extract_polys(sps_list):
             if len(outline) < 3:
                 continue
             holes = []
+            # Narrow except: only swallow a genuinely-absent Hole API (old KiCad
+            # SHAPE_POLY_SET without HoleCount/Hole). Any OTHER error must NOT be
+            # silently treated as "no holes" — that would re-introduce the
+            # hole-blind bug (a track through a void wrongly dropped) unnoticed.
             try:
                 for hi in range(s.HoleCount(oi)):
                     h = _chain_pts(s.Hole(oi, hi))
                     if len(h) >= 3:
                         holes.append(h)
-            except Exception:
+            except AttributeError:
                 pass
             polys.append((outline, holes))
     return polys
@@ -409,7 +413,16 @@ def add_tracks(board, model, zmap, nets, pour_index=None, roi=None):
     only meshes the pour within `roi`, so we drop only where a mesh actually
     replaces the filament; a same-net track outside the meshed region is kept so
     it can't disconnect copper. ARC tracks are never dropped (their curved path
-    bows off the sampled chord). Vias / layer-changing traces are untouched."""
+    bows off the sampled chord). Vias / layer-changing traces are untouched.
+
+    Known limitations (acceptable for this redundant-filament cleanup, not the
+    loop-L path): (1) containment is sampled on the track CENTERLINE only, not
+    across its width — a wide track whose centerline stays inside the pour while
+    one edge overhangs a notch/cutout is still dropped; (2) the 0.25 mm sample
+    step is a heuristic (< typical pour void), not a hard bound read from the
+    board's clearance rules, so a void narrower than the step between two
+    adjacent samples could be missed. Both are far narrower than the un-guarded
+    original and did not arise on the Fugu2 test board."""
     arc_t = getattr(pcbnew, "PCB_ARC_T", None)
     for t in board.GetTracks():
         if t.Type() == pcbnew.PCB_VIA_T:
