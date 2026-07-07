@@ -1,4 +1,4 @@
-pcb: ../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
 sw: SW
 gnd: BuckGND
 vin: Solar+

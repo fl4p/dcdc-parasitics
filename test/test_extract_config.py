@@ -119,6 +119,125 @@ def test_resolve_pcb_path_downloads_url_to_workdir():
     assert calls == [("https://github.com/org/repo/raw/main/hw/board.kicad_pcb", got)]
 
 
+def _make_board(content=b"(kicad_pcb)", name="board.kicad_pcb"):
+    """Write a fake PCB file under a fresh temp dir; return its path."""
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, name)
+    with open(p, "wb") as fh:
+        fh.write(content)
+    return p
+
+
+def test_resolve_pcb_path_config_relative_fallback():
+    """When cwd-relative resolution misses but config-relative hits, return the
+    config-relative path."""
+    cfg_dir = tempfile.mkdtemp()
+    sub = os.path.join(cfg_dir, "boards")
+    os.makedirs(sub)
+    board = os.path.join(sub, "Fugu2.kicad_pcb")
+    with open(board, "wb") as fh:
+        fh.write(b"(kicad_pcb)")
+    cfg = os.path.join(cfg_dir, "fugu2.yaml")
+    with open(cfg, "w") as fh:
+        fh.write("pcb: boards/Fugu2.kicad_pcb\n")
+    # run from an unrelated cwd so cwd-relative resolution fails
+    cwd = os.getcwd()
+    try:
+        os.chdir(tempfile.mkdtemp())
+        got = pcb_source.resolve_pcb_path(
+            "boards/Fugu2.kicad_pcb", "/tmp/wd", config_path=cfg)
+    finally:
+        os.chdir(cwd)
+    assert got == board
+    assert os.path.isfile(got)
+
+
+def test_resolve_pcb_path_config_relative_when_cwd_also_exists_same_content():
+    """Both resolve and content matches -> return cwd-relative path (no hard-fail)."""
+    content = b"(kicad_pcb identical)"
+    cwd_board = _make_board(content, "board.kicad_pcb")
+    cfg_dir = tempfile.mkdtemp()
+    cfg_board = os.path.join(cfg_dir, "board.kicad_pcb")
+    with open(cfg_board, "wb") as fh:
+        fh.write(content)
+    cfg = os.path.join(cfg_dir, "fugu2.yaml")
+    with open(cfg, "w") as fh:
+        fh.write("pcb: board.kicad_pcb\n")
+    cwd = os.getcwd()
+    try:
+        os.chdir(os.path.dirname(cwd_board))
+        got = pcb_source.resolve_pcb_path(
+            "board.kicad_pcb", "/tmp/wd", config_path=cfg)
+        # macOS temp dirs sit under /var -> /private/var symlink, so compare
+        # via realpath rather than the literal string.
+        assert os.path.realpath(got) == os.path.realpath(cwd_board)
+        assert os.path.isfile(got)
+    finally:
+        os.chdir(cwd)
+
+
+def test_resolve_pcb_path_both_exist_different_content_hard_fails():
+    """Both resolve but to different boards (SHA-256 mismatch) -> SystemExit."""
+    cwd_board = _make_board(b"(board A)", "board.kicad_pcb")
+    cfg_dir = tempfile.mkdtemp()
+    cfg_board = os.path.join(cfg_dir, "board.kicad_pcb")
+    with open(cfg_board, "wb") as fh:
+        fh.write(b"(board B different)")
+    cfg = os.path.join(cfg_dir, "fugu2.yaml")
+    with open(cfg, "w") as fh:
+        fh.write("pcb: board.kicad_pcb\n")
+    cwd = os.getcwd()
+    try:
+        os.chdir(os.path.dirname(cwd_board))
+        e = _expect_exit(lambda: pcb_source.resolve_pcb_path(
+            "board.kicad_pcb", "/tmp/wd", config_path=cfg))
+    finally:
+        os.chdir(cwd)
+    msg = str(e.code)
+    assert "two different boards" in msg
+    assert "SHA-256" in msg
+
+
+def test_resolve_pcb_path_absolute_ignores_config_path():
+    """An absolute pcb path is returned as-is regardless of config_path."""
+    board = _make_board(b"(kicad_pcb)")
+    cfg = _yaml("pcb:ignored-because-absolute\nsw: SW\ngnd: GND\nout: out\n")
+    got = pcb_source.resolve_pcb_path(board, "/tmp/wd", config_path=cfg)
+    assert got == board
+
+
+def test_resolve_pcb_path_no_config_falls_back_to_cwd_relative():
+    """Without config_path, behave like the legacy cwd-relative passthrough."""
+    board = _make_board(b"(kicad_pcb)")
+    cwd = os.getcwd()
+    try:
+        os.chdir(os.path.dirname(board))
+        got = pcb_source.resolve_pcb_path("board.kicad_pcb", "/tmp/wd")
+        assert os.path.realpath(got) == os.path.realpath(board)
+        assert os.path.isfile(got)
+    finally:
+        os.chdir(cwd)
+
+
+def test_resolve_pcb_path_neither_exists_returns_cwd_path():
+    """Neither cwd- nor config-relative exists -> return cwd path (let downstream
+    open() raise FileNotFoundError with the cwd-relative path)."""
+    cfg_dir = tempfile.mkdtemp()
+    cfg = os.path.join(cfg_dir, "fugu2.yaml")
+    with open(cfg, "w") as fh:
+        fh.write("pcb: missing/board.kicad_pcb\n")
+    cwd = os.getcwd()
+    try:
+        os.chdir(tempfile.mkdtemp())
+        got = pcb_source.resolve_pcb_path(
+            "missing/board.kicad_pcb", "/tmp/wd", config_path=cfg)
+        assert not os.path.isfile(got)
+        assert os.path.realpath(got) == os.path.realpath(
+            os.path.join(os.getcwd(), "missing", "board.kicad_pcb"))
+    finally:
+        os.chdir(cwd)
+
+
 def test_file_sha256_hashes_input_bytes():
     fd, path = tempfile.mkstemp()
     with os.fdopen(fd, "wb") as fh:

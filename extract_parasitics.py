@@ -345,7 +345,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="dcdc_par_")
     pcb_input = args.pcb
-    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir)
+    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config)
     pcb_sha256 = pcb_source.file_sha256(args.pcb)
     config_sha256 = pcb_source.file_sha256(args.config) if args.config else None
 
