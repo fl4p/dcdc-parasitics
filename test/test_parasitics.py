@@ -257,27 +257,38 @@ def test_required_ports_reject_missing_power_loop():
 
 
 # ---------------------------------------------- issue #6: same-net pour tracks
-# A unit square pour outline (mm) for the containment guard.
-_POUR = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+# A 20 mm square pour outline (mm) for the containment guard.
+_POUR = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)]
 
 
-def _drop(pa, pb, contains):
-    """Mirror add_tracks' all-three-points guard: drop iff start, midpoint and
-    end are all inside the same-net pour."""
-    mx, my = 0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1])
-    return contains(*pa) and contains(mx, my) and contains(*pb)
+def _drop(pa, pb, contains, roi=None):
+    """Faithful mirror of add_tracks' real drop decision: sample densely along
+    the track (via the SAME _track_samples helper the production code uses) and
+    drop iff EVERY sample is inside both the pour and the ROI."""
+    samples = kicad_geom._track_samples(pa[0], pa[1], pb[0], pb[1])
+    return all(kicad_geom._in_roi(px, py, roi) and contains(px, py)
+               for px, py in samples)
 
 
 def test_point_in_polys_basic():
     assert kicad_geom.point_in_polys(5.0, 5.0, [_POUR])       # inside
-    assert not kicad_geom.point_in_polys(15.0, 5.0, [_POUR])  # outside
+    assert not kicad_geom.point_in_polys(25.0, 5.0, [_POUR])  # outside
     assert not kicad_geom.point_in_polys(5.0, 5.0, [])        # no pour -> outside
+
+
+def test_point_in_poly_with_holes():
+    # a thermal-relief / clearance void inside the fill is bare board, not copper
+    hole = [(8.0, 8.0), (12.0, 8.0), (12.0, 12.0), (8.0, 12.0)]
+    assert kicad_geom.point_in_poly_with_holes(2.0, 2.0, _POUR, [hole])   # copper
+    assert not kicad_geom.point_in_poly_with_holes(10.0, 10.0, _POUR, [hole])  # in hole
+    # same via the (outline, holes) form of point_in_polys
+    assert not kicad_geom.point_in_polys(10.0, 10.0, [(_POUR, [hole])])
 
 
 def test_track_fully_inside_pour_is_dropped():
     contains = lambda x, y: kicad_geom.point_in_polys(x, y, [_POUR])
-    # both endpoints + midpoint inside the same-net pour -> redundant, drop
-    assert _drop((2.0, 2.0), (8.0, 8.0), contains)
+    # whole span inside the same-net pour -> redundant, drop
+    assert _drop((2.0, 2.0), (18.0, 18.0), contains)
 
 
 def test_track_on_pourless_net_is_kept():
@@ -289,14 +300,43 @@ def test_track_on_pourless_net_is_kept():
 
 def test_track_straddling_pour_edge_is_kept():
     contains = lambda x, y: kicad_geom.point_in_polys(x, y, [_POUR])
-    # starts inside, ends well outside the pour edge -> NOT all-three inside
-    assert not _drop((5.0, 5.0), (20.0, 5.0), contains)
-    # endpoints inside but midpoint outside a concave/split pour also kept
-    left = [(0.0, 0.0), (4.0, 0.0), (4.0, 10.0), (0.0, 10.0)]
-    right = [(6.0, 0.0), (10.0, 0.0), (10.0, 10.0), (6.0, 10.0)]
+    # starts inside, ends well outside the pour edge -> a sample lands outside
+    assert not _drop((10.0, 10.0), (30.0, 10.0), contains)
+    # endpoints inside but the middle crosses a gap in a split pour -> kept
+    left = [(0.0, 0.0), (8.0, 0.0), (8.0, 20.0), (0.0, 20.0)]
+    right = [(12.0, 0.0), (20.0, 0.0), (20.0, 20.0), (12.0, 20.0)]
     c2 = lambda x, y: kicad_geom.point_in_polys(x, y, [left, right])
-    assert c2(2.0, 5.0) and c2(8.0, 5.0) and not c2(5.0, 5.0)  # midpoint in the gap
-    assert not _drop((2.0, 5.0), (8.0, 5.0), c2)
+    assert c2(4.0, 10.0) and c2(16.0, 10.0) and not c2(10.0, 10.0)  # gap in middle
+    assert not _drop((4.0, 10.0), (16.0, 10.0), c2)
+
+
+def test_track_dipping_through_void_is_kept():
+    # 3-point sampling would be fooled: start/mid/end all on copper, but a
+    # clearance void sits between the midpoint and an endpoint. Dense sampling
+    # (via _track_samples) lands a point in the void -> track kept.
+    hole = [(13.0, 9.0), (15.0, 9.0), (15.0, 11.0), (13.0, 11.0)]  # ~2mm void off-mid
+    contains = lambda x, y: kicad_geom.point_in_polys(x, y, [(_POUR, [hole])])
+    assert contains(2.0, 10.0) and contains(10.0, 10.0) and contains(18.0, 10.0)
+    assert not _drop((2.0, 10.0), (18.0, 10.0), contains)  # dense sampling saves it
+
+
+def test_track_outside_roi_is_kept_even_if_in_pour():
+    # whole span inside the pour, but the ROI excludes it -> no mesh substitute,
+    # so the track must be kept.
+    contains = lambda x, y: kicad_geom.point_in_polys(x, y, [_POUR])
+    roi = (0.0, 0.0, 5.0, 5.0)                     # small ROI in the corner
+    assert _drop((1.0, 1.0), (4.0, 4.0), contains, roi=roi)      # inside ROI: dropped
+    assert not _drop((10.0, 10.0), (18.0, 18.0), contains, roi=roi)  # outside ROI: kept
+
+
+def test_track_samples_spacing():
+    pts = kicad_geom._track_samples(0.0, 0.0, 1.0, 0.0, step=0.25)
+    assert pts[0] == (0.0, 0.0) and pts[-1] == (1.0, 0.0)
+    # consecutive spacing never exceeds the requested step
+    for (x0, _), (x1, _) in zip(pts, pts[1:]):
+        assert x1 - x0 <= 0.25 + 1e-9
+    # degenerate zero-length still yields the endpoints (>= 3 points)
+    assert len(kicad_geom._track_samples(3.0, 3.0, 3.0, 3.0)) >= 3
 
 
 def test_required_ports_reject_missing_gate_loop():
