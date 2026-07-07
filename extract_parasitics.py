@@ -14,6 +14,8 @@ Outputs (in OUTDIR):
                    shared source-lead branch (drop into a gate-drive / DPT sim)
   parasitics.json  named parasitics + full port L/R matrix + provenance
   report.md        human-readable table + topology sketch
+  mesh.html        self-contained layer viewer of the FastHenry mesh over the real
+                   PCB copper (toggle F.Cu/B.Cu/vias, pan/zoom); --no-viewer to skip
 
 With several --pitch values it runs a mesh-convergence sweep and reports the
 loop-L drift; the finest pitch is used for the emitted artifacts.
@@ -30,6 +32,7 @@ LIB = os.path.join(HERE, "lib")
 sys.path.insert(0, LIB)  # library modules live in lib/; root holds only this CLI
 
 import emit  # noqa: E402
+import mesh_viewer  # noqa: E402
 import pcb_source  # noqa: E402
 import solve_reduce  # noqa: E402
 
@@ -63,6 +66,7 @@ DEFAULTS = {
     "lf_freq": 1e5,
     "plateau": 5e6,
     "svg": False,
+    "viewer": True,
     "config": None,
 }
 
@@ -102,6 +106,7 @@ BOOL_ARGS = {
     "include_bulk_cin",
     "emit_cin_network",
     "svg",
+    "viewer",
 }
 
 
@@ -262,6 +267,10 @@ def build_parser():
     ap.add_argument("--svg", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
                     help="also write schematic.svg (half-bridge + parasitics)")
+    ap.add_argument("--viewer", action=argparse.BooleanOptionalAction,
+                    default=argparse.SUPPRESS,
+                    help="write mesh.html (self-contained layer viewer of the "
+                         "FastHenry mesh + real PCB copper overlay); on by default")
     ap.add_argument("-o", "--out", default=argparse.SUPPRESS, help="output directory")
     return ap
 
@@ -411,11 +420,42 @@ def main():
 
     pitch, p = results[-1]  # finest
     warn = emit.emit_all(p, args.out, svg=args.svg)
-    arts = "parasitics.lib, parasitics.json, report.md" + (", schematic.svg" if args.svg else "")
-    print(f"\nwrote {args.out}/{{{arts}}} "
+    arts = ["parasitics.lib", "parasitics.json", "report.md"]
+    if args.svg:
+        arts.append("schematic.svg")
+    viewer_msg = None
+    if args.viewer:
+        # `inp`/`side` are the finest pitch here (loop ends coarse->fine).
+        viewer_msg = write_viewer(args, inp, workdir)
+        if viewer_msg:
+            arts.append("mesh.html")
+    print(f"\nwrote {args.out}/{{{', '.join(arts)}}} "
           f"(pitch {pitch} mm, plateau {p['freq_Hz']:g} Hz)")
+    if args.viewer and viewer_msg:
+        print(f"  {viewer_msg}")
     for w in warn:
         print(f"  WARNING: {w}")
+
+
+def write_viewer(args, inp, workdir):
+    """Render the finest-pitch mesh as a self-contained mesh.html layer viewer, with
+    a best-effort real-PCB copper underlay (needs KiCad python for copper_dump.py).
+    Returns a status string, or None if rendering failed (never fatal to the run)."""
+    copper = os.path.join(workdir, "copper.json")
+    try:
+        r = subprocess.run([KICAD_PY, os.path.join(HERE, "copper_dump.py"),
+                            args.pcb, "-o", copper], capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(copper):
+            copper = None
+    except OSError:
+        copper = None
+    try:
+        return "mesh.html: " + mesh_viewer.build_viewer(
+            inp, os.path.join(args.out, "mesh.html"),
+            ports_json=inp + ".ports.json", copper=copper)
+    except Exception as e:                      # viewer is a convenience artifact, not core
+        sys.stderr.write(f"  (mesh.html skipped: {e})\n")
+        return None
 
 
 if __name__ == "__main__":
