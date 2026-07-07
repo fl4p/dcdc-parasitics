@@ -14,8 +14,9 @@ Outputs (in OUTDIR):
                    shared source-lead branch (drop into a gate-drive / DPT sim)
   parasitics.json  named parasitics + full port L/R matrix + provenance
   report.md        human-readable table + topology sketch
-  mesh.html        self-contained layer viewer of the FastHenry mesh over the real
+  mesh/mesh.html   self-contained layer viewer of the FastHenry mesh over the real
                    PCB copper (toggle F.Cu/B.Cu/vias, pan/zoom); --no-viewer to skip
+                   (the mesh_*.png layer rasters land beside it in mesh/)
 
 With several --pitch values it runs a mesh-convergence sweep and reports the
 loop-L drift; the finest pitch is used for the emitted artifacts.
@@ -269,8 +270,9 @@ def build_parser():
                     help="also write schematic.svg (half-bridge + parasitics)")
     ap.add_argument("--viewer", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
-                    help="write mesh.html (self-contained layer viewer of the "
-                         "FastHenry mesh + real PCB copper overlay); on by default")
+                    help="write mesh/mesh.html (self-contained layer viewer of the "
+                         "FastHenry mesh + real PCB copper overlay, with mesh_*.png "
+                         "rasters beside it); on by default")
     ap.add_argument("-o", "--out", default=argparse.SUPPRESS, help="output directory")
     return ap
 
@@ -428,7 +430,7 @@ def main():
         # `inp`/`side` are the finest pitch here (loop ends coarse->fine).
         viewer_msg = write_viewer(args, inp, workdir)
         if viewer_msg:
-            arts.append("mesh.html")
+            arts.append("mesh/mesh.html")
     print(f"\nwrote {args.out}/{{{', '.join(arts)}}} "
           f"(pitch {pitch} mm, plateau {p['freq_Hz']:g} Hz)")
     if args.viewer and viewer_msg:
@@ -440,6 +442,8 @@ def main():
 def write_viewer(args, inp, workdir):
     """Render the finest-pitch mesh as a self-contained mesh.html layer viewer, with
     a best-effort real-PCB copper underlay (needs KiCad python for copper_dump.py).
+    All mesh artifacts (mesh.html + mesh_*.png layer rasters) go into a `mesh/`
+    subfolder of the output dir so they don't clutter the top-level artifact set.
     Returns a status string, or None if rendering failed (never fatal to the run)."""
     copper = os.path.join(workdir, "copper.json")
     try:
@@ -449,9 +453,12 @@ def write_viewer(args, inp, workdir):
             copper = None
     except OSError:
         copper = None
+    mesh_dir = os.path.join(args.out, "mesh")
+    os.makedirs(mesh_dir, exist_ok=True)
+    out_html = os.path.join(mesh_dir, "mesh.html")
     try:
-        return "mesh.html: " + mesh_viewer.build_viewer(
-            inp, os.path.join(args.out, "mesh.html"),
+        return "mesh/mesh.html: " + mesh_viewer.build_viewer(
+            inp, out_html,
             ports_json=inp + ".ports.json", copper=copper)
     except Exception as e:                      # viewer is a convenience artifact, not core
         sys.stderr.write(f"  (mesh.html skipped: {e})\n")
