@@ -95,6 +95,18 @@ cu_thickness: 0.035
     assert args.cu_thickness == 0.07
 
 
+def test_mesh_complexity_line_formats_sidecar_stats():
+    side = {"mesh": dict(nodes=10, segs=20, filaments_est=40,
+                         nwinc=2, nhinc=1, ports=5, freq_points=11,
+                         work_units=8.8e5)}
+    line = extract_parasitics.mesh_complexity_line(1.0, side)
+    assert "pitch  1.0 mm mesh:" in line
+    assert "10 nodes, 20 segs" in line
+    assert "~40 filaments" in line
+    assert "5 ports, 11 freqs" in line
+    assert "work~880k" in line
+
+
 def test_github_blob_url_normalizes_to_raw():
     url = "https://github.com/org/repo/blob/main/hw/Fugu2/Fugu2.kicad_pcb"
     got = pcb_source.normalize_pcb_url(url)

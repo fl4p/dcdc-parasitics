@@ -143,6 +143,28 @@ def run_geom(args, pitch, outdir):
     return inp, side
 
 
+def fmt_work_units(n):
+    n = float(n or 0)
+    for suffix, scale in (("T", 1e12), ("G", 1e9), ("M", 1e6), ("k", 1e3)):
+        if abs(n) >= scale:
+            return f"{n / scale:.3g}{suffix}"
+    return f"{n:.0f}"
+
+
+def mesh_complexity_line(pitch, side):
+    mesh = side.get("mesh") or {}
+    if not mesh:
+        return None
+    return (
+        f"pitch {pitch:>4} mm mesh: "
+        f"{mesh.get('nodes', 0)} nodes, {mesh.get('segs', 0)} segs, "
+        f"~{mesh.get('filaments_est', 0)} filaments "
+        f"(nwinc={mesh.get('nwinc', 1)}, nhinc={mesh.get('nhinc', 1)}), "
+        f"{mesh.get('ports', 0)} ports, {mesh.get('freq_points', 0)} freqs, "
+        f"work~{fmt_work_units(mesh.get('work_units', 0))}"
+    )
+
+
 def require_gate_ports(side, pitch):
     """Fail hard when missing gate-loop ports would force reported CSI to zero.
 
@@ -353,6 +375,9 @@ def main():
     results = []
     for i, pitch in enumerate(pitches):
         inp, side = run_geom(args, pitch, workdir)
+        line = mesh_complexity_line(pitch, side)
+        if line:
+            print(line)
         meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"),
                     cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
                     lf_freq=side.get("lf_freq"),

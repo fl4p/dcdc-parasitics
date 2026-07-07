@@ -214,6 +214,23 @@ def test_model_uses_configured_copper_thickness():
     assert m.segs[-1][4] == 0.07
 
 
+def test_mesh_complexity_counts_sweep_points_and_work_units():
+    stats = dict(nodes=10, segs=20, ports=3)
+    c = kicad_geom.mesh_complexity(stats, nwinc=2, nhinc=3,
+                                   fmin=3.9e4, fmax=1e8, ndec=3)
+    assert c["freq_points"] == 11
+    assert c["filament_subdivisions"] == 6
+    assert c["filaments_est"] == 120
+    assert c["work_units"] == 120 * 120 * 3 * 11
+
+
+def test_freq_count_boundaries():
+    assert kicad_geom.freq_count(1e5, 1e8, 3) == 10
+    assert kicad_geom.freq_count(1e5, 1e5, 3) == 1
+    assert kicad_geom.freq_count(0, 1e8, 3) == 0
+    assert kicad_geom.freq_count(1e8, 1e5, 3) == 0
+
+
 def test_gate_driver_node_ignores_disconnected_same_net_island():
     m = kicad_geom.Model()
     gate = m.node("GATE", 0, 0.0, 0.0, 0.0)

@@ -38,6 +38,7 @@ the discovered topology for the reduce step.
 """
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -260,6 +261,38 @@ class Model:
         with open(path, "w") as f:
             f.write("\n".join(lines) + "\n")
         return dict(nodes=len(keep), segs=len(self.segs), ports=len(self.ports))
+
+
+def freq_count(fmin=1e5, fmax=1e8, ndec=3):
+    """Number of FastHenry sweep points for `.freq fmin=... fmax=... ndec=...`.
+
+    FastHenry steps by 10**(1/ndec) and includes fmin, stopping before the next
+    point would exceed fmax.
+    """
+    if fmin <= 0 or fmax < fmin or ndec <= 0:
+        return 0
+    return int(math.floor(math.log10(fmax / fmin) * ndec)) + 1
+
+
+def mesh_complexity(stats, nwinc=1, nhinc=1, fmin=1e5, fmax=1e8, ndec=3):
+    """Return a coarse, monotonic FastHenry complexity estimate.
+
+    The exact runtime depends on FastHenry internals and matrix conditioning, but
+    these values track the practical knobs: segment count, filament subdivision,
+    port count and number of solved frequency points. `work_units` is intentionally
+    dimensionless; use it only for comparing extractor runs on the same machine.
+    """
+    nodes = int(stats.get("nodes") or 0)
+    segs = int(stats.get("segs") or 0)
+    ports = int(stats.get("ports") or 0)
+    sub = max(1, int(nwinc)) * max(1, int(nhinc))
+    filaments = segs * sub
+    freqs = freq_count(fmin, fmax, ndec)
+    work_units = filaments * filaments * max(ports, 1) * max(freqs, 1)
+    return dict(nodes=nodes, segs=segs, ports=ports, nwinc=int(nwinc),
+                nhinc=int(nhinc), filament_subdivisions=sub,
+                filaments_est=filaments, freq_points=freqs,
+                work_units=work_units)
 
 
 # --------------------------------------------------------------------------- #
@@ -1127,6 +1160,8 @@ def main():
     stats = model.write(args.out, fmin=args.lf_freq,
                         nwinc=args.nwinc, nhinc=args.nhinc,
                         sigma=sigma_at(args.cu_temp))
+    complexity = mesh_complexity(stats, nwinc=args.nwinc, nhinc=args.nhinc,
+                                 fmin=args.lf_freq)
     # sidecar: port order + topology for the reduce step
     ports = [lbl for lbl, _, _ in model.ports]
     cin_used = topo.get("cin_used", [])
@@ -1141,10 +1176,13 @@ def main():
                           {kk: vv for kk, vv in v.items() if not kk.startswith("_") and kk != "pads"})
                       for k, v in topo.items()},
                 pitch=args.pitch, lead_mm=args.lead_mm, cu_temp=args.cu_temp,
-                cu_thickness=args.cu_thickness, lf_freq=args.lf_freq)
+                cu_thickness=args.cu_thickness, lf_freq=args.lf_freq,
+                mesh=complexity)
     with open(args.out + ".ports.json", "w") as f:
         json.dump(side, f, indent=2)
     print(f"wrote {args.out}: {stats['nodes']} nodes, {stats['segs']} segs, "
+          f"~{complexity['filaments_est']} filaments, "
+          f"{complexity['freq_points']} freqs, work~{complexity['work_units']:.3g}; "
           f"ports={ports}  Cin(in order)={cin_used}")
 
 
