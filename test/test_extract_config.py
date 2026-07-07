@@ -43,6 +43,7 @@ pitch: [2.0, 1.0]
 hs_ref: [Q1, Q3]
 ls_ref: [Q2]
 emit_cin_network: true
+parallel_fets: per-device
 weld_tol: 0.7
 margin: 6.5
 cu_thickness: 0.07
@@ -56,6 +57,7 @@ cu_thickness: 0.07
     assert args.hs_ref == ["Q1", "Q3"]
     assert args.ls_ref == ["Q2"]
     assert args.emit_cin_network is True
+    assert args.parallel_fets == "per-device"
     assert args.weld_tol == 0.7
     assert args.margin == 6.5
     assert args.cu_thickness == 0.07
@@ -185,6 +187,41 @@ def test_missing_gate_ports_hard_fails():
 
 def test_present_gate_ports_pass():
     side = {"ports": ["P_pwr", "P_ghs", "P_gls"], "topo": {}}
+    extract_parasitics.require_gate_ports(side, 2.0)  # no raise
+
+
+def test_per_device_gate_ports_are_required_from_manifest():
+    side = {
+        "ports": ["P_pwr", "P_ghs_Q1", "P_gls_Q2"],
+        "topo": {
+            "parallel_fets": "per-device",
+            "hs": {"device_ports": [
+                {"ref": "Q1", "gate_label": "P_ghs_Q1"},
+                {"ref": "Q3", "gate_label": "P_ghs_Q3"},
+            ]},
+            "ls": {"device_ports": [
+                {"ref": "Q2", "gate_label": "P_gls_Q2"},
+            ]},
+        },
+    }
+    e = _expect_exit(lambda: extract_parasitics.require_gate_ports(side, 2.0))
+    assert "P_ghs_Q3" in str(e.code)
+
+
+def test_per_device_gate_ports_pass_when_all_present():
+    side = {
+        "ports": ["P_pwr", "P_ghs_Q1", "P_ghs_Q3", "P_gls_Q2"],
+        "topo": {
+            "parallel_fets": "per-device",
+            "hs": {"device_ports": [
+                {"ref": "Q1", "gate_label": "P_ghs_Q1"},
+                {"ref": "Q3", "gate_label": "P_ghs_Q3"},
+            ]},
+            "ls": {"device_ports": [
+                {"ref": "Q2", "gate_label": "P_gls_Q2"},
+            ]},
+        },
+    }
     extract_parasitics.require_gate_ports(side, 2.0)  # no raise
 
 

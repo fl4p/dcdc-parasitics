@@ -39,6 +39,7 @@ the discovered topology for the reduce step.
 import argparse
 import json
 import os
+import re
 import sys
 
 import pcbnew
@@ -392,51 +393,93 @@ def _pad_node_stack(board, model, zmap, fp, want_net):
     return None, None
 
 
-def build_fet(board, model, zmap, topo, role, lead_mm):
+def _port_ref(ref):
+    return re.sub(r"[^A-Za-z0-9_]+", "_", ref)
+
+
+def _gate_port_label(role, ref, parallel_mode):
+    if parallel_mode == "per-device":
+        return f"P_g{role}_{_port_ref(ref)}"
+    return "P_ghs" if role == "hs" else "P_gls"
+
+
+def _switch_port_label(role, ref, parallel_mode):
+    if parallel_mode == "per-device":
+        return f"P_{role}_{_port_ref(ref)}"
+    return f"P_{role}"
+
+
+def _require_unique_device_labels(role, refs, parallel_mode):
+    if parallel_mode != "per-device":
+        return
+    gate_labels = [_gate_port_label(role, ref, parallel_mode) for ref in refs]
+    switch_labels = [_switch_port_label(role, ref, parallel_mode) for ref in refs]
+    for kind, labels in (("gate", gate_labels), ("switch", switch_labels)):
+        dup = sorted({lbl for lbl in labels if labels.count(lbl) > 1})
+        if dup:
+            raise ValueError(
+                f"{role.upper()} per-device {kind} port label collision for refs "
+                f"{refs}: {', '.join(dup)}; rename refdes or adjust label generation")
+
+
+def build_fet(board, model, zmap, topo, role, lead_mm, parallel_mode="lumped"):
     """Add lead stubs + die shorts for one FET role; return port endpoints."""
     d = topo[role]
     refs = d["refs"]
+    _require_unique_device_labels(role, refs, parallel_mode)
     fps = {fp.GetReference(): fp for fp in board.GetFootprints() if fp.GetReference() in refs}
-    # Parallel FETs share the drain/source rails: model each one's drain+source
-    # lead stubs (they parallel in the power loop, lowering the effective lead L)
-    # and equiv their dies. Only the FIRST FET's gate is ported (d["gate"]);
-    # paralleled FETs may sit on separate gate nets (Net-(Q1-G) vs Net-(Q3-G)), so
-    # their gates are not required or modeled here.
+    by_ref = {dev.get("ref"): dev for dev in d.get("devices", [])}
+    # Default mode preserves the historical lumped parallel-device model. The
+    # issue #5 path is opt-in: each physical FET keeps its own die/source/gate
+    # branch and gets its own FastHenry port labels.
     die_src = die_drn = die_gate = gate_pad_node = None
     src_pad_node = drn_pad_node = None
+    devices = []
     for ref in refs:
         fp = fps[ref]
-        dn, dpos = _pad_node_stack(board, model, zmap, fp, d["drain"])
-        sn, spos = _pad_node_stack(board, model, zmap, fp, d["source"])
+        dev = by_ref.get(ref, {})
+        drain = dev.get("drain", d["drain"])
+        source = dev.get("source", d["source"])
+        gate = dev.get("gate", d["gate"])
+        dn, dpos = _pad_node_stack(board, model, zmap, fp, drain)
+        sn, spos = _pad_node_stack(board, model, zmap, fp, source)
         if not (dn and sn):
             raise ValueError(f"{ref}: could not resolve drain/source pads "
-                             f"(drain={d['drain']}, source={d['source']})")
+                             f"(drain={drain}, source={source})")
         # vertical lead stubs up to a die plane at z = +lead_mm
-        dref = model.node(d["drain"], "DIE", *dpos, lead_mm)
-        sref = model.node(d["source"], "DIE", *spos, lead_mm)
+        die_layer = "DIE" if parallel_mode == "lumped" else f"DIE_{ref}"
+        dref = model.node(drain, die_layer, *dpos, lead_mm)
+        sref = model.node(source, die_layer, *spos, lead_mm)
         model.seg(dn, dref, 1.0)
         model.seg(sn, sref, 1.0)
         model.equiv(dref, sref)  # channel short at the die
-        if die_src is None:
-            # first FET: also model + port its gate loop
-            gn, gpos = _pad_node_stack(board, model, zmap, fp, d["gate"])
+        if parallel_mode == "per-device" or die_src is None:
+            gn, gpos = _pad_node_stack(board, model, zmap, fp, gate)
             if not gn:
-                raise ValueError(f"{ref}: could not resolve gate pad on {d['gate']}")
-            gref = model.node(d["gate"], "DIE", *gpos, lead_mm)
+                raise ValueError(f"{ref}: could not resolve gate pad on {gate}")
+            gref = model.node(gate, die_layer, *gpos, lead_mm)
             model.seg(gn, gref, 0.5)
             model.equiv(gref, sref)
-            die_src, die_drn, die_gate = sref, dref, gref
-            gate_pad_node = gn
-            src_pad_node = sn
-            drn_pad_node = dn
         else:
+            gn = gref = None
+        if die_src is None:
+            die_src, die_drn, die_gate = sref, dref, gref
+            gate_pad_node, src_pad_node, drn_pad_node = gn, sn, dn
+        elif parallel_mode == "lumped":
             model.equiv(die_src, sref)
             model.equiv(die_drn, dref)
+        devices.append(dict(ref=ref, gate=gate, drain=drain, source=source,
+                            gate_label=_gate_port_label(role, ref, parallel_mode),
+                            switch_label=_switch_port_label(role, ref, parallel_mode),
+                            _die_src=sref, _die_drn=dref, _die_gate=gref,
+                            _gate_pad_node=gn, _src_pad_node=sn,
+                            _drn_pad_node=dn))
     d["_die_src"] = die_src
     d["_die_gate"] = die_gate
     d["_gate_pad_node"] = gate_pad_node
     d["_src_pad_node"] = src_pad_node
     d["_drn_pad_node"] = drn_pad_node
+    d["_devices"] = devices
     return d
 
 
@@ -474,6 +517,15 @@ def validate_required_ports(model, topo):
             "P_pwr input-cap commutation port missing: no valid Vin/GND Cin was "
             "ported; check input caps, --cin-refs, --include-bulk-cin, Vin/GND nets")
     for role, label in (("hs", "P_ghs"), ("ls", "P_gls")):
+        gate_labels = _required_gate_labels(topo, role)
+        if gate_labels:
+            missing_dev = [l for l in gate_labels if l not in labels]
+            if not missing_dev:
+                continue
+            missing.append(
+                f"{role.upper()} per-device gate-loop port(s) missing: "
+                f"{', '.join(missing_dev)}; check per-FET gate nets / routing")
+            continue
         if label in labels:
             continue
         d = topo.get(role, {})
@@ -487,6 +539,14 @@ def validate_required_ports(model, topo):
     if missing:
         raise ValueError("invalid half-bridge topology for parasitic extraction:\n  - "
                          + "\n  - ".join(missing))
+
+
+def _required_gate_labels(topo, role):
+    if topo.get("parallel_fets") != "per-device":
+        return []
+    d = topo.get(role, {})
+    return [dev.get("gate_label") for dev in d.get("_devices", [])
+            if dev.get("gate_label")]
 
 
 # --------------------------------------------------------------------------- #
@@ -508,11 +568,19 @@ def _roi(board, topo, margin=8.0):
 
 def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
           cu_thickness=CU_T,
-          cin_refs=None, include_bulk=False, weld_tol=0.6, emit_cin_network=False):
+          cin_refs=None, include_bulk=False, weld_tol=0.6, emit_cin_network=False,
+          parallel_fets="lumped"):
     zmap = layer_z_map(board)
     model = Model(cu_thickness=cu_thickness)
     power_nets = {topo["sw"], topo["vin"], topo["gnd"]}
-    gate_nets = {topo["hs"]["gate"], topo["ls"]["gate"]}
+
+    def side_gate_nets(role):
+        if parallel_fets == "per-device":
+            return {dev.get("gate", topo[role]["gate"])
+                    for dev in topo[role].get("devices", [])}
+        return {topo[role]["gate"]}
+
+    gate_nets = side_gate_nets("hs") | side_gate_nets("ls")
     nets = power_nets | gate_nets
     roi = _roi(board, topo, margin)
 
@@ -521,8 +589,8 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     add_zones(board, model, zmap, power_nets, pitch, roi=roi)
 
     # FET leads + die shorts
-    build_fet(board, model, zmap, topo, "hs", lead_mm)
-    build_fet(board, model, zmap, topo, "ls", lead_mm)
+    build_fet(board, model, zmap, topo, "hs", lead_mm, parallel_mode=parallel_fets)
+    build_fet(board, model, zmap, topo, "ls", lead_mm, parallel_mode=parallel_fets)
 
     # Cin pad stacks (create nodes now so the global stitch bonds them to the pours).
     # With cin_parallel>1 the N nearest ceramics each get their own port, so the
@@ -566,10 +634,17 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     topo["cin_used"] = [ref for ref, _, _ in cins]
     for role, label in (("hs", "P_ghs"), ("ls", "P_gls")):
         d = topo[role]
-        drv = gate_driver_node(model, d["gate"], d.get("_gate_pad_node"))
-        ret = d["_die_src"] if d["kelvin"] else d["_src_pad_node"]
-        if drv and ret:
-            model.port(label, drv, ret)
+        if parallel_fets == "per-device":
+            for dev in d.get("_devices", []):
+                drv = gate_driver_node(model, dev["gate"], dev.get("_gate_pad_node"))
+                ret = dev["_die_src"] if d["kelvin"] else dev["_src_pad_node"]
+                if drv and ret:
+                    model.port(dev["gate_label"], drv, ret)
+        else:
+            drv = gate_driver_node(model, d["gate"], d.get("_gate_pad_node"))
+            ret = d["_die_src"] if d["kelvin"] else d["_src_pad_node"]
+            if drv and ret:
+                model.port(label, drv, ret)
 
     # ---- conduction ports (LF, per-side R for conduction-loss attribution) ----
     # Anchored on the bulk cap (cref), not the HF MLCC: P_hs drives Vin(bulk)->SW
@@ -578,14 +653,30 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     # P_bulk is the full LF loop over the bulk cap for the reconstruction check.
     if cref:
         cond_ref, cvn_dc, cgn_dc, cond_klass = cref
-        hs_sw = topo["hs"].get("_src_pad_node")   # HS source pad (on SW)
-        ls_sw = topo["ls"].get("_drn_pad_node")   # LS drain pad (on SW)
         model.port("P_bulk", cvn_dc, cgn_dc)
-        if hs_sw:
-            model.port("P_hs", cvn_dc, hs_sw)
-        if ls_sw:
-            model.port("P_ls", ls_sw, cgn_dc)
+        if parallel_fets == "per-device":
+            for dev in topo["hs"].get("_devices", []):
+                if dev.get("_src_pad_node"):
+                    model.port(dev["switch_label"], cvn_dc, dev["_src_pad_node"])
+            for dev in topo["ls"].get("_devices", []):
+                if dev.get("_drn_pad_node"):
+                    model.port(dev["switch_label"], dev["_drn_pad_node"], cgn_dc)
+        else:
+            hs_sw = topo["hs"].get("_src_pad_node")   # HS source pad (on SW)
+            ls_sw = topo["ls"].get("_drn_pad_node")   # LS drain pad (on SW)
+            if hs_sw:
+                model.port("P_hs", cvn_dc, hs_sw)
+            if ls_sw:
+                model.port("P_ls", ls_sw, cgn_dc)
         topo["cond_ref"] = dict(ref=cond_ref, cls=cond_klass)
+    topo["parallel_fets"] = parallel_fets
+    if parallel_fets == "per-device":
+        for role in ("hs", "ls"):
+            topo[role]["device_ports"] = [
+                dict(ref=dev["ref"], gate=dev["gate"],
+                     gate_label=dev["gate_label"], switch_label=dev["switch_label"])
+                for dev in topo[role].get("_devices", [])
+            ]
 
     # drop any port disconnected from the commutation loop (e.g. a distant bulk cap
     # whose pad never bonds into the pour at this pitch) — one floating port NaNs the
@@ -818,6 +909,8 @@ def main():
     ap.add_argument("--emit-cin-network", action="store_true",
                     help="port the full input-cap bank individually (P_cin_<ref>) for the "
                          "per-cap branch decomposition consumed by the loss tool's cin_network")
+    ap.add_argument("--parallel-fets", choices=("lumped", "per-device"), default="lumped",
+                    help="parallel switch model: lumped (legacy) or per-device gates/leads")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--weld-tol", type=float, default=0.6,
                     help="fuse same-net nodes within this many mm (fixes pad/trace and "
@@ -851,7 +944,8 @@ def main():
                       cu_thickness=args.cu_thickness,
                       cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
                       include_bulk=args.include_bulk_cin, weld_tol=args.weld_tol,
-                      emit_cin_network=args.emit_cin_network)
+                      emit_cin_network=args.emit_cin_network,
+                      parallel_fets=args.parallel_fets)
     except ValueError as e:
         raise SystemExit(str(e))
     dropped = topo.get("cin_dropped_ports")

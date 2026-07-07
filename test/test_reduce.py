@@ -164,6 +164,87 @@ check("CSI side ports still report LS side mutual",
       abs(p10b["csi_ls_loop"] - 1.7e-9) < 1e-15,
       f"side={p10b['csi_ls']*1e9:.2f} loop={p10b['csi_ls_loop']*1e9:.2f} nH")
 
+# 10c. Per-device parallel-FET ports: each physical gate/source branch is preserved
+#      in parallel_devices, while side-level scalars remain max-per-device
+#      compatibility values for legacy consumers.
+rows10c = ["P_pwr", "P_ghs_Q1", "P_ghs_Q3", "P_gls_Q2",
+           "P_hs_Q1", "P_hs_Q3", "P_ls_Q2"]
+i10c = {p: i for i, p in enumerate(rows10c)}
+L10c = np.eye(len(rows10c)) * 4e-9
+L10c[i10c["P_ghs_Q1"], i10c["P_ghs_Q1"]] = 9e-9
+L10c[i10c["P_ghs_Q3"], i10c["P_ghs_Q3"]] = 14e-9
+L10c[i10c["P_gls_Q2"], i10c["P_gls_Q2"]] = 7e-9
+L10c[i10c["P_ghs_Q1"], i10c["P_hs_Q1"]] = L10c[i10c["P_hs_Q1"], i10c["P_ghs_Q1"]] = 1.1e-9
+L10c[i10c["P_ghs_Q3"], i10c["P_hs_Q3"]] = L10c[i10c["P_hs_Q3"], i10c["P_ghs_Q3"]] = 2.4e-9
+L10c[i10c["P_gls_Q2"], i10c["P_ls_Q2"]] = L10c[i10c["P_ls_Q2"], i10c["P_gls_Q2"]] = 0.8e-9
+L10c[i10c["P_hs_Q1"], i10c["P_hs_Q1"]] = 11e-9
+L10c[i10c["P_hs_Q3"], i10c["P_hs_Q3"]] = 16e-9
+R10c = np.zeros_like(L10c)
+R10c[i10c["P_pwr"], i10c["P_pwr"]] = 1e-3
+R10c[i10c["P_hs_Q1"], i10c["P_hs_Q1"]] = 3e-3
+R10c[i10c["P_hs_Q3"], i10c["P_hs_Q3"]] = 6e-3
+R10c[i10c["P_ls_Q2"], i10c["P_ls_Q2"]] = 4e-3
+Z10c = R10c.astype(complex) + 1j * W * L10c.astype(complex)
+topo10c = {"parallel_fets": "per-device",
+           "hs": {"device_ports": [
+               {"ref": "Q1", "gate_label": "P_ghs_Q1", "switch_label": "P_hs_Q1"},
+               {"ref": "Q3", "gate_label": "P_ghs_Q3", "switch_label": "P_hs_Q3"},
+           ]},
+           "ls": {"device_ports": [
+               {"ref": "Q2", "gate_label": "P_gls_Q2", "switch_label": "P_ls_Q2"},
+           ]}}
+p10c = sr.reduce_parasitics({1e5: R10c.astype(complex), 5e6: Z10c}, rows10c, topo10c, {},
+                            plateau=5e6, cin_ports=["P_pwr"])
+hsdev = {d["ref"]: d for d in p10c["parallel_devices"]["hs"]}
+check("per-device HS gate L preserved",
+      abs(hsdev["Q1"]["L_gate"] - 9e-9) < 1e-15 and
+      abs(hsdev["Q3"]["L_gate"] - 14e-9) < 1e-15,
+      ", ".join(f'{r}={hsdev[r]["L_gate"]*1e9:.1f}nH' for r in ("Q1", "Q3")))
+check("per-device HS CSI preserved",
+      abs(hsdev["Q1"]["csi"] - 1.1e-9) < 1e-15 and
+      abs(hsdev["Q3"]["csi"] - 2.4e-9) < 1e-15,
+      ", ".join(f'{r}={hsdev[r]["csi"]*1e9:.1f}nH' for r in ("Q1", "Q3")))
+check("per-device side scalar is conservative max",
+      abs(p10c["L_gate_hs"] - 14e-9) < 1e-15 and
+      abs(p10c["csi_hs"] - 2.4e-9) < 1e-15)
+check("per-device switch-path L preserved",
+      abs(hsdev["Q1"]["L_switch"] - 11e-9) < 1e-15 and
+      abs(hsdev["Q3"]["L_switch"] - 16e-9) < 1e-15,
+      ", ".join(f'{r}={hsdev[r]["L_switch"]*1e9:.1f}nH' for r in ("Q1", "Q3")))
+check("per-device aggregate conduction R is parallel effective",
+      abs(p10c["r_hs"] - 2e-3) < 1e-12,
+      f'{p10c["r_hs"]*1e3:.3f} mΩ')
+
+# 10d. Legacy lumped mode may have sidecar topology records, but they must not be
+#      interpreted as per-device ports or warn as if per-device extraction ran.
+rows10d = ["P_pwr", "P_ghs", "P_gls", "P_hs", "P_ls"]
+L10d = np.eye(len(rows10d)) * 5e-9
+L10d[1, 3] = L10d[3, 1] = 1.6e-9
+topo10d = {"parallel_fets": "lumped",
+           "hs": {"device_ports": [
+               {"ref": "Q1", "gate_label": "P_ghs", "switch_label": "P_hs"},
+               {"ref": "Q3", "gate_label": "P_ghs", "switch_label": "P_hs"},
+           ]}}
+p10d = reduce(L10d, rows10d, ["P_pwr"], topo10d)
+check("lumped ignores device_ports manifest",
+      "parallel_devices" not in p10d and
+      not any("per-device parallel-FET" in w for w in p10d["reduce_warn"]),
+      str(p10d.get("parallel_devices")))
+
+# 10e. Ref fallback preserves normalized refs that contain underscores.
+rows10e = ["P_pwr", "P_ghs_Q_1", "P_gls_Q2", "P_hs_Q_1", "P_ls_Q2"]
+topo10e = {"parallel_fets": "per-device",
+           "hs": {"device_ports": [
+               {"gate_label": "P_ghs_Q_1", "switch_label": "P_hs_Q_1"},
+           ]},
+           "ls": {"device_ports": [
+               {"ref": "Q2", "gate_label": "P_gls_Q2", "switch_label": "P_ls_Q2"},
+           ]}}
+p10e = reduce(np.eye(len(rows10e)) * 5e-9, rows10e, ["P_pwr"], topo10e)
+check("per-device ref fallback preserves underscores",
+      p10e["parallel_devices"]["hs"][0]["ref"] == "Q_1",
+      p10e["parallel_devices"]["hs"][0]["ref"])
+
 # 11. cin branch decomposition: shared Vin/GND trunk + private branch per cap.
 L_sh, Lb = 8e-9, [2e-9, 3e-9, 5e-9]
 R_sh, Rb = 0.5e-3, [1e-3, 2e-3, 0.5e-3]

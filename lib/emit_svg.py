@@ -183,6 +183,17 @@ def _clip(s, n):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _parallel_device_rows(p):
+    pdev = p.get("parallel_devices") or {}
+    rows = []
+    for role, side in (("hs", "HS"), ("ls", "LS")):
+        for d in pdev.get(role) or []:
+            rows.append((side, d.get("ref", "?"),
+                         _num(d.get("L_gate")) or 0.0,
+                         _num(d.get("csi")) or 0.0))
+    return rows
+
+
 def schematic(p):
     t = p["topo"]
     m = p.get("meta", {})
@@ -469,6 +480,22 @@ def schematic(p):
     s.append(_txt(58, ly + 22,
                   "commutation-loop / gate-loop inductance   ·   Lgate label shows total "
                   "(incl. shared Lscs)", 11, INK, "start"))
+    pdev_rows = _parallel_device_rows(p)
+    if pdev_rows:
+        px, py, pw = 566, H - 92, 270
+        ph = 26 + min(len(pdev_rows), 4) * 14 + (12 if len(pdev_rows) > 4 else 0)
+        s.append(f"<rect x='{px}' y='{py}' width='{pw}' height='{ph}' rx='4' "
+                 f"fill='#fffdf5' stroke='#d0b35a' stroke-width='1.2'/>")
+        s.append(_txt(px + 10, py + 17, "per-device FET parasitics", 10.5,
+                      INK, "start", "bold"))
+        for i, (side, ref, lg, csi) in enumerate(pdev_rows[:4]):
+            s.append(_txt(px + 10, py + 33 + i * 14,
+                          f"{side} {ref}: Lg {_fmtL(lg)}, CSI {_fmtL(csi)}",
+                          9.5, INK, "start"))
+        if len(pdev_rows) > 4:
+            s.append(_txt(px + 10, py + 33 + 4 * 14,
+                          f"+{len(pdev_rows) - 4} more in parasitics.json",
+                          9, MUTE, "start", ital=True))
     s.append("</svg>")
     return "\n".join(s) + "\n"
 

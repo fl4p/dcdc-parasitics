@@ -202,6 +202,12 @@ out: out/
 de-fragmentation, see below); `--margin` sets the pour-meshing ROI around the
 FETs/Cin.
 
+`--parallel-fets per-device` opts into the issue #5 extraction model for
+paralleled switches: each physical FET keeps its own die/source/gate branch and
+gets its own gate + switch-side ports (`P_ghs_Q1`, `P_hs_Q1`, ...). The default
+is `--parallel-fets lumped`, which preserves the historical lumped parallel-FET
+model and existing downstream behavior.
+
 Example — Fugu2 (2-layer buck, paralleled HS, explicit HF cap bank):
 
 ```sh
@@ -320,23 +326,34 @@ Each `lib/` module also has a small `__main__` for standalone/debug use (e.g.
 
 ## Paralleled switches
 
-`--hs-ref`/`--ls-ref` accept several refdes (e.g. `--hs-ref Q1 Q3`). Each
-paralleled FET contributes its own drain and source lead stubs; the dies are
-tied to one node, so between the rails you get the drain leads in parallel and
-the source leads in parallel, and **FastHenry solves the real current split** —
-the lower-inductance (shorter) device carries more current, so `L_loop` is the
-impedance-weighted parallel value, *not* a naïve `L/2` and *not* the
-shorter-path-only value. Two caveats:
+`--hs-ref`/`--ls-ref` accept several refdes (e.g. `--hs-ref Q1 Q3`). By default
+(`--parallel-fets lumped`) each paralleled FET contributes its own drain and
+source lead stubs; the dies are tied to one node, so between the rails you get
+the drain leads in parallel and the source leads in parallel, and **FastHenry
+solves the real current split** — the lower-inductance (shorter) device carries
+more current, so `L_loop` is the impedance-weighted parallel value, *not* a
+naïve `L/2` and *not* the shorter-path-only value. Caveats:
 
 - **Ideal channel.** Tying the dies models `Rds_on = 0`, so the split is set by
   copper/lead impedance alone. That is the dominant term at the commutation edge
   (good for SW-peak/di-dt) but ignores the `Rds_on` that equalises the split at
   low frequency — `L_loop` is the HF, channel-ideal value.
-- **CSI is the parallel combination.** The reported `CSI_hs` is the paralleled
-  source leads, but each device's gate-return current flows through *its own*
-  source lead, so the CSI a single gate driver feels is **higher** than reported.
-  Only the first FET's gate loop is ported (gate skew not modelled). For accurate
-  parallel-pair gate-drive CSI, port that device's own source segment.
+- **CSI is the parallel combination in lumped mode.** The reported `CSI_hs` is
+  the paralleled source leads, but each device's gate-return current flows
+  through *its own* source lead, so the CSI a single gate driver feels is
+  **higher** than reported. In lumped mode only the first FET's gate loop is
+  ported, for compatibility with old outputs.
+- **Per-device mode is opt-in.** With `--parallel-fets per-device`, parallel
+  dies are no longer `.equiv`'d together and each physical FET gets separate
+  gate + switch-side ports. `parasitics.json.parallel_devices` carries per-ref
+  `L_gate`, `R_gate`, `csi`, `csi_loop`, `L_switch`, and `r_switch`; the side-level
+  `L_gate_hs`/`csi_hs` scalars remain as max-per-device compatibility values
+  for older consumers. The loss deck consumes the per-ref gate/CSI values directly
+  and treats `L_switch` as total per-device switch-path self-L. Because per-device
+  CSI is already placed as `Lscs`, the loss deck derives a non-negative drain-side
+  residual from `L_switch - csi` and adds only the excess over the lowest residual
+  on that side. This preserves total switch-path imbalance without adding the
+  source contribution twice.
 
 ## Limitations / notes
 

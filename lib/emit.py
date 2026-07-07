@@ -208,6 +208,32 @@ def markdown(p):
             "the copper budget. The two sides are split by real geometry, not 50/50.",
         ]
 
+    pdev = p.get("parallel_devices") or {}
+    if any(pdev.get(role) for role in ("hs", "ls")):
+        lines += [
+            "",
+            "## Per-device parallel FET parasitics",
+            "",
+            "`--parallel-fets per-device` was used, so each physical FET has its own "
+            "gate-loop and source-lead CSI port. The side-level `L_gate_*` / `csi_*` "
+            "rows above are compatibility summaries; use these per-ref rows for "
+            "layout-asymmetry checks and the loss deck's per-device branches.",
+            "",
+            "| Side | Ref | Gate port | Switch port | Gate-loop L | CSI | CSI vs full loop | Switch-path L | Switch R |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|",
+        ]
+        for role, side_name in (("hs", "HS"), ("ls", "LS")):
+            for d in pdev.get(role) or []:
+                lsw = d.get("L_switch")
+                rsw = d.get("r_switch")
+                lsw_txt = L(lsw) if lsw is not None else "—"
+                rsw_txt = f"{rsw*1e3:.2f} mΩ" if rsw is not None else "—"
+                lines.append(
+                    f"| {side_name} | {d.get('ref','?')} | `{d.get('gate_port','')}` | "
+                    f"`{d.get('switch_port','')}` | {L(d.get('L_gate') or 0)} | "
+                    f"{L(d.get('csi') or 0)} | {L(d.get('csi_loop') or 0)} | "
+                    f"{lsw_txt} | {rsw_txt} |")
+
     branches = p.get("cin_branches_lf") or p.get("cin_branches") or []
     if branches:
         cin_l = p.get("cin_L_shared_lf", p.get("cin_L_shared", 0))

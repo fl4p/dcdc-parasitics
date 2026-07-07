@@ -188,6 +188,19 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
                 f"expected net(s) {missing}; gate={gate!r}, drain={drain!r}, "
                 f"source={source!r}")
 
+    def side_devices(role, recs, drain, source, gate_override):
+        """Per-physical-FET topology records. The side-level gate remains the
+        first device's gate for compatibility with the historical lumped model."""
+        out = []
+        other = source if role == "ls" else drain
+        for rec in recs:
+            gate, _rail = classify_gate_and_rail(rec, other, gate_override)
+            validate_switch(role, [rec], gate, drain, source)
+            out.append(dict(ref=rec["ref"], gate=gate, drain=drain, source=source))
+        return out
+
+    hs_devs = side_devices("hs", hs, vin_net, sw, hs_gate)
+    ls_devs = side_devices("ls", ls, sw, gnd, ls_gate)
     validate_switch("hs", hs, hs_gate_net, vin_net, sw)
     validate_switch("ls", ls, ls_gate_net, sw, gnd)
 
@@ -218,12 +231,14 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
                 gate_return=source_net("hs") if not hs_kv else "KELVIN",
                 gate_drive=gate_network(board, hs_gate_net, [r["ref"] for r in hs],
                                         exclude_nets={sw, gnd, vin_net}),
+                devices=hs_devs,
                 pads={r["ref"]: r["pads"] for r in hs}),
         ls=dict(refs=[r["ref"] for r in ls], gate=ls_gate_net,
                 drain=sw, source=gnd, kelvin=ls_kv,
                 gate_return=source_net("ls") if not ls_kv else "KELVIN",
                 gate_drive=gate_network(board, ls_gate_net, [r["ref"] for r in ls],
                                         exclude_nets={sw, gnd, vin_net}),
+                devices=ls_devs,
                 pads={r["ref"]: r["pads"] for r in ls}),
         cin=cin,
     )

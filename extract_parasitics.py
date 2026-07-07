@@ -50,6 +50,7 @@ DEFAULTS = {
     "cin_refs": None,
     "include_bulk_cin": False,
     "emit_cin_network": False,
+    "parallel_fets": "lumped",
     "cin_esl": 0.0,
     "cin_esr": 0.0,
     "lead_mm": 3.0,
@@ -93,6 +94,7 @@ SCALAR_TYPES = {
     "plateau": float,
     "out": str,
     "config": str,
+    "parallel_fets": str,
 }
 BOOL_ARGS = {
     "hs_kelvin",
@@ -131,6 +133,7 @@ def run_geom(args, pitch, outdir):
         cmd.append("--include-bulk-cin")
     if args.emit_cin_network:
         cmd.append("--emit-cin-network")
+    cmd += ["--parallel-fets", args.parallel_fets]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
@@ -147,8 +150,20 @@ def require_gate_ports(side, pitch):
     a ports sidecar that reaches here without P_ghs/P_gls means the child bypassed
     that gate. Refuse to emit a bogus 0.00 nH CSI rather than warn and continue."""
     ports = set(side.get("ports") or [])
+    topo = side.get("topo") or {}
     dropped = set((side.get("topo") or {}).get("cin_dropped_ports") or [])
-    missing = [p for p in ("P_ghs", "P_gls") if p not in ports]
+
+    def required(role, legacy):
+        if topo.get("parallel_fets") == "per-device":
+            labels = [d.get("gate_label") for d in
+                      ((topo.get(role) or {}).get("device_ports") or [])
+                      if d.get("gate_label")]
+            if labels:
+                return labels
+        return [legacy]
+
+    missing = [p for p in required("hs", "P_ghs") + required("ls", "P_gls")
+               if p not in ports]
     if not missing:
         return
     dropped_txt = " dropped by geometry connectivity pruning" if dropped.intersection(missing) else ""
@@ -194,6 +209,9 @@ def build_parser():
                     default=argparse.SUPPRESS,
                     help="port the full input-cap bank for the per-cap branch "
                          "decomposition (cin_branches in JSON) the loss tool consumes")
+    ap.add_argument("--parallel-fets", choices=("lumped", "per-device"),
+                    default=argparse.SUPPRESS,
+                    help="parallel switch model: lumped (legacy) or per-device gates/leads")
     ap.add_argument("--cin-esl", type=float, default=argparse.SUPPRESS,
                     help="per-cap ESL (nH) added to each branch -> physical current "
                          "split at f_ring; 0 = ideal-cap copper-only lower bound")
@@ -315,6 +333,8 @@ def parse_args(argv=None):
         ap.error("--cu-thickness must be > 0 mm")
     if merged["lf_freq"] <= 0:
         ap.error("--lf-freq must be > 0 Hz")
+    if merged["parallel_fets"] not in ("lumped", "per-device"):
+        ap.error("--parallel-fets must be one of: lumped, per-device")
 
     return argparse.Namespace(**merged)
 

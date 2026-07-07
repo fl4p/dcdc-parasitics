@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(
 
 import numpy as np  # noqa: E402
 
+import emit  # noqa: E402
 import emit_svg  # noqa: E402
 
 # kicad_geom does `import pcbnew` at module top; stub it so we can import the
@@ -99,6 +100,37 @@ def test_schematic_cin_bank():
     svg = emit_svg.schematic(p)
     assert "60%" in svg and "40%" in svg   # per-cap current split
     assert "not in" in svg                 # C2/C4 greyed out
+
+
+def test_schematic_per_device_callout():
+    p = _p(topo=_topo(hs=dict(refs=["Q1", "Q3"], gate="HG", kelvin=False)),
+           parallel_devices=dict(
+               hs=[
+                   dict(ref="Q1", gate_port="P_ghs_Q1", switch_port="P_hs_Q1",
+                        L_gate=9e-9, csi=1.1e-9, csi_loop=0.2e-9, r_switch=3e-3),
+                   dict(ref="Q3", gate_port="P_ghs_Q3", switch_port="P_hs_Q3",
+                        L_gate=14e-9, csi=2.4e-9, csi_loop=0.4e-9, r_switch=6e-3),
+               ],
+               ls=[]))
+    svg = emit_svg.schematic(p)
+    assert "per-device FET parasitics" in svg
+    assert "HS Q1: Lg 9.00 nH, CSI 1.10 nH" in svg
+    assert "HS Q3: Lg 14.00 nH, CSI 2.40 nH" in svg
+
+
+def test_markdown_per_device_table():
+    p = _p(topo=_topo(hs=dict(refs=["Q1", "Q3"], gate="HG", kelvin=False)),
+           n_cin=1, L_loop_single=7e-9,
+           parallel_devices=dict(
+               hs=[
+                   dict(ref="Q1", gate_port="P_ghs_Q1", switch_port="P_hs_Q1",
+                        L_gate=9e-9, csi=1.1e-9, csi_loop=0.2e-9,
+                        L_switch=11e-9, r_switch=3e-3),
+               ],
+               ls=[]))
+    md = emit.markdown(p)
+    assert "## Per-device parallel FET parasitics" in md
+    assert "| HS | Q1 | `P_ghs_Q1` | `P_hs_Q1` | 9.00 nH | 1.10 nH | 0.20 nH | 11.00 nH | 3.00 mΩ |" in md
 
 
 def test_schematic_kelvin_toggle():
@@ -198,6 +230,16 @@ def test_gate_driver_node_rejects_pad_only_component():
     island = m.node("GATE", 0, 100.0, 0.0, 0.0)
     assert kicad_geom.gate_driver_node(m, "GATE", gate) is None
     assert kicad_geom.gate_driver_node(m, "GATE", gate) != island
+
+
+def test_per_device_port_label_collision_fails_loud():
+    try:
+        kicad_geom._require_unique_device_labels("hs", ["Q-1", "Q_1"], "per-device")
+    except ValueError as e:
+        assert "collision" in str(e)
+        assert "P_ghs_Q_1" in str(e)
+    else:
+        raise AssertionError("normalized per-device port-label collision must fail")
 
 
 def test_required_ports_reject_missing_power_loop():

@@ -83,6 +83,7 @@ SCALAR_TYPES = {
     "cu_temp": float,
     "cu_thickness": float,
     "plateau": float,
+    "parallel_fets": str,
 }
 BOOL_ARGS = {
     "hs_kelvin",

@@ -162,7 +162,34 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     L = Z.imag / w
     R = Z.real
     idx = {p: i for i, p in enumerate(ports)}
-    ih, il = idx.get("P_ghs"), idx.get("P_gls")
+    is_per_device = isinstance(topo, dict) and topo.get("parallel_fets") == "per-device"
+
+    def device_ports(role):
+        if not is_per_device:
+            return []
+        side = (topo or {}).get(role, {}) if isinstance(topo, dict) else {}
+        devs = side.get("device_ports") or []
+        out = []
+        for dev in devs:
+            gl = dev.get("gate_label")
+            sl = dev.get("switch_label")
+            if gl in idx:
+                out.append(dict(ref=dev.get("ref"), gate=gl, switch=sl))
+        return out
+
+    def gate_labels(role, legacy):
+        dev = [d["gate"] for d in device_ports(role)]
+        if dev:
+            return dev
+        if legacy in idx:
+            return [legacy]
+        prefix = f"P_g{role}_"
+        return [p for p in ports if p.startswith(prefix)]
+
+    hs_gate_labels = gate_labels("hs", "P_ghs")
+    ls_gate_labels = gate_labels("ls", "P_gls")
+    ih = idx.get(hs_gate_labels[0]) if hs_gate_labels else None
+    il = idx.get(ls_gate_labels[0]) if ls_gate_labels else None
 
     if not cin_ports:
         cin_ports = ["P_pwr"]
@@ -245,7 +272,30 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         i = idx.get(label)
         return float(R_dc[i, i]) if i is not None else None
 
-    r_hs, r_ls, r_loop_cond = rdc("P_hs"), rdc("P_ls"), rdc("P_bulk")
+    def port_group(role, legacy):
+        if legacy in idx:
+            return [legacy]
+        devs = device_ports(role)
+        labels = [d.get("switch") for d in devs if d.get("switch") in idx]
+        if labels:
+            return labels
+        prefix = f"P_{role}_"
+        return [p for p in ports if p.startswith(prefix)]
+
+    def eff_rdc(labels):
+        labels = [l for l in labels if l in idx]
+        if not labels:
+            return None
+        if len(labels) == 1:
+            return rdc(labels[0])
+        ii = [idx[l] for l in labels]
+        Zeff, *_ = _eff_commutation(Z_lf, ii, None)
+        return float(Zeff.real)
+
+    hs_switch_labels = port_group("hs", "P_hs")
+    ls_switch_labels = port_group("ls", "P_ls")
+    r_hs, r_ls = eff_rdc(hs_switch_labels), eff_rdc(ls_switch_labels)
+    r_loop_cond = rdc("P_bulk")
     r_sw = None
     if r_hs is not None and r_ls is not None and r_loop_cond is not None:
         r_sw = r_loop_cond - r_hs - r_ls
@@ -366,8 +416,47 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     physical = cin_esl > 0 or cin_esr > 0
     csi_hs_loop = eff_loop_csi(ih)
     csi_ls_loop = eff_loop_csi(il)
-    csi_hs = side_csi(ih, "P_hs", csi_hs_loop)
-    csi_ls = side_csi(il, "P_ls", csi_ls_loop)
+
+    def per_device(role, gate_labels_, switch_labels_):
+        if not is_per_device:
+            return []
+        by_gate = {d.get("gate"): d for d in device_ports(role)}
+        rows = []
+        for n, gl in enumerate(gate_labels_):
+            gi = idx.get(gl)
+            dev = by_gate.get(gl, {})
+            sl = dev.get("switch")
+            if sl not in idx and n < len(switch_labels_):
+                sl = switch_labels_[n]
+            csi_loop = eff_loop_csi(gi)
+            csi_side = side_csi(gi, sl, csi_loop) if sl else csi_loop
+            prefix = f"P_g{role}_"
+            ref = dev.get("ref") or (gl[len(prefix):] if gl.startswith(prefix) else gl)
+            rows.append(dict(
+                ref=ref,
+                gate_port=gl, switch_port=sl,
+                L_gate=LL(gi, gi), R_gate=RR(gi),
+                csi=csi_side, csi_loop=csi_loop,
+                L_switch=LL(idx.get(sl), idx.get(sl)) if sl in idx else None,
+                r_switch=rdc(sl) if sl in idx else None,
+            ))
+        return rows
+
+    hs_devices = per_device("hs", hs_gate_labels, hs_switch_labels)
+    ls_devices = per_device("ls", ls_gate_labels, ls_switch_labels)
+
+    def representative(devices, key, fallback):
+        vals = [d[key] for d in devices if d.get(key) is not None]
+        if not vals:
+            return fallback
+        return max(vals)
+
+    csi_hs = representative(hs_devices, "csi", side_csi(ih, "P_hs", csi_hs_loop))
+    csi_ls = representative(ls_devices, "csi", side_csi(il, "P_ls", csi_ls_loop))
+    if len(hs_devices) > 1 or len(ls_devices) > 1:
+        warn.append(
+            "per-device parallel-FET ports present: side-level L_gate/csi scalars are "
+            "max-per-device compatibility values; use parallel_devices for per-ref data")
 
     p = dict(
         freq_Hz=f,
@@ -378,8 +467,10 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         per_cap_L=per_cap_L, current_split=split,
         cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond, reduce_warn=warn,
         L_eff_sweep=sweep, n_cin=len(cin_idx),
-        L_gate_hs=LL(ih, ih), R_gate_hs=RR(ih),
-        L_gate_ls=LL(il, il), R_gate_ls=RR(il),
+        L_gate_hs=representative(hs_devices, "L_gate", LL(ih, ih)),
+        R_gate_hs=representative(hs_devices, "R_gate", RR(ih)),
+        L_gate_ls=representative(ls_devices, "L_gate", LL(il, il)),
+        R_gate_ls=representative(ls_devices, "R_gate", RR(il)),
         r_hs=r_hs, r_ls=r_ls, r_loop_cond=r_loop_cond, r_sw=r_sw,
         r_cond_freq=f_dc, cond_ref=cond_ref,
         cin_branches=(cin_dec["branches"] if cin_dec else None),
@@ -404,6 +495,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         port_L=L.tolist(), port_R=R.tolist(), ports=ports, cin_ports=cin_ports,
         topo=topo, meta=meta,
     )
+    if is_per_device:
+        p["parallel_devices"] = dict(hs=hs_devices, ls=ls_devices)
     return p
 
 
