@@ -7,7 +7,7 @@
 # for DPT/gate-drive sims that want the full package. --lead-mm 0 trips the
 # zero-length-filament SVD guard, so 0.1 mm is the copper-only stand-in.
 # See fl4p/dcdc-tools#3.
-pcb: ../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
 sw: SW
 gnd: BuckGND
 vin: Solar+
