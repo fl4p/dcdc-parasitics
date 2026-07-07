@@ -265,8 +265,102 @@ class Model:
 # --------------------------------------------------------------------------- #
 # copper collection & meshing
 # --------------------------------------------------------------------------- #
-def add_tracks(board, model, zmap, nets):
-    """Straight track segments (skip vias/arcs for now) -> filaments."""
+def _pip(x, y, outline):
+    """Even-odd ray-cast point-in-polygon. `outline` = [(x,y), ...] (mm). Pure —
+    no pcbnew — so the containment guard is unit-testable without KiCad."""
+    inside = False
+    n = len(outline)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = outline[i]
+        xj, yj = outline[j]
+        if ((yi > y) != (yj > y)) and \
+                (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def point_in_polys(x, y, polys):
+    """True if (x,y) is inside ANY polygon in `polys` (list of [(x,y),...] mm
+    outlines). Pure helper used as the KiCad-independent containment fallback."""
+    return any(_pip(x, y, o) for o in polys)
+
+
+def _extract_outlines(sps_list):
+    """SHAPE_POLY_SET list -> list of [(x,y),...] mm outlines, for the pure
+    point-in-polygon fallback when the native Contains API is unavailable."""
+    outs = []
+    for s in sps_list:
+        for oi in range(s.OutlineCount()):
+            chain = s.Outline(oi)
+            pts = []
+            for pi in range(chain.PointCount()):
+                p = chain.CPoint(pi)
+                pts.append((mm(p.x), mm(p.y)))
+            if len(pts) >= 3:
+                outs.append(pts)
+    return outs
+
+
+def _sps_contains(sps_list):
+    """Return a predicate contains(x_mm, y_mm) for a list of SHAPE_POLY_SET.
+
+    Prefer the native `sps.Contains(VECTOR2I)` (handles holes); if that API is
+    missing/raises on this KiCad build, fall back to a pure ray-cast over the
+    extracted outlines."""
+    def _native(x_mm, y_mm):
+        pt = pcbnew.VECTOR2I(int(x_mm * NM), int(y_mm * NM))
+        return any(s.Contains(pt) for s in sps_list)
+    try:
+        sps_list[0].Contains(pcbnew.VECTOR2I(0, 0))
+        return _native
+    except Exception:
+        outlines = _extract_outlines(sps_list)
+        return lambda x, y: point_in_polys(x, y, outlines)
+
+
+def build_pour_index(board, zmap, nets):
+    """Per-(net, layer) containment predicate for FILLED same-net copper pours.
+
+    Used by add_tracks to skip tracks routed inside their own pour (issue #6):
+    such copper merges into the fill on the real board, so meshing it as a thin
+    parallel filament is redundant and seeds circulating-current artifacts.
+    Only nets that actually have a pour on a layer get an entry; pour-less nets
+    (most gate-drive traces) are absent, so their tracks are never dropped."""
+    index = {}
+    zones = ([board.GetArea(i) for i in range(board.GetAreaCount())])
+    for z in zones:
+        net = z.GetNetname()
+        if net not in nets:
+            continue
+        for lid in z.GetLayerSet().Seq():
+            if zmap.get(lid) is None:
+                continue
+            sps = z.GetFilledPolysList(lid)
+            if sps is None or sps.OutlineCount() == 0:
+                continue
+            index.setdefault((net, lid), []).append(sps)
+    return {k: _sps_contains(v) for k, v in index.items()}
+
+
+def _in_roi(x, y, roi):
+    return roi is None or (roi[0] <= x <= roi[2] and roi[1] <= y <= roi[3])
+
+
+def add_tracks(board, model, zmap, nets, pour_index=None, roi=None):
+    """Straight track segments (skip vias/arcs for now) -> filaments.
+
+    Issue #6: a track whose whole span lies inside a same-net filled pour on the
+    SAME layer is redundant with the pour mesh (same-net copper merges into the
+    fill) and only seeds circulating-current artifacts, so skip it. The all-three-
+    points guard (start, midpoint, end) keeps a trace that straddles the pour
+    edge. The drop is also gated on the ROI: add_zones only meshes the pour
+    within `roi`, so we drop only where a mesh actually replaces the filament —
+    a same-net track outside the meshed region is kept so it can't disconnect
+    copper. Vias / layer-changing traces are handled elsewhere and untouched."""
     for t in board.GetTracks():
         if t.Type() == pcbnew.PCB_VIA_T:
             continue
@@ -278,9 +372,16 @@ def add_tracks(board, model, zmap, nets):
         if z is None:
             continue
         a = t.GetStart(); b = t.GetEnd()
+        ax, ay, bx, by = mm(a.x), mm(a.y), mm(b.x), mm(b.y)
+        mx, my = 0.5 * (ax + bx), 0.5 * (ay + by)
+        contains = pour_index.get((net, lid)) if pour_index else None
+        if contains is not None and \
+                _in_roi(ax, ay, roi) and _in_roi(mx, my, roi) and _in_roi(bx, by, roi) and \
+                contains(ax, ay) and contains(mx, my) and contains(bx, by):
+            continue
         w = mm(t.GetWidth())
-        na = model.node(net, lid, mm(a.x), mm(a.y), z)
-        nb = model.node(net, lid, mm(b.x), mm(b.y), z)
+        na = model.node(net, lid, ax, ay, z)
+        nb = model.node(net, lid, bx, by, z)
         model.seg(na, nb, w)
 
 
@@ -584,7 +685,10 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     nets = power_nets | gate_nets
     roi = _roi(board, topo, margin)
 
-    add_tracks(board, model, zmap, nets)
+    # issue #6: index same-net filled pours so add_tracks can skip tracks routed
+    # inside their own pour (redundant with the mesh add_zones builds below).
+    pour_index = build_pour_index(board, zmap, nets)
+    add_tracks(board, model, zmap, nets, pour_index=pour_index, roi=roi)
     add_vias(board, model, zmap, nets)  # gate traces can change layers too — model their vias
     add_zones(board, model, zmap, power_nets, pitch, roi=roi)
 

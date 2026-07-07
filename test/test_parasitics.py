@@ -256,6 +256,49 @@ def test_required_ports_reject_missing_power_loop():
         raise AssertionError("missing P_pwr must fail")
 
 
+# ---------------------------------------------- issue #6: same-net pour tracks
+# A unit square pour outline (mm) for the containment guard.
+_POUR = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+
+
+def _drop(pa, pb, contains):
+    """Mirror add_tracks' all-three-points guard: drop iff start, midpoint and
+    end are all inside the same-net pour."""
+    mx, my = 0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1])
+    return contains(*pa) and contains(mx, my) and contains(*pb)
+
+
+def test_point_in_polys_basic():
+    assert kicad_geom.point_in_polys(5.0, 5.0, [_POUR])       # inside
+    assert not kicad_geom.point_in_polys(15.0, 5.0, [_POUR])  # outside
+    assert not kicad_geom.point_in_polys(5.0, 5.0, [])        # no pour -> outside
+
+
+def test_track_fully_inside_pour_is_dropped():
+    contains = lambda x, y: kicad_geom.point_in_polys(x, y, [_POUR])
+    # both endpoints + midpoint inside the same-net pour -> redundant, drop
+    assert _drop((2.0, 2.0), (8.0, 8.0), contains)
+
+
+def test_track_on_pourless_net_is_kept():
+    # a net with no pour has no index entry -> contains is None -> never dropped
+    pour_index = {("SW", 0): lambda x, y: kicad_geom.point_in_polys(x, y, [_POUR])}
+    contains = pour_index.get(("HG", 0))   # gate net: not in index
+    assert contains is None                # add_tracks keeps it (no drop path)
+
+
+def test_track_straddling_pour_edge_is_kept():
+    contains = lambda x, y: kicad_geom.point_in_polys(x, y, [_POUR])
+    # starts inside, ends well outside the pour edge -> NOT all-three inside
+    assert not _drop((5.0, 5.0), (20.0, 5.0), contains)
+    # endpoints inside but midpoint outside a concave/split pour also kept
+    left = [(0.0, 0.0), (4.0, 0.0), (4.0, 10.0), (0.0, 10.0)]
+    right = [(6.0, 0.0), (10.0, 0.0), (10.0, 10.0), (6.0, 10.0)]
+    c2 = lambda x, y: kicad_geom.point_in_polys(x, y, [left, right])
+    assert c2(2.0, 5.0) and c2(8.0, 5.0) and not c2(5.0, 5.0)  # midpoint in the gap
+    assert not _drop((2.0, 5.0), (8.0, 5.0), c2)
+
+
 def test_required_ports_reject_missing_gate_loop():
     m = kicad_geom.Model()
     a = m.node("VIN", 0, 0.0, 0.0, 0.0)
