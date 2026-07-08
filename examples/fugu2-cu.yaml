@@ -13,12 +13,12 @@ gnd: BuckGND
 vin: Solar+
 hs_ref: [Q1, Q3]
 ls_ref: [Q2]
-cin_refs: [C9, C16, C17, C18, C21, C22, C27]
+cin_refs: [C9, C16, C17, C18, C21, C22] # without C27
 pitch: [1.0]
 lead_mm: 0.1
 lf_freq: 39000
 emit_cin_network: true
 weld_tol: 0.6
 margin: 8.0
-out: out-fugu2-cu/
+out: out/fugu2-cu/
 svg: true

@@ -76,6 +76,12 @@ def pick_plateau(zc, target=5e6):
     return f, zc[f]
 
 
+def pick_frequency(zc, target):
+    """Return (freq, Z) at the frequency closest to target."""
+    f = min(zc.keys(), key=lambda x: abs(np.log10(x) - np.log10(target)))
+    return f, zc[f]
+
+
 def _eff_commutation(Z, cin_idx, zcap=None):
     """Effective 2-terminal commutation impedance of the input caps driven in
     parallel (common voltage across every Cin port, other ports open).
@@ -108,7 +114,7 @@ def _eff_commutation(Z, cin_idx, zcap=None):
 
 def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map, c_map=None) -> "dict | None":
     """Partial-inductance decomposition of the ported input-cap bank into a shared
-    trunk + per-cap private branch, for the `--emit-cin-network` LF model.
+    trunk + per-cap private branch, for the `--emit-cin-network` model.
 
     With a single common Vin/GND trunk feeding every cap, the port L/R matrices
     read (to first order): diagonal L[i,i] = L_shared + Lb_i, off-diagonal
@@ -116,7 +122,7 @@ def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map, c_map=None) -> "dict | No
     off-diagonals and each private branch is diagonal minus trunk:
 
         L_shared = mean(L[i,j], i!=j)     Lb_i = L[i,i] - L_shared
-        R_shared = mean(R[i,j], i!=j)     Rb_i = R[i,i] - R_shared   (at f_dc)
+        R_shared = mean(R[i,j], i!=j)     Rb_i = R[i,i] - R_shared
 
     Returns per-cap {ref, cls, Lb, Rb} + the shared trunk L/R + the off-diagonal
     spread (a high spread means the single-trunk model is a poor fit -> warn). The
@@ -153,6 +159,457 @@ def _cin_branch_decomp(Lm, Rm, cin_idx, refs, cls_map, c_map=None) -> "dict | No
                              C=(c_map or {}).get(ref)))
     return dict(branches=branches, L_shared=L_shared, R_shared=R_shared,
                 L_spread=L_spread, clamped=clamped)
+
+
+def _cin_decomp_with_model_limits(dec, Lm, Rm, cin_idx, refs, cls_map, c_map=None,
+                                  L_limit=None, R_limit=None) -> tuple:
+    """Return (model_dec, meta) after applying deck-consumption limits.
+
+    `_cin_branch_decomp` returns the raw full-bank shared trunk that best fits the
+    port matrix. The loss deck, however, also places `L_loop_switch`/R residuals;
+    if the raw trunk exceeds the selected HF loop basis, consuming both would
+    over-count. Keep the raw values for diagnostics, but clamp the model values
+    that existing consumers read.
+    """
+    if not dec:
+        return dec, None
+    L_raw = float(dec["L_shared"])
+    R_raw = float(dec["R_shared"])
+    L_model = L_raw if L_limit is None else min(L_raw, max(0.0, float(L_limit)))
+    R_model = R_raw if R_limit is None else min(R_raw, max(0.0, float(R_limit)))
+    L_clamped = L_model < L_raw - 1e-18
+    R_clamped = R_model < R_raw - 1e-15
+    if not (L_clamped or R_clamped):
+        return dec, dict(clamped=False, basis="raw")
+
+    branches = []
+    for k, a in enumerate(cin_idx):
+        ref = refs[k] if k < len(refs) else f"P{a}"
+        branches.append(dict(ref=ref, cls=(cls_map or {}).get(ref, "mlcc"),
+                             Lb=max(0.0, float(Lm[a, a]) - L_model),
+                             Rb=max(0.0, float(Rm[a, a]) - R_model),
+                             C=(c_map or {}).get(ref)))
+    model = dict(dec)
+    model.update(branches=branches, L_shared=L_model, R_shared=R_model)
+    meta = dict(
+        clamped=True,
+        basis="clamped_to_loop",
+        reason="cin shared trunk exceeded the selected loop/residual basis",
+        L_shared_raw=L_raw,
+        L_shared_model=L_model,
+        L_loop_limit=L_limit,
+        L_clamped=L_clamped,
+        R_shared_raw=R_raw,
+        R_shared_model=R_model,
+        R_residual_limit=R_limit,
+        R_clamped=R_clamped,
+    )
+    return model, meta
+
+
+def _cin_region_diagnostics(Lm, cin_idx, refs, weights=None, residual_raw=None):
+    """Return scalar-model validity diagnostics for the currently available basis.
+
+    This is not the future matrix-mode separability test. It only evaluates the
+    legacy one-shared-trunk scalar model against the existing full-loop cap-port
+    matrix. A later cap-branch-only extraction will add a separate switch
+    separability check by comparing cap-only and full-loop off-diagonals.
+    """
+    if len(cin_idx) < 2:
+        return dict(valid=True, diagnostics=[], regions=[], metrics={})
+    Lc = Lm[np.ix_(cin_idx, cin_idx)]
+    off = np.array([Lc[i, j] for i in range(len(cin_idx))
+                    for j in range(len(cin_idx)) if i != j], dtype=float)
+    mean = float(np.mean(off)) if off.size else 0.0
+    std = float(np.std(off)) if off.size else 0.0
+    spread_ratio = (std / abs(mean)) if abs(mean) > 1e-18 else 0.0
+    neg_share = []
+    if weights is not None:
+        for k, wk in enumerate(weights):
+            if complex(wk).real < -1e-3:
+                name = refs[k] if k < len(refs) else f"P{k}"
+                neg_share.append(dict(ref=name, share=complex(wk).real))
+    diagnostics = []
+    if spread_ratio > 0.5:
+        diagnostics.append(dict(
+            code="cin_region_heterogeneous",
+            message=(f"cap-cap mutual spread is high ({std*1e9:.2f} nH std vs "
+                     f"{mean*1e9:.2f} nH mean); one shared trunk is not a valid "
+                     "model for this cap bank"),
+            severity="error",
+            spread_ratio=spread_ratio,
+        ))
+    if neg_share:
+        diagnostics.append(dict(
+            code="negative_ideal_current_share",
+            message=("ideal-cap parallel solve has circulating current "
+                     "mode(s) with negative share(s): "
+                     + ", ".join(f"{d['ref']}={d['share']*100:.1f}%"
+                                 for d in neg_share)
+                     + ". This is allowed by the passive port matrix, but "
+                     "invalidates the scalar_trunk Cin reduction"),
+            severity="error",
+            shares=neg_share,
+        ))
+    # Temporary sign-test band. When the cap-only matrix basis lands, this should
+    # reference the calibrated same-fixture numerical floor from the null-drop
+    # perturbation test, not a hard-coded physics tolerance.
+    if residual_raw is not None and residual_raw < -0.05e-9:
+        diagnostics.append(dict(
+            code="negative_switch_residual",
+            message=(f"scalar switch residual is negative "
+                     f"({residual_raw*1e9:.2f} nH); cin_L_shared and L_loop "
+                     "were reduced in inconsistent bases"),
+            severity="error",
+            L_loop_switch_raw=residual_raw,
+        ))
+
+    # Lightweight region hint from the full-loop matrix, for diagnostics only.
+    # The future implementation should use the cap-only matrix for authoritative
+    # region assignment.
+    row_mean = np.array([
+        np.mean([Lc[i, j] for j in range(len(cin_idx)) if j != i])
+        for i in range(len(cin_idx))
+    ])
+    near = float(np.median(row_mean))
+    regions = []
+    for i, m in enumerate(row_mean):
+        name = refs[i] if i < len(refs) else f"P{i}"
+        regions.append(dict(ref=name, mean_mutual=float(m),
+                            weak_region=bool(near > 0 and m < 0.5 * near)))
+    return dict(
+        valid=not any(d.get("severity") == "error" for d in diagnostics),
+        diagnostics=diagnostics,
+        regions=regions,
+        metrics=dict(offdiag_mean=mean, offdiag_std=std,
+                     offdiag_spread_ratio=spread_ratio),
+    )
+
+
+def _cin_model_valid_for_mode(model):
+    """Validity of the resolved cin_model.mode.
+
+    Today only scalar_trunk is implemented, but keeping the mode dispatch here
+    prevents the top-level compat field from ossifying as "scalar_valid" when
+    matrix modes land.
+    """
+    mode = model.get("mode")
+    if mode == "scalar_trunk":
+        return model.get("scalar_valid")
+    if mode in ("matrix", "matrix_with_sw_coupling"):
+        return model.get("matrix_valid")
+    if mode == "none":
+        return model.get("full_multiport_valid")
+    return None
+
+
+def _cin_matrix_payload(Lm, R_100k, net_idx, net_refs, basis, R_dc=None,
+                        r_100k_freq_Hz=None, r_dc_freq_Hz=None):
+    if not net_idx:
+        return None
+    Lc = Lm[np.ix_(net_idx, net_idx)]
+    R_100k = np.asarray(R_100k, dtype=float)
+    R_dc = np.asarray(R_dc if R_dc is not None else R_100k, dtype=float)
+    Rc = R_100k[np.ix_(net_idx, net_idx)]
+    Rdc = R_dc[np.ix_(net_idx, net_idx)]
+    kmax = 0.0
+    kmax_pair = None
+    for i, ri in enumerate(net_refs):
+        for j in range(i + 1, len(net_refs)):
+            denom = float(abs(Lc[i, i] * Lc[j, j])) ** 0.5
+            kij = abs(float(Lc[i, j]) / denom) if denom > 0 else 0.0
+            if kij > kmax:
+                kmax = kij
+                kmax_pair = [ri, net_refs[j]]
+    return dict(
+        basis=basis,
+        refs=list(net_refs),
+        L=Lc.tolist(),
+        R=Rc.tolist(),
+        R_100k=Rc.tolist(),
+        R_dc=Rdc.tolist(),
+        R_100k_freq_Hz=r_100k_freq_Hz,
+        R_dc_freq_Hz=r_dc_freq_Hz,
+        L_sw_element=0.0,
+        gauge_fix_status="structurally_not_required",
+        gauge_fix_reason="zero_by_plane_p_equiv",
+        identity_basis_reason="pad_ideal_identity_basis",
+        switch_board_copper="in_matrix",
+        kmax=kmax,
+        kmax_pair=kmax_pair,
+        spice_realizable=_k_below_spice_rail(kmax),
+    )
+
+
+def _k_below_spice_rail(k):
+    k = abs(float(k))
+    return k < 0.95 and not np.isclose(k, 0.95, rtol=0.0, atol=1e-12)
+
+
+def _kmax_from_matrix(Lc, refs):
+    kmax = 0.0
+    kmax_pair = None
+    for i, ri in enumerate(refs):
+        for j in range(i + 1, len(refs)):
+            denom = float(abs(Lc[i, i] * Lc[j, j])) ** 0.5
+            kij = abs(float(Lc[i, j]) / denom) if denom > 0 else 0.0
+            if kij > kmax:
+                kmax = kij
+                kmax_pair = [ri, refs[j]]
+    return kmax, kmax_pair
+
+
+def _fit_switch_additive_delta(L_full, L_cap, refs, L_sw_physical, floor=0.0):
+    """Fit delta_ij = L_sw + m_i + m_j with L_sw fixed by the port gauge.
+
+    The additive model has gauge freedom if L_sw is not fixed. The caller must
+    pass the explicit switch-residual port measurement as L_sw_physical; this
+    helper then emits both physical-gauge metadata and modeling-gauge element
+    values.
+    """
+    refs = list(refs)
+    L_full = np.asarray(L_full, dtype=float)
+    L_cap = np.asarray(L_cap, dtype=float)
+    if L_full.shape != L_cap.shape or L_full.ndim != 2 or L_full.shape[0] != L_full.shape[1]:
+        raise ValueError("L_full and L_cap must be same-size square matrices")
+    n = L_full.shape[0]
+    if len(refs) != n:
+        raise ValueError("refs length must match matrix size")
+    L_sw_physical = float(L_sw_physical)
+    if not np.isfinite(L_sw_physical):
+        raise ValueError("L_sw_physical must be finite")
+    if L_sw_physical <= 0:
+        raise ValueError("L_sw_physical must be positive for switch-coupled matrix mode")
+    floor = float(floor or 0.0)
+    if floor < 0 or not np.isfinite(floor):
+        raise ValueError("floor must be finite and nonnegative")
+
+    delta = L_full - L_cap
+    rows = []
+    vals = []
+    for i in range(n):
+        for j in range(n):
+            row = np.zeros(n, dtype=float)
+            row[i] += 1.0
+            row[j] += 1.0
+            rows.append(row)
+            vals.append(delta[i, j] - L_sw_physical)
+    A = np.vstack(rows)
+    b = np.asarray(vals, dtype=float)
+    m_phys, *_ = np.linalg.lstsq(A, b, rcond=None)
+
+    recon = L_sw_physical + m_phys[:, None] + m_phys[None, :]
+    residual = delta - recon
+    regauge_c = float(np.median(m_phys)) if n else 0.0
+    m_model = m_phys - regauge_c
+    L_sw_element = L_sw_physical + 2.0 * regauge_c
+    if L_sw_element <= 0 or not np.isfinite(L_sw_element):
+        raise ValueError("modeling-gauge L_sw_element must be positive")
+    significant = [
+        {"ref": ref, "m_i_modeling": float(m)}
+        for ref, m in zip(refs, m_model)
+        if abs(float(m)) > floor
+    ]
+    return dict(
+        refs=refs,
+        L_sw_physical=L_sw_physical,
+        m_i_physical=[float(x) for x in m_phys],
+        regauge_c=regauge_c,
+        L_sw_element=float(L_sw_element),
+        m_i_modeling=[float(x) for x in m_model],
+        significant_couplings=significant,
+        residual_fro=float(np.linalg.norm(residual, ord="fro")),
+        residual_rms=float(np.linalg.norm(residual, ord="fro") / max(1, n)),
+        residual_max_abs=float(np.max(np.abs(residual))) if n else 0.0,
+        residual_matrix=residual.tolist(),
+    )
+
+
+def _cin_decomposed_matrix_payload(L_full, L_cap, R_cap_100k, refs, L_sw_physical,
+                                   floor=0.0, basis="cap_only_additive",
+                                   R_cap_dc=None, r_100k_freq_Hz=None,
+                                   r_dc_freq_Hz=None):
+    """Build the future non-identity matrix payload from full/cap/switch bases."""
+    refs = list(refs)
+    L_cap = np.asarray(L_cap, dtype=float)
+    R_cap_100k = np.asarray(R_cap_100k, dtype=float)
+    R_cap_dc = np.asarray(R_cap_dc if R_cap_dc is not None else R_cap_100k, dtype=float)
+    if (L_cap.shape != R_cap_100k.shape or L_cap.shape != R_cap_dc.shape
+            or L_cap.ndim != 2 or L_cap.shape[0] != L_cap.shape[1]):
+        raise ValueError("L_cap, R_cap_100k, and R_cap_dc must be same-size square matrices")
+    if len(refs) != L_cap.shape[0]:
+        raise ValueError("refs length must match matrix size")
+    fit = _fit_switch_additive_delta(L_full, L_cap, refs, L_sw_physical, floor=floor)
+    separability_fit = dict(
+        residual_fro=fit["residual_fro"],
+        residual_rms=fit["residual_rms"],
+        residual_max_abs=fit["residual_max_abs"],
+        residual_matrix=fit["residual_matrix"],
+        floor=floor,
+    )
+    if fit["residual_fro"] > floor:
+        return dict(
+            basis=basis,
+            mode="none",
+            refs=refs,
+            L=L_cap.tolist(),
+            R=R_cap_100k.tolist(),
+            R_100k=R_cap_100k.tolist(),
+            R_dc=R_cap_dc.tolist(),
+            R_100k_freq_Hz=r_100k_freq_Hz,
+            R_dc_freq_Hz=r_dc_freq_Hz,
+            L_sw_physical=fit["L_sw_physical"],
+            m_i_physical=fit["m_i_physical"],
+            regauge_c=fit["regauge_c"],
+            m_i_modeling=fit["m_i_modeling"],
+            switch_couplings=[],
+            separability_fit=separability_fit,
+            switch_separability=dict(
+                status="failed",
+                reason="additive_fit_residual_above_floor"),
+            gauge_fix_status="fixed",
+            gauge_fix_reason="explicit_switch_residual_port",
+            switch_board_copper="nonseparable_full_multiport_required",
+            full_multiport_required=True,
+            full_multiport_valid=False,
+            full_multiport_reason="switch_separability_failed_additive_residual_above_floor",
+            decomposition_valid=False,
+            spice_realizable=False,
+        )
+    kmax, kmax_pair = _kmax_from_matrix(L_cap, refs)
+    sw_kmax = 0.0
+    sw_kmax_pair = None
+    switch_couplings = []
+    L_sw_element = float(fit["L_sw_element"])
+    for entry in fit["significant_couplings"]:
+        ref = entry["ref"]
+        i = refs.index(ref)
+        denom = float(abs(L_cap[i, i] * L_sw_element)) ** 0.5
+        kij = float(entry["m_i_modeling"]) / denom if denom > 0 else 0.0
+        switch_couplings.append(dict(
+            ref=ref,
+            m_i_modeling=float(entry["m_i_modeling"]),
+            K=float(kij),
+        ))
+        if abs(kij) > sw_kmax:
+            sw_kmax = abs(kij)
+            sw_kmax_pair = [ref, "L_sw_element"]
+    mode = "matrix_with_sw_coupling" if switch_couplings else "matrix"
+    spice_realizable = _k_below_spice_rail(kmax) and _k_below_spice_rail(sw_kmax)
+    payload = dict(
+        basis=basis,
+        mode=mode,
+        refs=refs,
+        L=L_cap.tolist(),
+        R=R_cap_100k.tolist(),
+        R_100k=R_cap_100k.tolist(),
+        R_dc=R_cap_dc.tolist(),
+        R_100k_freq_Hz=r_100k_freq_Hz,
+        R_dc_freq_Hz=r_dc_freq_Hz,
+        L_sw_element=L_sw_element,
+        L_sw_physical=fit["L_sw_physical"],
+        m_i_physical=fit["m_i_physical"],
+        regauge_c=fit["regauge_c"],
+        m_i_modeling=fit["m_i_modeling"],
+        switch_couplings=switch_couplings,
+        separability_fit=separability_fit,
+        switch_separability=dict(status="passed", reason="additive_fit_within_floor"),
+        gauge_fix_status="fixed",
+        gauge_fix_reason="explicit_switch_residual_port",
+        switch_board_copper="split_lsw_element",
+        full_multiport_required=False,
+        decomposition_valid=True,
+        kmax=kmax,
+        kmax_pair=kmax_pair,
+        switch_kmax=sw_kmax,
+        switch_kmax_pair=sw_kmax_pair,
+        spice_realizable=spice_realizable,
+    )
+    return payload
+
+
+def _cin_matrix_from_reductions(full_p, cap_p, switch_p, floor=0.0):
+    """Assemble a decomposed Cin matrix payload from three reduced runs.
+
+    This is the reducer-side handoff for the future CLI orchestration:
+    full-loop run + cap-only run + switch-residual run, all on the same fixture.
+    """
+    expected_basis = (
+        ("full", full_p, "full_loop"),
+        ("cap_only", cap_p, "cap_only"),
+        ("switch_residual", switch_p, "switch_residual"),
+    )
+    for name, p, want in expected_basis:
+        got = ((p.get("topo") or {}).get("cin_extraction_basis"))
+        if got != want:
+            raise ValueError(f"{name}: cin_extraction_basis={got!r}, expected {want!r}")
+
+    def cin_lr(p, name):
+        ports_ = list(p.get("ports") or [])
+        port_pos = {label: i for i, label in enumerate(ports_)}
+        cin_net = ((p.get("topo") or {}).get("cin_net") or [])
+        if not cin_net:
+            raise ValueError(f"{name}: no cin_net ports available")
+        rows = []
+        for e in cin_net:
+            ref, label = e.get("ref"), e.get("label")
+            if not ref or not label:
+                raise ValueError(f"{name}: cin_net entries must carry ref and label")
+            rows.append((ref, label))
+        refs_seen = [r for r, _l in rows]
+        labels_seen = [l for _r, l in rows]
+        dup_refs = sorted({r for r in refs_seen if refs_seen.count(r) > 1})
+        dup_labels = sorted({l for l in labels_seen if labels_seen.count(l) > 1})
+        if dup_refs or dup_labels:
+            raise ValueError(
+                f"{name}: duplicate cin_net refs/labels "
+                f"refs={dup_refs or []} labels={dup_labels or []}")
+        missing = [label for _ref, label in rows if label not in port_pos]
+        if missing:
+            raise ValueError(f"{name}: cin_net label(s) missing from solved ports: {missing}")
+        refs_ = [r for r, _l in rows]
+        ii = [port_pos[l] for _r, l in rows]
+        L_ = np.asarray(p.get("port_L"), dtype=float)
+        R_100k = np.asarray(p.get("port_R_100k", p.get("port_R")), dtype=float)
+        R_dc = np.asarray(p.get("port_R_dc", p.get("port_R")), dtype=float)
+        return (refs_, L_[np.ix_(ii, ii)], R_100k[np.ix_(ii, ii)],
+                R_dc[np.ix_(ii, ii)])
+
+    full_refs, L_full, _R_full_100k, _R_full_dc = cin_lr(full_p, "full")
+    cap_refs, L_cap, R_cap_100k, R_cap_dc = cin_lr(cap_p, "cap_only")
+    if full_refs != cap_refs:
+        raise ValueError(
+            f"full/cap cin refs differ: full={full_refs}, cap_only={cap_refs}")
+
+    sw_ports = list(switch_p.get("ports") or [])
+    sw_labels_declared = []
+    plane = ((switch_p.get("topo") or {}).get("demarcation_plane") or {})
+    if plane.get("switch_residual_port"):
+        sw_labels_declared.append(plane["switch_residual_port"])
+    sw_labels_declared.extend(plane.get("switch_residual_ports") or [])
+    sw_labels_declared = list(dict.fromkeys(sw_labels_declared))
+    if len(sw_labels_declared) != 1:
+        raise ValueError(
+            "switch_residual run must provide exactly one gauge port for this "
+            f"reducer helper, got {sw_labels_declared or 'none'}")
+    sw_label = sw_labels_declared[0]
+    if sw_label not in sw_ports:
+        raise ValueError(
+            f"switch_residual gauge port {sw_label!r} missing from solved ports")
+    i_sw = sw_ports.index(sw_label)
+    L_sw_physical = float(np.asarray(switch_p.get("port_L"), dtype=float)[i_sw, i_sw])
+    payload = _cin_decomposed_matrix_payload(
+        L_full, L_cap, R_cap_100k, full_refs, L_sw_physical, floor=floor,
+        R_cap_dc=R_cap_dc,
+        r_100k_freq_Hz=cap_p.get("R_100k_freq_Hz"),
+        r_dc_freq_Hz=cap_p.get("R_dc_freq_Hz"))
+    payload["source_runs"] = dict(
+        full_basis=((full_p.get("topo") or {}).get("cin_extraction_basis")),
+        cap_basis=((cap_p.get("topo") or {}).get("cin_extraction_basis")),
+        switch_basis=((switch_p.get("topo") or {}).get("cin_extraction_basis")),
+        switch_residual_port=sw_label,
+    )
+    return payload
 
 
 def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
@@ -238,11 +695,13 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     neg = [n for n, s in split.items() if s["re"] < -1e-3]
     if neg:
         warn.append(
-            f"negative current share on {neg} — small circulating currents in the "
-            f"ideal-cap (copper-only) limit when the bank is tightly coupled (mutuals "
-            f"≈ self-L, sub-nH private branches). Usually not a polarity bug: pass "
-            f"--cin-esl/--cin-esr for the physical, all-positive split; if it persists "
-            f"with realistic ESL, check port polarity / geometry")
+            f"negative ideal current share on {neg} — the shorted-cap parallel "
+            f"solve contains a circulating current mode. This is allowed by the "
+            f"passive port matrix, but it invalidates the scalar_trunk Cin "
+            f"reduction. Per-cap --cin-esl/--cin-esr is diagnostic only; it may "
+            f"make the split physical but does not make scalar_trunk valid. If "
+            f"negative share persists with realistic ESL/ESR, also check port "
+            f"polarity / geometry")
     if len(cin_idx) > 1 and L_loop_ideal > L_loop_single + 1e-12:
         warn.append("effective loop L exceeds single-cap L — unexpected for "
                     "parallel caps; check mutual signs / port polarity")
@@ -253,16 +712,18 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                     f"— likely reversed cap-port polarity or a mutual-sign error")
 
     # ---- conduction-path resistances (LF, per-side) ----
-    # Read R/L at the LOWEST swept frequency: there the skin depth (>2 mm at 100 kHz)
-    # dwarfs the copper thickness, so this is the DC/fundamental conduction R, not
+    # Read R/L at the LOWEST swept frequency: there the skin depth dwarfs the
+    # copper thickness, so this is the DC/fundamental conduction R, not
     # the skin-elevated ring-plateau R_loop. P_hs/P_ls are anchored on the bulk cap
     # (the fundamental source), so r_hs/r_ls are each switch's true conduction
     # copper; P_bulk is the full LF loop, and r_sw is the SW-node spreading residual.
     f_dc = min(zc.keys())
     Z_lf = zc[f_dc]
+    f_100k, Z_100k = pick_frequency(zc, 1e5)
     w_lf = 2 * np.pi * f_dc
     L_lf = Z_lf.imag / w_lf
     R_dc = Z_lf.real
+    R_100k = Z_100k.real
     if f_dc >= f:   # conduction read collapsed onto the ring plateau
         warn.append(
             f"conduction freq ({f_dc:g} Hz) >= plateau ({f:g} Hz) — the ring and "
@@ -324,13 +785,19 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     cin_net = (topo or {}).get("cin_net") if isinstance(topo, dict) else None
     cin_dec = None
     cin_dec_lf = None
+    cin_matrix = None
     if cin_net:
         net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
         net_refs = [e["ref"] for e in cin_net if e.get("label") in idx]
         net_cls = {e["ref"]: e.get("cls", "mlcc") for e in cin_net}
         net_c = {e["ref"]: e.get("C") for e in cin_net}
-        cin_dec = _cin_branch_decomp(L, R_dc, net_idx, net_refs, net_cls, net_c)
+        cin_dec = _cin_branch_decomp(L, R_100k, net_idx, net_refs, net_cls, net_c)
         cin_dec_lf = _cin_branch_decomp(L_lf, R_dc, net_idx, net_refs, net_cls, net_c)
+        if (topo or {}).get("cin_network_model") == "matrix" and (
+                topo or {}).get("fet_closure") == "pad_ideal":
+            cin_matrix = _cin_matrix_payload(
+                L, R_100k, net_idx, net_refs, basis="identity", R_dc=R_dc,
+                r_100k_freq_Hz=f_100k, r_dc_freq_Hz=f_dc)
     if cin_dec:
         _Lsh = float(cin_dec["L_shared"])
         _Lsp = float(cin_dec["L_spread"])
@@ -345,6 +812,27 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 "bulk+MLCC bank: off-diagonal mean exceeded a diagonal) — per-cap Lb "
                 "near the floor is a shared-trunk-model artifact, not a real ~0 branch")
 
+    cin_dec_raw = cin_dec
+    cin_shared_model = None
+    if cin_dec:
+        cin_dec, cin_shared_model = _cin_decomp_with_model_limits(
+            cin_dec, L, R_100k, net_idx, net_refs, net_cls, net_c,
+            L_limit=L_loop, R_limit=None)
+        if cin_shared_model and cin_shared_model.get("clamped"):
+            bits = []
+            if cin_shared_model.get("L_clamped"):
+                bits.append(
+                    f"L_shared raw {cin_shared_model['L_shared_raw']*1e9:.2f} nH "
+                    f"exceeds L_loop {L_loop*1e9:.2f} nH")
+            if cin_shared_model.get("R_clamped"):
+                bits.append(
+                    f"R_shared raw {cin_shared_model['R_shared_raw']*1e3:.2f} mOhm "
+                    f"exceeds r_hs+r_ls {(r_limit or 0)*1e3:.2f} mOhm")
+            warn.append(
+                "cin shared-trunk model clamped for deck consumption: "
+                + "; ".join(bits)
+                + " — raw values preserved as *_raw")
+
     # ---- trunk-excluded switch-side residuals (for cin_network double-count) ----
     # L_loop / r_hs / r_ls are the FULL bulk-anchored loop and OVERLAP the cin trunk
     # (cin_L_shared/cin_R_shared): the trunk IS the loop's shared Vin/GND leg. When the
@@ -357,6 +845,16 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     # cin_network use *_switch in Lloop and cin_L_shared/cin_R_shared in the trunk; the
     # trunk then correctly sees INPUT-RIPPLE current, not the full switch current.
     L_loop_switch = r_hs_switch = r_ls_switch = None
+    L_loop_switch_raw = r_hs_switch_raw = r_ls_switch_raw = None
+    if cin_dec_raw:
+        csh_L_raw = float(cin_dec_raw["L_shared"])
+        csh_R_raw = float(cin_dec_raw["R_shared"])
+        if L_loop is not None:
+            L_loop_switch_raw = L_loop - csh_L_raw
+        if r_hs is not None and r_ls is not None and (r_hs + r_ls) > 0:
+            f_hs = r_hs / (r_hs + r_ls)
+            r_hs_switch_raw = r_hs - csh_R_raw * f_hs
+            r_ls_switch_raw = r_ls - csh_R_raw * (1.0 - f_hs)
     if cin_dec:
         csh_L = float(cin_dec["L_shared"])
         csh_R = float(cin_dec["R_shared"])
@@ -380,6 +878,81 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                     f"({(r_hs+r_ls)*1e3:.2f}) — trunk/loop basis mismatch; clamped 0")
             r_hs_switch = max(0.0, r_hs_switch)
             r_ls_switch = max(0.0, r_ls_switch)
+
+    cin_diag = dict(valid=True, diagnostics=[], regions=[], metrics={})
+    if cin_dec_raw:
+        cin_diag = _cin_region_diagnostics(
+            L, net_idx, net_refs, weights=weights,
+            residual_raw=L_loop_switch_raw)
+        for d in cin_diag["diagnostics"]:
+            msg = d.get("message")
+            if msg:
+                warn.append("scalar cin model invalid: " + msg)
+    requested_cin_mode = (
+        (topo or {}).get("cin_network_model") if isinstance(topo, dict) else None)
+    resolved_cin_mode = "matrix" if cin_matrix else "scalar_trunk"
+    # actionable fix for the errors above: the single-trunk reduction broke down on this
+    # heterogeneous bank (negative switch residual / circulating-share clamp). Matrix mode
+    # keeps the off-diagonal cap coupling, so there is no trunk-vs-loop subtraction to clamp.
+    if resolved_cin_mode == "scalar_trunk" and any(
+            d.get("severity") == "error" for d in cin_diag.get("diagnostics", [])):
+        if requested_cin_mode != "matrix":
+            warn.append(
+                "scalar cin model invalid -> RECOMMEND matrix mode: re-run with "
+                "--emit-cin-network --cin-network-model matrix (keeps off-diagonal cap coupling; "
+                "no negative switch residual / circulating-share clamp). The scalar_trunk deck "
+                "under-counts the switch-loop L and mis-attributes per-cap Cin current — loss-band "
+                "impact may be small, but the HF-ring per-cap attribution is wrong.")
+        else:
+            # matrix WAS requested but cin_matrix wasn't produced — don't tell them to pass the
+            # flag they already passed; point at the real blocker (the emission preconditions).
+            warn.append(
+                "scalar cin model invalid AND matrix mode was requested but not produced "
+                "(cin_matrix is None) — the identity matrix basis needs the pad-ideal fet "
+                "closure; check cin_extraction_basis / cin_closure in the extraction config. "
+                "Falling back to the invalid scalar_trunk reduction.")
+    matrix_diag = []
+    matrix_valid = None
+    if requested_cin_mode == "matrix":
+        if cin_matrix:
+            matrix_valid = bool(cin_matrix.get("spice_realizable"))
+            if not matrix_valid:
+                matrix_diag.append(dict(
+                    severity="error",
+                    code="cin_matrix_k_too_high",
+                    message=(
+                        f"cin identity matrix Kmax={cin_matrix.get('kmax'):.4f} "
+                        "is at/above 0.95 SPICE realizability merge threshold")))
+        else:
+            matrix_valid = False
+            matrix_diag.append(dict(
+                severity="error",
+                code="cin_matrix_basis_unavailable",
+                message=(
+                    "matrix cin model requested but only the pad_ideal identity "
+                    "basis is implemented; use lead_mm=0/leads-internal fixture "
+                    "or keep scalar_trunk disabled")))
+    cin_model = dict(
+        mode=resolved_cin_mode,
+        requested_mode=requested_cin_mode,
+        basis=(cin_matrix.get("basis") if cin_matrix else None),
+        scalar_valid=bool(cin_diag["valid"]),
+        scalar_valid_basis="homogeneity_only",
+        matrix_valid=matrix_valid,
+        full_multiport_required=None,
+        switch_separability=dict(
+            status=("structurally_not_required" if cin_matrix else "not_evaluated"),
+            reason=("identity basis uses the full commutation matrix; no "
+                    "cap/switch decomposition is performed" if cin_matrix
+                    else "cap-branch-only matrix extraction is not implemented")),
+        region_assignment=dict(
+            basis=("identity_full_matrix" if cin_matrix else "full_loop_matrix_diagnostic"),
+            regions=cin_diag["regions"],
+            metrics=cin_diag["metrics"]),
+        gauge_fix_status=(cin_matrix.get("gauge_fix_status") if cin_matrix else None),
+        gauge_fix_reason=(cin_matrix.get("gauge_fix_reason") if cin_matrix else None),
+        diagnostics=cin_diag["diagnostics"] + matrix_diag,
+    )
 
     def eff_loop_csi(g):
         """Effective gate-loop mutual to the full commutation port set.
@@ -453,10 +1026,56 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
 
     csi_hs = representative(hs_devices, "csi", side_csi(ih, "P_hs", csi_hs_loop))
     csi_ls = representative(ls_devices, "csi", side_csi(il, "P_ls", csi_ls_loop))
+    L_gate_hs = representative(hs_devices, "L_gate", LL(ih, ih))
+    R_gate_hs = representative(hs_devices, "R_gate", RR(ih))
+    L_gate_ls = representative(ls_devices, "L_gate", LL(il, il))
+    R_gate_ls = representative(ls_devices, "R_gate", RR(il))
+    m_gate = LL(ih, il)
     if len(hs_devices) > 1 or len(ls_devices) > 1:
         warn.append(
             "per-device parallel-FET ports present: side-level L_gate/csi scalars are "
             "max-per-device compatibility values; use parallel_devices for per-ref data")
+
+    # A missing gate port (e.g. --allow-missing-gate-ports on a board whose gate
+    # routing the KiCad importer dropped) leaves ih/il None, which the helpers
+    # above flatten to 0.0 — indistinguishable from a physically-measured zero, so
+    # a consumer/report could read "CSI = 0" as real. Encode UNAVAILABLE as None
+    # (JSON null) and carry an availability flag so the CLI/report/lib label it and
+    # the downstream loss tool can refuse rather than trust a fabricated zero.
+    # Availability must also catch PARTIAL per-device loss: device_ports() silently
+    # drops a paralleled device whose own gate port is missing, so ih/il can still
+    # resolve from a SURVIVING device and the side scalar would report a numeric
+    # value that omits the dropped device — masking the loss. Require EVERY expected
+    # device gate port to be present for a per-device side to count as available,
+    # and record which refs were dropped.
+    def _expected_device_ports(role):
+        side = (topo or {}).get(role, {}) if isinstance(topo, dict) else {}
+        return side.get("device_ports") or []
+
+    def _dropped_device_refs(role):
+        if not is_per_device:
+            return []
+        present = {d["gate"] for d in device_ports(role)}
+        return [dev.get("ref") for dev in _expected_device_ports(role)
+                if dev.get("gate_label") not in present]
+
+    def _side_gate_available(role, gate_index):
+        if gate_index is None:
+            return False
+        if is_per_device and _expected_device_ports(role):
+            return not _dropped_device_refs(role)   # all expected devices present
+        return True
+
+    hs_dropped = _dropped_device_refs("hs")
+    ls_dropped = _dropped_device_refs("ls")
+    hs_gate_available = _side_gate_available("hs", ih)
+    ls_gate_available = _side_gate_available("ls", il)
+    if not hs_gate_available:
+        csi_hs = csi_hs_loop = L_gate_hs = R_gate_hs = None
+    if not ls_gate_available:
+        csi_ls = csi_ls_loop = L_gate_ls = R_gate_ls = None
+    if not (hs_gate_available and ls_gate_available):
+        m_gate = None
 
     p = dict(
         freq_Hz=f,
@@ -467,32 +1086,48 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         per_cap_L=per_cap_L, current_split=split,
         cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond, reduce_warn=warn,
         L_eff_sweep=sweep, n_cin=len(cin_idx),
-        L_gate_hs=representative(hs_devices, "L_gate", LL(ih, ih)),
-        R_gate_hs=representative(hs_devices, "R_gate", RR(ih)),
-        L_gate_ls=representative(ls_devices, "L_gate", LL(il, il)),
-        R_gate_ls=representative(ls_devices, "R_gate", RR(il)),
+        L_gate_hs=L_gate_hs,
+        R_gate_hs=R_gate_hs,
+        L_gate_ls=L_gate_ls,
+        R_gate_ls=R_gate_ls,
+        gate_ports_available=dict(hs=hs_gate_available, ls=ls_gate_available,
+                                  hs_dropped_devices=hs_dropped,
+                                  ls_dropped_devices=ls_dropped),
         r_hs=r_hs, r_ls=r_ls, r_loop_cond=r_loop_cond, r_sw=r_sw,
-        r_cond_freq=f_dc, cond_ref=cond_ref,
+        r_cond_freq=f_dc, R_dc_freq_Hz=f_dc, R_100k_freq_Hz=f_100k,
+        cond_ref=cond_ref,
         cin_branches=(cin_dec["branches"] if cin_dec else None),
         cin_L_shared=(cin_dec["L_shared"] if cin_dec else None),
         cin_R_shared=(cin_dec["R_shared"] if cin_dec else None),
+        cin_branches_raw=(cin_dec_raw["branches"] if cin_dec_raw else None),
+        cin_L_shared_raw=(cin_dec_raw["L_shared"] if cin_dec_raw else None),
+        cin_R_shared_raw=(cin_dec_raw["R_shared"] if cin_dec_raw else None),
+        cin_shared_model=cin_shared_model,
         # LF/switching-frequency view of the same cap network, for the LF ripple
-        # schematic. Keep the historical keys above tied to the loop plateau so
-        # existing loss/deck consumers do not silently change behavior.
+        # schematic. Keep historical fields above consumer-compatible: L from
+        # the loop plateau, R from the 100 kHz damping basis. Put near-DC R only
+        # under explicitly LF/DC-named fields.
         cin_branches_lf=(cin_dec_lf["branches"] if cin_dec_lf else None),
         cin_L_shared_lf=(cin_dec_lf["L_shared"] if cin_dec_lf else None),
         cin_R_shared_lf=(cin_dec_lf["R_shared"] if cin_dec_lf else None),
         cin_branch_freq_Hz=f_dc,
+        cin_matrix=cin_matrix,
+        cin_model=cin_model,
+        cin_model_valid=_cin_model_valid_for_mode(cin_model),
+        cin_model_diagnostics=cin_model["diagnostics"],
         # trunk-excluded switch-side residuals: consumers with cin_network place THESE
         # in Lloop_hs/ls (not L_loop/r_hs/r_ls) so the trunk copper isn't double-counted
         L_loop_switch=L_loop_switch,
+        L_loop_switch_raw=L_loop_switch_raw,
         r_hs_switch=r_hs_switch, r_ls_switch=r_ls_switch,
+        r_hs_switch_raw=r_hs_switch_raw, r_ls_switch_raw=r_ls_switch_raw,
         csi_hs=csi_hs,
         csi_ls=csi_ls,
         csi_hs_loop=csi_hs_loop,
         csi_ls_loop=csi_ls_loop,
-        m_gate=LL(ih, il),
-        port_L=L.tolist(), port_R=R.tolist(), ports=ports, cin_ports=cin_ports,
+        m_gate=m_gate,
+        port_L=L.tolist(), port_R=R.tolist(), port_R_dc=R_dc.tolist(),
+        port_R_100k=R_100k.tolist(), ports=ports, cin_ports=cin_ports,
         topo=topo, meta=meta,
     )
     if is_per_device:

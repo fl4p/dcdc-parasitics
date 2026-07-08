@@ -1,0 +1,17 @@
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+hs_ref: [Q1, Q3]
+ls_ref: [Q2]
+parallel_fets: per-device
+lead_mm: 0 # package leads are inside the vendor _L0 model; board copper uses pad-ideal closure
+cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
+pitch: [1]
+lf_freq: 39000
+emit_cin_network: true
+cin_network_model: matrix
+weld_tol: 0.6
+margin: 8.0
+out: out/fugu2-perDeev-noLeads
+svg: true

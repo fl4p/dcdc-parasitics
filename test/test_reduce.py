@@ -248,23 +248,27 @@ check("per-device ref fallback preserves underscores",
 # 11. cin branch decomposition: shared Vin/GND trunk + private branch per cap.
 L_sh, Lb = 8e-9, [2e-9, 3e-9, 5e-9]
 R_sh, Rb = 0.5e-3, [1e-3, 2e-3, 0.5e-3]
+R_sh_dc, Rb_dc = 0.3e-3, [0.7e-3, 1.4e-3, 0.35e-3]
 m = len(Lb)
 capports = ["P_pwr", "P_pwr1", "P_pwr2"]
 Zpl = np.zeros((m, m), dtype=complex)     # plateau (L info)
-Zlo2 = np.zeros((m, m), dtype=complex)    # low freq (R info)
+Z100k2 = np.zeros((m, m), dtype=complex)  # scalar-network R damping basis
+Zdc2 = np.zeros((m, m), dtype=complex)    # near-DC R reporting basis
 wpl = 2 * np.pi * 5e6
 for a in range(m):
     for b in range(m):
         Lij = L_sh + (Lb[a] if a == b else 0.0)
         Rij = R_sh + (Rb[a] if a == b else 0.0)
+        Rij_dc = R_sh_dc + (Rb_dc[a] if a == b else 0.0)
         Zpl[a, b] = 1j * wpl * Lij
-        Zlo2[a, b] = Rij + 1j * (2 * np.pi * 1e5) * Lij
+        Z100k2[a, b] = Rij + 1j * (2 * np.pi * 1e5) * Lij
+        Zdc2[a, b] = Rij_dc + 1j * (2 * np.pi * 1e3) * Lij
 topo11 = {"cin_used": ["C1", "C2", "C3"],
           "cin_class": {"C1": "bulk", "C2": "bulk", "C3": "mlcc"},
           "cin_net": [{"ref": "C1", "cls": "bulk", "label": "P_pwr"},
                       {"ref": "C2", "cls": "bulk", "label": "P_pwr1"},
                       {"ref": "C3", "cls": "mlcc", "label": "P_pwr2"}]}
-p11 = sr.reduce_parasitics({1e5: Zlo2, 5e6: Zpl}, capports, topo11, {},
+p11 = sr.reduce_parasitics({1e3: Zdc2, 1e5: Z100k2, 5e6: Zpl}, capports, topo11, {},
                            plateau=5e6, cin_ports=capports)
 brs = {b["ref"]: b for b in p11["cin_branches"]}
 check("cin L_shared trunk", abs(p11["cin_L_shared"] - L_sh) < 1e-15,
@@ -272,9 +276,16 @@ check("cin L_shared trunk", abs(p11["cin_L_shared"] - L_sh) < 1e-15,
 check("cin Lb per cap (diag - trunk)",
       all(abs(brs[r]["Lb"] - Lb[i]) < 1e-15 for i, r in enumerate(["C1", "C2", "C3"])),
       ", ".join(f"{brs[r]['Lb']*1e9:.2f}" for r in ["C1", "C2", "C3"]))
-check("cin Rb per cap at f_dc",
+check("cin Rb per cap at R_100k compatibility basis",
       all(abs(brs[r]["Rb"] - Rb[i]) < 1e-12 for i, r in enumerate(["C1", "C2", "C3"])),
       ", ".join(f"{brs[r]['Rb']*1e3:.2f}" for r in ["C1", "C2", "C3"]))
+brs_dc = {b["ref"]: b for b in p11["cin_branches_lf"]}
+check("cin Rb per cap at R_100k while LF view uses R_dc",
+      all(abs(brs[r]["Rb"] - Rb[i]) < 1e-12 for i, r in enumerate(["C1", "C2", "C3"])) and
+      all(abs(brs_dc[r]["Rb"] - Rb_dc[i]) < 1e-12 for i, r in enumerate(["C1", "C2", "C3"])) and
+      abs(p11["cin_R_shared"] - R_sh) < 1e-12 and
+      abs(p11["cin_R_shared_lf"] - R_sh_dc) < 1e-12,
+      f'R100k={p11["cin_R_shared"]*1e3:.2f}m Rdc={p11["cin_R_shared_lf"]*1e3:.2f}m')
 check("cin class passthrough",
       brs["C1"]["cls"] == "bulk" and brs["C3"]["cls"] == "mlcc")
 
@@ -348,8 +359,12 @@ b14 = {b["ref"]: b for b in p14["cin_branches"]}
 check("heterogeneous: no negative Lb (mean-offdiag 9.5 > min-diag 8.5)",
       all(b["Lb"] >= 0 for b in p14["cin_branches"]),
       ", ".join(f'{r}={b14[r]["Lb"]*1e9:.2f}' for r in ["C1", "C2", "CB"]))
-check("heterogeneous: trunk clamped to min diagonal",
-      abs(p14["cin_L_shared"] - 8.5e-9) < 1e-15, f'{p14["cin_L_shared"]*1e9:.3f} nH')
+check("heterogeneous: raw trunk clamped to min diagonal",
+      abs(p14["cin_L_shared_raw"] - 8.5e-9) < 1e-15,
+      f'{p14["cin_L_shared_raw"]*1e9:.3f} nH')
+check("heterogeneous: model trunk does not exceed selected loop",
+      p14["cin_L_shared"] <= p14["L_loop"] + 1e-18,
+      f'shared={p14["cin_L_shared"]*1e9:.3f} loop={p14["L_loop"]*1e9:.3f}')
 check("heterogeneous: clamp warns",
       any("clamped" in w for w in p14["reduce_warn"]),
       "; ".join(w for w in p14["reduce_warn"] if "clamp" in w) or "(no warn!)")
@@ -358,22 +373,22 @@ check("heterogeneous: clamp warns",
 #     L_loop/r_hs/r_ls are the FULL bulk-anchored loop and overlap the cin trunk, so
 #     consumers with cin_network must place the *_switch residuals in Lloop instead.
 #     L_loop_switch = L_loop - cin_L_shared; the trunk R_shared is subtracted ONCE,
-#     allocated per-side proportional to r_hs:r_ls (so the two subtractions sum to
-#     exactly cin_R_shared — never double-subtracting the shared return).
-w_pl15, w_dc15 = 2 * np.pi * 5e6, 2 * np.pi * 1e5
+#     allocated per-side proportional to r_hs:r_ls. R_shared uses the 100 kHz
+#     damping basis; the DC switch path must not clamp it downward.
+w_pl15, w_100k15 = 2 * np.pi * 5e6, 2 * np.pi * 1e5
 # plateau L (nH): P_pwr self 7, P_cin_C2 self 9, shared off-diag 6 -> cin_L_shared 6
 Lpl15 = np.array([[7, 0, 0, 6], [0, 3, 0, 0],
                   [0, 0, 3, 0], [6, 0, 0, 9]]) * 1e-9
 Zpl15 = 1j * w_pl15 * Lpl15.astype(complex)
-# DC R (mOhm): r_hs=3 (P_hs diag), r_ls=6 (P_ls diag); P_pwr<->P_cin_C2 off-diag 6
-# -> cin_R_shared 6 (diagonals 8 >= 6, unclamped)
-Rdc15 = np.array([[8, 0, 0, 6], [0, 3, 0, 0],
-                  [0, 0, 6, 0], [6, 0, 0, 8]]) * 1e-3
-Zdc15 = Rdc15.astype(complex) + 1j * w_dc15 * Lpl15.astype(complex)
+# 100 kHz R damping basis (mOhm): r_hs=3 (P_hs diag), r_ls=6 (P_ls diag);
+# P_pwr<->P_cin_C2 off-diag 6 -> cin_R_shared 6 (diagonals 8 >= 6, unclamped)
+R100k15 = np.array([[8, 0, 0, 6], [0, 3, 0, 0],
+                    [0, 0, 6, 0], [6, 0, 0, 8]]) * 1e-3
+Z100k15 = R100k15.astype(complex) + 1j * w_100k15 * Lpl15.astype(complex)
 ports15 = ["P_pwr", "P_hs", "P_ls", "P_cin_C2"]
 topo15 = {"cin_net": [{"ref": "C1", "cls": "mlcc", "label": "P_pwr"},
                       {"ref": "C2", "cls": "bulk", "label": "P_cin_C2"}]}
-p15 = sr.reduce_parasitics({1e5: Zdc15, 5e6: Zpl15}, ports15, topo15, {},
+p15 = sr.reduce_parasitics({1e5: Z100k15, 5e6: Zpl15}, ports15, topo15, {},
                            plateau=5e6, cin_ports=["P_pwr"])
 check("residual: L_loop_switch = L_loop - cin_L_shared",
       abs(p15["L_loop_switch"] - 1e-9) < 1e-15, f'{p15["L_loop_switch"]*1e9:.3f} nH')
@@ -384,6 +399,324 @@ check("residual: r_ls_switch = r_ls - Rsh*r_ls/(r_hs+r_ls)",
 check("residual: trunk subtracted exactly once (sum = r_hs+r_ls-R_shared)",
       abs((p15["r_hs_switch"] + p15["r_ls_switch"])
           - (p15["r_hs"] + p15["r_ls"] - p15["cin_R_shared"])) < 1e-12)
+
+# 15b. If the full-bank trunk basis exceeds the selected HF loop basis, preserve
+#      raw diagnostics but clamp the model fields consumed by the loss deck.
+Lpl15b = np.array([[7, 3, 0, 6],
+                   [3, 7, 0, 0],
+                   [0, 0, 3, 0],
+                   [6, 0, 0, 9]]) * 1e-9
+Zpl15b = 1j * w_pl15 * Lpl15b.astype(complex)
+R100k15b = np.array([[8, 0, 0, 6], [0, 8, 0, 0],
+                     [0, 0, 3, 0], [6, 0, 0, 8]]) * 1e-3
+Z100k15b = R100k15b.astype(complex) + 1j * w_100k15 * Lpl15b.astype(complex)
+ports15b = ["P_pwr", "P_pwr1", "P_ls", "P_cin_C2"]
+topo15b = {"cin_net": [{"ref": "C1", "cls": "mlcc", "label": "P_pwr"},
+                       {"ref": "C2", "cls": "bulk", "label": "P_cin_C2"}]}
+p15b = sr.reduce_parasitics({1e5: Z100k15b, 5e6: Zpl15b}, ports15b, topo15b, {},
+                            plateau=5e6, cin_ports=["P_pwr", "P_pwr1"])
+b15b = {b["ref"]: b for b in p15b["cin_branches"]}
+b15b_raw = {b["ref"]: b for b in p15b["cin_branches_raw"]}
+check("residual clamp: raw shared kept",
+      abs(p15b["cin_L_shared_raw"] - 6e-9) < 1e-15,
+      f'{p15b["cin_L_shared_raw"]*1e9:.3f} nH')
+check("residual clamp: model shared limited to selected loop",
+      p15b["cin_shared_model"]["clamped"] and
+      abs(p15b["cin_L_shared"] - p15b["L_loop"]) < 1e-15,
+      f'shared={p15b["cin_L_shared"]*1e9:.3f} loop={p15b["L_loop"]*1e9:.3f}')
+check("residual clamp: model switch L is zero but raw is negative",
+      abs(p15b["L_loop_switch"]) < 1e-18 and p15b["L_loop_switch_raw"] < 0,
+      f'model={p15b["L_loop_switch"]*1e9:.3f} raw={p15b["L_loop_switch_raw"]*1e9:.3f}')
+check("residual clamp: branches recomputed from model shared",
+      b15b["C1"]["Lb"] > b15b_raw["C1"]["Lb"] and
+      b15b["C2"]["Lb"] > b15b_raw["C2"]["Lb"],
+      f'C1 {b15b_raw["C1"]["Lb"]*1e9:.2f}->{b15b["C1"]["Lb"]*1e9:.2f} nH')
+R100k15c = np.array([[8, 0, 0, 6], [0, 1, 0, 0],
+                     [0, 0, 1, 0], [6, 0, 0, 8]]) * 1e-3
+Rdc15c = np.array([[0.8, 0, 0, 0.6], [0, 1, 0, 0],
+                   [0, 0, 1, 0], [0.6, 0, 0, 0.8]]) * 1e-3
+Z100k15c = R100k15c.astype(complex) + 1j * w_100k15 * Lpl15.astype(complex)
+Zdc15c = Rdc15c.astype(complex) + 1j * (2 * np.pi * 1e3) * Lpl15.astype(complex)
+p15c = sr.reduce_parasitics({1e3: Zdc15c, 1e5: Z100k15c, 5e6: Zpl15},
+                            ports15, topo15, {}, plateau=5e6,
+                            cin_ports=["P_pwr"])
+check("scalar R_100k trunk is not clamped by DC switch path",
+      abs(p15c["cin_R_shared"] - 6e-3) < 1e-12 and
+      abs(p15c["cin_R_shared_lf"] - 0.6e-3) < 1e-12,
+      f'R100k={p15c["cin_R_shared"]*1e3:.2f}m Rdc={p15c["cin_R_shared_lf"]*1e3:.2f}m')
+check("scalar cin model invalid when residual is negative",
+      p15b["cin_model_valid"] is False,
+      str(p15b.get("cin_model")))
+check("scalar cin model reports negative residual diagnostic",
+      any(d.get("code") == "negative_switch_residual"
+          for d in p15b["cin_model_diagnostics"]),
+      str(p15b["cin_model_diagnostics"]))
+check("switch separability is not evaluated without cap-only matrix",
+      p15b["cin_model"]["switch_separability"]["status"] == "not_evaluated",
+      str(p15b["cin_model"]["switch_separability"]))
+
+# 16. Matrix request on a pad-ideal/no-lead fixture resolves to identity basis:
+# the full Cin port matrix is the model; there is no separate switch trunk/gauge.
+L16 = np.array([[4.0, 3.0], [3.0, 5.0]]) * 1e-9
+R16 = np.array([[8.0, 1.0], [1.0, 9.0]]) * 1e-3
+R16dc = np.array([[5.0, 0.4], [0.4, 6.0]]) * 1e-3
+Z16 = R16.astype(complex) + 1j * w_pl15 * L16.astype(complex)
+Z16dc = R16dc.astype(complex) + 1j * (2 * np.pi * 1e3) * L16.astype(complex)
+Z16_100k = R16.astype(complex) + 1j * (2 * np.pi * 1e5) * L16.astype(complex)
+topo16 = {
+    "cin_network_model": "matrix",
+    "fet_closure": "pad_ideal",
+    "cin_net": [
+        {"ref": "C1", "cls": "mlcc", "label": "P_pwr"},
+        {"ref": "C2", "cls": "mlcc", "label": "P_pwr1"},
+    ],
+}
+p16 = sr.reduce_parasitics({1e3: Z16dc, 1e5: Z16_100k, 5e6: Z16},
+                           ["P_pwr", "P_pwr1"], topo16, {},
+                           plateau=5e6, cin_ports=["P_pwr", "P_pwr1"])
+check("identity matrix resolves mode=matrix",
+      p16["cin_model"]["mode"] == "matrix" and p16["cin_model"]["basis"] == "identity",
+      str(p16["cin_model"]))
+check("identity matrix is valid for mode",
+      p16["cin_model_valid"] is True and p16["cin_model"]["matrix_valid"] is True,
+      str(p16["cin_model"]))
+check("identity matrix carries full L/R matrix and zero trunk",
+      p16["cin_matrix"]["L"] == L16.tolist() and
+      p16["cin_matrix"]["R"] == R16.tolist() and
+      p16["cin_matrix"]["R_100k"] == R16.tolist() and
+      p16["cin_matrix"]["R_dc"] == R16dc.tolist() and
+      p16["cin_matrix"]["R_100k_freq_Hz"] == 1e5 and
+      p16["cin_matrix"]["R_dc_freq_Hz"] == 1e3 and
+      p16["cin_matrix"]["L_sw_element"] == 0.0,
+      str(p16["cin_matrix"]))
+check("identity matrix gauge structurally not required",
+      p16["cin_model"]["gauge_fix_status"] == "structurally_not_required" and
+      p16["cin_model"]["gauge_fix_reason"] == "zero_by_plane_p_equiv" and
+      p16["cin_matrix"]["switch_board_copper"] == "in_matrix",
+      str(p16["cin_model"]))
+
+# Exact rail equality must be refused by the producer, matching the loss consumer's
+# abs(K) >= 0.95 refusal.
+L16b = np.array([[1.0, 0.95], [0.95, 1.0]]) * 1e-9
+R16b = np.eye(2) * 1e-3
+Z16b = R16b.astype(complex) + 1j * w_pl15 * L16b.astype(complex)
+p16b = sr.reduce_parasitics({5e6: Z16b}, ["P_pwr", "P_pwr1"], topo16, {},
+                            plateau=5e6, cin_ports=["P_pwr", "P_pwr1"])
+check("identity matrix refuses exact K rail",
+      p16b["cin_matrix"]["kmax"] == 0.95 and
+      p16b["cin_matrix"]["spice_realizable"] is False and
+      p16b["cin_model_valid"] is False,
+      str(p16b["cin_matrix"]))
+
+# 17. Additive switch-separability fit with explicit port gauge.
+refs17 = ["C1", "C2", "C3"]
+Lcap17 = np.diag([4.0, 5.0, 6.0]) * 1e-9
+Lcap17[0, 1] = Lcap17[1, 0] = 1.2e-9
+Lcap17[0, 2] = Lcap17[2, 0] = 0.8e-9
+Lcap17[1, 2] = Lcap17[2, 1] = 1.1e-9
+Lsw17 = 0.4e-9
+mphys17 = np.array([0.1, 0.2, -0.05]) * 1e-9
+delta17 = Lsw17 + mphys17[:, None] + mphys17[None, :]
+fit17 = sr._fit_switch_additive_delta(Lcap17 + delta17, Lcap17, refs17, Lsw17,
+                                      floor=0.06e-9)
+check("additive fit recovers physical gauge m_i",
+      np.allclose(fit17["m_i_physical"], mphys17, atol=1e-18),
+      str(fit17))
+check("additive fit emits modeling gauge element values",
+      abs(fit17["regauge_c"] - 0.1e-9) < 1e-18 and
+      abs(fit17["L_sw_element"] - 0.6e-9) < 1e-18 and
+      np.allclose(fit17["m_i_modeling"], [0.0, 0.1e-9, -0.15e-9], atol=1e-18),
+      str(fit17))
+check("additive fit residual is zero for separable matrix",
+      fit17["residual_fro"] < 1e-18 and fit17["residual_max_abs"] < 1e-18,
+      str(fit17))
+check("additive fit significant couplings use modeling gauge floor",
+      [d["ref"] for d in fit17["significant_couplings"]] == ["C2", "C3"],
+      str(fit17["significant_couplings"]))
+
+# Non-exact data must use the same all-pairs objective as the reported
+# Frobenius residual, not an unweighted upper-triangle fit.
+B17b = np.array([
+    [2.0, 4.0, 1.0],
+    [4.0, 5.0, 3.0],
+    [1.0, 3.0, 7.0],
+]) * 1e-10
+Lsw17b = 0.5e-9
+fit17b = sr._fit_switch_additive_delta(Lcap17 + Lsw17b + B17b, Lcap17,
+                                       refs17, Lsw17b)
+s17b = float(np.sum(B17b) / (2.0 * len(refs17)))
+expected_m17b = (np.sum(B17b, axis=1) - s17b) / len(refs17)
+expected_recon17b = Lsw17b + expected_m17b[:, None] + expected_m17b[None, :]
+expected_resid17b = (Lsw17b + B17b) - expected_recon17b
+check("additive fit noisy case uses all-pairs Frobenius objective",
+      np.allclose(fit17b["m_i_physical"], expected_m17b, atol=1e-18) and
+      abs(fit17b["residual_fro"] - np.linalg.norm(expected_resid17b, ord="fro")) < 1e-18,
+      str(fit17b))
+
+try:
+    sr._fit_switch_additive_delta(Lcap17 - 0.2e-9, Lcap17, refs17, 0.1e-9)
+except ValueError as e:
+    check("additive fit refuses nonpositive modeling switch element",
+          "L_sw_element" in str(e), str(e))
+else:
+    check("additive fit refuses nonpositive modeling switch element", False,
+          "expected ValueError")
+
+# 18. Future decomposed matrix payload: cap-only matrix plus L_sw_element and
+# modeling-gauge K(cap, L_sw) couplings.
+Rcap18 = np.eye(3) * 1e-3
+payload18 = sr._cin_decomposed_matrix_payload(
+    Lcap17 + delta17, Lcap17, Rcap18, refs17, Lsw17, floor=0.06e-9)
+check("decomposed matrix payload resolves sw-coupling mode",
+      payload18["mode"] == "matrix_with_sw_coupling" and
+      payload18["basis"] == "cap_only_additive" and
+      payload18["gauge_fix_status"] == "fixed" and
+      payload18["switch_separability"]["status"] == "passed" and
+      payload18["decomposition_valid"] is True,
+      str(payload18))
+check("decomposed matrix payload emits L_sw element and cap-switch K",
+      abs(payload18["L_sw_element"] - 0.6e-9) < 1e-18 and
+      [d["ref"] for d in payload18["switch_couplings"]] == ["C2", "C3"] and
+      all(abs(d["K"]) > 0 for d in payload18["switch_couplings"]),
+      str(payload18["switch_couplings"]))
+payload18b = sr._cin_decomposed_matrix_payload(
+    Lcap17 + delta17, Lcap17, Rcap18, refs17, Lsw17, floor=0.2e-9)
+check("decomposed matrix payload resolves plain matrix when m_i below floor",
+      payload18b["mode"] == "matrix" and not payload18b["switch_couplings"],
+      str(payload18b))
+
+Lcap18c = np.eye(3) * 1e-9
+mphys18c = np.array([0.0, 0.0, 0.95]) * 1e-9
+Lsw18c = 1e-9
+delta18c = Lsw18c + mphys18c[:, None] + mphys18c[None, :]
+payload18c = sr._cin_decomposed_matrix_payload(
+    Lcap18c + delta18c, Lcap18c, Rcap18, refs17, Lsw18c, floor=0.01e-9)
+check("decomposed matrix payload refuses exact switch K rail",
+      np.isclose(payload18c["switch_kmax"], 0.95, rtol=0.0, atol=1e-12) and
+      payload18c["spice_realizable"] is False,
+      str(payload18c))
+
+payload18d = sr._cin_decomposed_matrix_payload(
+    Lcap17 + Lsw17b + B17b, Lcap17, Rcap18, refs17, Lsw17b, floor=1e-12)
+check("decomposed matrix payload falls back on nonseparable residual",
+      payload18d["mode"] == "none" and
+      payload18d["full_multiport_required"] is True and
+      payload18d["full_multiport_valid"] is False and
+      payload18d["decomposition_valid"] is False and
+      payload18d["switch_separability"]["status"] == "failed" and
+      payload18d["separability_fit"]["residual_fro"] > payload18d["separability_fit"]["floor"],
+      str(payload18d))
+check("none mode is not valid until full-multiport emission exists",
+      sr._cin_model_valid_for_mode({
+          "mode": "none",
+          "full_multiport_required": True,
+          "full_multiport_valid": False,
+      }) is False)
+
+# 19. Reducer-side handoff from full/cap-only/switch-residual runs.
+cin_net19 = [
+    {"ref": "C1", "label": "P_pwr"},
+    {"ref": "C2", "label": "P_pwr1"},
+    {"ref": "C3", "label": "P_pwr2"},
+]
+full19 = dict(
+    ports=["P_pwr", "P_pwr1", "P_pwr2"],
+    port_L=(Lcap17 + delta17).tolist(),
+    port_R=Rcap18.tolist(),
+    port_R_100k=(Rcap18 * 2.0).tolist(),
+    port_R_dc=(Rcap18 * 0.5).tolist(),
+    R_100k_freq_Hz=1e5,
+    R_dc_freq_Hz=1e3,
+    topo={"cin_extraction_basis": "full_loop", "cin_net": cin_net19})
+cap19 = dict(
+    ports=["P_pwr", "P_pwr1", "P_pwr2"],
+    port_L=Lcap17.tolist(),
+    port_R=Rcap18.tolist(),
+    port_R_100k=(Rcap18 * 2.0).tolist(),
+    port_R_dc=(Rcap18 * 0.5).tolist(),
+    R_100k_freq_Hz=1e5,
+    R_dc_freq_Hz=1e3,
+    topo={"cin_extraction_basis": "cap_only", "cin_net": cin_net19})
+sw19 = dict(
+    ports=["P_sw_residual"],
+    port_L=[[Lsw17]],
+    port_R=[[0.0]],
+    topo={"cin_extraction_basis": "switch_residual",
+          "demarcation_plane": {"switch_residual_port": "P_sw_residual"}})
+payload19 = sr._cin_matrix_from_reductions(full19, cap19, sw19, floor=0.06e-9)
+check("cin matrix combiner builds decomposed payload from three runs",
+      payload19["mode"] == "matrix_with_sw_coupling" and
+      payload19["refs"] == refs17 and
+      payload19["source_runs"]["switch_residual_port"] == "P_sw_residual" and
+      payload19["R"] == (Rcap18 * 2.0).tolist() and
+      payload19["R_100k"] == (Rcap18 * 2.0).tolist() and
+      payload19["R_dc"] == (Rcap18 * 0.5).tolist() and
+      payload19["R_100k_freq_Hz"] == 1e5 and
+      payload19["R_dc_freq_Hz"] == 1e3,
+      str(payload19))
+
+full19_partial = dict(full19)
+cap19_partial = dict(cap19)
+full19_partial["ports"] = ["P_pwr", "P_pwr2"]
+cap19_partial["ports"] = ["P_pwr", "P_pwr2"]
+try:
+    sr._cin_matrix_from_reductions(full19_partial, cap19_partial, sw19, floor=0.06e-9)
+except ValueError as e:
+    check("cin matrix combiner refuses partial cin_net ports",
+          "missing from solved ports" in str(e), str(e))
+else:
+    check("cin matrix combiner refuses partial cin_net ports", False,
+          "expected ValueError")
+
+cap19_bad = dict(cap19)
+cap19_bad["topo"] = {"cin_extraction_basis": "cap_only",
+                     "cin_net": [dict(cin_net19[1]), dict(cin_net19[0]), dict(cin_net19[2])]}
+try:
+    sr._cin_matrix_from_reductions(full19, cap19_bad, sw19, floor=0.06e-9)
+except ValueError as e:
+    check("cin matrix combiner refuses mismatched cap refs",
+          "refs differ" in str(e), str(e))
+else:
+    check("cin matrix combiner refuses mismatched cap refs", False,
+          "expected ValueError")
+
+cap19_wrong_basis = dict(cap19)
+cap19_wrong_basis["topo"] = dict(cap19["topo"])
+cap19_wrong_basis["topo"]["cin_extraction_basis"] = "full_loop"
+try:
+    sr._cin_matrix_from_reductions(full19, cap19_wrong_basis, sw19, floor=0.06e-9)
+except ValueError as e:
+    check("cin matrix combiner refuses wrong run basis",
+          "expected 'cap_only'" in str(e), str(e))
+else:
+    check("cin matrix combiner refuses wrong run basis", False,
+          "expected ValueError")
+
+sw19_multi = dict(sw19)
+sw19_multi["topo"] = {
+    "cin_extraction_basis": "switch_residual",
+    "demarcation_plane": {"switch_residual_ports": ["P_sw_residual", "P_sw_residual2"]},
+}
+try:
+    sr._cin_matrix_from_reductions(full19, cap19, sw19_multi, floor=0.06e-9)
+except ValueError as e:
+    check("cin matrix combiner refuses declared multiport switch gauge",
+          "exactly one gauge port" in str(e), str(e))
+else:
+    check("cin matrix combiner refuses declared multiport switch gauge", False,
+          "expected ValueError")
+
+sw19_bad = dict(sw19)
+sw19_bad["ports"] = []
+try:
+    sr._cin_matrix_from_reductions(full19, cap19, sw19_bad, floor=0.06e-9)
+except ValueError as e:
+    check("cin matrix combiner refuses missing switch gauge port",
+          "gauge port" in str(e), str(e))
+else:
+    check("cin matrix combiner refuses missing switch gauge port", False,
+          "expected ValueError")
+
 # without cin_net the residuals must stay None (nothing to subtract)
 check("residual: None when no cin_net",
       p13.get("L_loop_switch") is None and p13.get("r_hs_switch") is None)
