@@ -24,6 +24,7 @@ loop-L drift; the finest pitch is used for the emitted artifacts.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,13 +34,19 @@ LIB = os.path.join(HERE, "lib")
 sys.path.insert(0, LIB)  # library modules live in lib/; root holds only this CLI
 
 import emit  # noqa: E402
-import mesh_viewer  # noqa: E402
 import pcb_source  # noqa: E402
 import solve_reduce  # noqa: E402
 
 KICAD_PY = os.environ.get(
     "KICAD_PY",
     "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3")
+
+_Y = "\033[33m"  # yellow
+_R = "\033[0m"   # reset
+
+
+def _warn(msg, file=sys.stdout):
+    print(f"  {_Y}WARNING{_R}: {msg}", file=file)
 
 DEFAULTS = {
     "vin": None,
@@ -59,6 +66,8 @@ DEFAULTS = {
     "cin_esr": 0.0,
     "lead_mm": 3.0,
     "weld_tol": 0.6,
+    "zone_mesh": "grid",
+    "terminal_mode": "padland",
     "margin": 8.0,
     "nwinc": 1,
     "nhinc": 1,
@@ -90,6 +99,8 @@ SCALAR_TYPES = {
     "cin_esr": float,
     "lead_mm": float,
     "weld_tol": float,
+    "zone_mesh": str,
+    "terminal_mode": str,
     "margin": float,
     "nwinc": int,
     "nhinc": int,
@@ -121,7 +132,9 @@ def run_geom(args, pitch, outdir):
            "--nhinc", str(args.nhinc), "--cu-temp", str(args.cu_temp),
            "--cu-thickness", str(args.cu_thickness),
            "--lf-freq", str(args.lf_freq),
-           "--weld-tol", str(args.weld_tol), "--margin", str(args.margin),
+           "--weld-tol", str(args.weld_tol), "--zone-mesh", args.zone_mesh,
+           "--terminal-mode", args.terminal_mode,
+           "--margin", str(args.margin),
            "-o", inp]
     for flag, val in (("--vin", args.vin), ("--hs-gate", args.hs_gate),
                       ("--ls-gate", args.ls_gate)):
@@ -249,6 +262,15 @@ def build_parser():
                     help="FET exposed-lead length mm")
     ap.add_argument("--weld-tol", type=float, default=argparse.SUPPRESS,
                     help="fuse same-net nodes within this many mm in the geometry step")
+    ap.add_argument("--zone-mesh", choices=("grid", "polygon"), default=argparse.SUPPRESS,
+                    help="power-pour mesher: grid is validated/default; polygon is "
+                         "experimental cell-edge clipping for KiPEX-style cross-checks")
+    ap.add_argument("--terminal-mode", choices=("padland", "single", "finite", "point"),
+                    default=argparse.SUPPRESS,
+                    help="pad-to-pour terminal model: padland is validated/default; "
+                         "single is KiPEX-like nearest mesh node; finite uses finite "
+                         "pad-copper spokes to mesh nodes; point is legacy/debug "
+                         "pad-center stitch")
     ap.add_argument("--margin", type=float, default=argparse.SUPPRESS,
                     help="ROI margin (mm) around FETs/Cin for pour meshing")
     ap.add_argument("--nwinc", type=int, default=argparse.SUPPRESS,
@@ -368,6 +390,10 @@ def parse_args(argv=None):
         ap.error("--lf-freq must be > 0 Hz")
     if merged["parallel_fets"] not in ("lumped", "per-device"):
         ap.error("--parallel-fets must be one of: lumped, per-device")
+    if merged["zone_mesh"] not in ("grid", "polygon"):
+        ap.error("--zone-mesh must be one of: grid, polygon")
+    if merged["terminal_mode"] not in ("padland", "single", "finite", "point"):
+        ap.error("--terminal-mode must be one of: padland, single, finite, point")
 
     return argparse.Namespace(**merged)
 
@@ -392,6 +418,11 @@ def main():
         meta = dict(pitch=pitch, lead_mm=side.get("lead_mm"),
                     cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
                     lf_freq=side.get("lf_freq"),
+                    zone_mesh=side.get("zone_mesh"),
+                    terminal_mode=side.get("terminal_mode"),
+                    zone_mesh_notes=side.get("zone_mesh_notes", []),
+                    terminal_regions=side.get("terminal_regions", []),
+                    terminal_fallbacks=side.get("terminal_fallbacks", []),
                     pcb_source=pcb_input, pcb_resolved=args.pcb,
                     pcb_sha256=pcb_sha256,
                     extract_config=args.config, extract_config_sha256=config_sha256)
@@ -425,6 +456,10 @@ def main():
     arts = ["parasitics.lib", "parasitics.json", "report.md"]
     if args.svg:
         arts.append("schematic.svg")
+    # persist the finest-pitch mesh (`inp` is finest here; loop ends coarse->fine) so
+    # downstream tools (loss-density map) can consume it; independent of the viewer flag.
+    if persist_mesh(args, inp):
+        arts.append("mesh/model.inp")
     viewer_msg = None
     if args.viewer:
         # `inp`/`side` are the finest pitch here (loop ends coarse->fine).
@@ -436,7 +471,39 @@ def main():
     if args.viewer and viewer_msg:
         print(f"  {viewer_msg}")
     for w in warn:
-        print(f"  WARNING: {w}")
+        _warn(w)
+
+
+def dump_copper(pcb, dst):
+    """Dump real-PCB copper to `dst` (copper.json, mm frame) via copper_dump.py under
+    KiCad python. Returns dst on success, else None. Shared by persist_mesh + write_viewer."""
+    try:
+        r = subprocess.run([KICAD_PY, os.path.join(HERE, "copper_dump.py"), pcb, "-o", dst],
+                           capture_output=True, text=True)
+        return dst if (r.returncode == 0 and os.path.exists(dst)) else None
+    except OSError:
+        return None
+
+
+def persist_mesh(args, inp):
+    """Copy the finest-pitch FastHenry mesh (`.inp` + `.ports.json`) into `out/mesh/`
+    as `model.inp` / `model.inp.ports.json`, plus a real-PCB `copper.json` overlay. The
+    extractor otherwise leaves the mesh in a temp workdir; persisting it lets downstream
+    tools (e.g. the loss-density map) consume the exact mesh + board overlay via the file
+    contract, like `parasitics.json`. Best-effort, never fatal. Returns the mesh path or None."""
+    try:
+        mesh_dir = os.path.join(args.out, "mesh")
+        os.makedirs(mesh_dir, exist_ok=True)
+        dst = os.path.join(mesh_dir, "model.inp")
+        shutil.copyfile(inp, dst)
+        ports = inp + ".ports.json"
+        if os.path.exists(ports):
+            shutil.copyfile(ports, dst + ".ports.json")
+        dump_copper(args.pcb, os.path.join(mesh_dir, "copper.json"))   # board overlay
+        return dst
+    except OSError as e:
+        sys.stderr.write(f"  (mesh persist skipped: {e})\n")
+        return None
 
 
 def write_viewer(args, inp, workdir):
@@ -445,27 +512,20 @@ def write_viewer(args, inp, workdir):
     All mesh artifacts (mesh.html + mesh_*.png layer rasters) go into a `mesh/`
     subfolder of the output dir so they don't clutter the top-level artifact set.
     Returns a status string, or None if rendering failed (never fatal to the run)."""
-    copper = os.path.join(workdir, "copper.json")
-    try:
-        r = subprocess.run([KICAD_PY, os.path.join(HERE, "copper_dump.py"),
-                            args.pcb, "-o", copper], capture_output=True, text=True)
-        if r.returncode != 0 or not os.path.exists(copper):
-            copper = None
-    except OSError:
-        copper = None
     mesh_dir = os.path.join(args.out, "mesh")
+    persisted = os.path.join(mesh_dir, "copper.json")   # reuse persist_mesh's dump if present
+    copper = persisted if os.path.exists(persisted) else dump_copper(
+        args.pcb, os.path.join(workdir, "copper.json"))
+    os.makedirs(mesh_dir, exist_ok=True)
     out_html = os.path.join(mesh_dir, "mesh.html")
     try:
-        os.makedirs(mesh_dir, exist_ok=True)
+        import mesh_viewer  # noqa: E402
+
         return "mesh/mesh.html: " + mesh_viewer.build_viewer(
             inp, out_html,
             ports_json=inp + ".ports.json", copper=copper)
     except Exception as e:                      # viewer is a convenience artifact, not core
-        try:                                    # don't leave an empty mesh/ dir behind
-            os.rmdir(mesh_dir)
-        except OSError:
-            pass
-        sys.stderr.write(f"  (mesh/mesh.html skipped: {e})\n")
+        sys.stderr.write(f"  (mesh.html skipped: {e})\n")
         return None
 
 
