@@ -7,10 +7,13 @@ The browser composites raster instantly, so even the 0.2mm mesh (170k+ filaments
 stays responsive — no 100k-element SVG DOM.
 
 Layers:
-  PCB copper      Real PCB copper underlay (if --copper) — fade with the opacity slider
-  Top (F.Cu)      F mesh + top-layer SMD caps/ports
-  Bottom (B.Cu)   B mesh + bottom-layer SMD caps/ports
+  Top (F.Cu)      F copper underlay (if --copper) + F mesh + top-layer SMD caps/ports
+  Bottom (B.Cu)   B copper underlay + B mesh + bottom-layer SMD caps/ports
   Vias/FET leads  inter-layer vias, FET-lead risers, FET-plane caps/ports (shared)
+
+With --copper, the PCB copper is split into separate per-layer PNGs so hiding a
+layer hides its copper too. An opacity slider in Overlays fades both copper
+layers together.
 
 With --copper <json> (from copper_dump.py) the REAL PCB copper is drawn faint under
 the mesh in the same mm frame, so it aligns with zero coordinate transform.
@@ -119,15 +122,19 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
                        c=PORT, edgecolors="k", linewidths=.25)
 
     if cu:
-        def d_pcb(ax):
+        def d_fcu_pcb(ax):
             draw_copper_underlay(ax, cu, "F", F_CU)
-            draw_copper_underlay(ax, cu, "B", B_CU)
-        layer("pcb", "PCB copper", d_pcb)
+        layer("fcu_pcb", "F copper", d_fcu_pcb)
 
     def d_fcu(ax):
         ax.add_collection(LineCollection(top, colors=F_CU, linewidths=0.3))
         caps(ax, tcap); ports_mk(ax, tport)
     layer("fcu", "Top (F.Cu) + top SMD", d_fcu)
+
+    if cu:
+        def d_bcu_pcb(ax):
+            draw_copper_underlay(ax, cu, "B", B_CU)
+        layer("bcu_pcb", "B copper", d_bcu_pcb)
 
     def d_bcu(ax):
         ax.add_collection(LineCollection(bot, colors=B_CU, linewidths=0.3))
@@ -149,17 +156,20 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
     imgs = "\n".join(f'<img id="{lid}" class="ly" src="{src(fn)}">' for lid, _, fn in layers)
     lab = {lid: l for lid, l, _ in layers}
 
-    def chk(lid, sw, label):
+    def chk(ids, sw, label):
+        ids_js = "','".join(ids)
         return (f'<label><input type="checkbox" checked '
-                f'onchange="document.getElementById(\'{lid}\').style.display=this.checked?\'block\':\'none\'">'
+                f'onchange="[\'{ids_js}\'].forEach(id=>document.getElementById(id).style.display=this.checked?\'block\':\'none\')">'
                 f'<span class="swatch" style="background:{sw}"></span>{label}</label>')
-    def op_slider(lid):
+    def op_slider(ids):
+        ids_js = "','".join(ids)
         return (f'<label class="op-row"><span>opacity</span>'
                 f'<input type="range" min="0" max="1" step="0.05" value="1" '
-                f'oninput="document.getElementById(\'{lid}\').style.opacity=this.value"></label>')
-    pcb_ctrl = ("\n" + chk("pcb", F_CU, lab["pcb"]) + op_slider("pcb")) if cu else ""
-    controls = ("<h2>Layers</h2>\n" + chk("fcu", F_CU, lab["fcu"]) + "\n" + chk("bcu", B_CU, lab["bcu"])
-                + "\n<h2>Overlays</h2>\n" + chk("annot", VIA, lab["annot"]) + pcb_ctrl)
+                f'oninput="[\'{ids_js}\'].forEach(id=>document.getElementById(id).style.opacity=this.value)"></label>')
+    pcb_op = "\n" + op_slider(["fcu_pcb", "bcu_pcb"]) if cu else ""
+    controls = ("<h2>Layers</h2>\n" + chk(["fcu_pcb", "fcu"] if cu else ["fcu"], F_CU, lab["fcu"])
+                + "\n" + chk(["bcu_pcb", "bcu"] if cu else ["bcu"], B_CU, lab["bcu"])
+                + "\n<h2>Overlays</h2>\n" + chk(["annot"], VIA, lab["annot"]) + pcb_op)
     total_png = sum(os.path.getsize(fn) for _, _, fn in layers)
     counts = (f"F.Cu mesh {len(top)}, B.Cu mesh {len(bot)}, vias {len(via)}, "
               f"ports {len(ext)}, caps {len(capname)}" + (", + real-copper overlay" if cu else ""))
