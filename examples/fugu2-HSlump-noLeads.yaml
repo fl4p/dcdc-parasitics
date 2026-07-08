@@ -4,7 +4,9 @@ gnd: BuckGND
 vin: Solar+
 hs_ref: [Q1, Q3]
 ls_ref: [Q2]
-cin_refs: [C9, C16, C17, C18, C21, C22]
+parallel_fets: lumped
+lead_mm: 0.1 # we would currently model vertical mount only, keep this low and use L from vendor spice model
+cin_refs: [C9, C16, C17, C18, C21, C22, C27]
 pitch: [1.0] #  [2.0, 1.0]
 lf_freq: 39000
 emit_cin_network: true

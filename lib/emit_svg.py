@@ -145,6 +145,17 @@ def _fmtR(v):
     return f"{v*1e3:.1f} mΩ"
 
 
+def _fmtL_na(v):
+    """Inductance label, or 'n/a' when the value is None — a gate port was
+    unavailable (routing dropped, --allow-missing-gate-ports), which is NOT a
+    measured zero. Keeps the schematic from drawing a fabricated 0.00 nH."""
+    return "n/a" if _num(v) is None else _fmtL(_num(v))
+
+
+def _fmtR_na(v):
+    return "n/a" if _num(v) is None else _fmtR(_num(v))
+
+
 def _leaf(net):
     """Leaf net name — drop the KiCad sheet path (/DC/DC/SW_NODE -> SW_NODE)."""
     return (net or "").strip().split("/")[-1]
@@ -337,7 +348,7 @@ def schematic(p):
     s.append(_coil_v(xc, y_lsh0, y_lsh1, CSI, 2.4))
     s.append(_line(xc, y_nhs, xc, y_lsh0, WIRE))
     s.append(_txt(xc - 14, (y_lsh0+y_lsh1)/2 - 2, "Lscs_hs", 11.5, CSI, "end", "bold"))
-    s.append(_txt(xc - 14, (y_lsh0+y_lsh1)/2 + 12, f"{_fmtL(csi_hs)}", 11, CSI, "end"))
+    s.append(_txt(xc - 14, (y_lsh0+y_lsh1)/2 + 12, f"{_fmtL_na(p.get('csi_hs'))}", 11, CSI, "end"))
     # SW node
     s.append(_line(xc, y_lsh1, xc, y_sw, WIRE))
     s.append(_dot(xc, y_sw, CSI))
@@ -368,7 +379,7 @@ def schematic(p):
     s.append(_coil_v(xc, y_lsl_cs0, y_lsl_cs1, CSI, 2.4))
     s.append(_line(xc, y_nls, xc, y_lsl_cs0, WIRE))
     s.append(_txt(xc - 14, (y_lsl_cs0+y_lsl_cs1)/2 - 2, "Lscs_ls", 11.5, CSI, "end", "bold"))
-    s.append(_txt(xc - 14, (y_lsl_cs0+y_lsl_cs1)/2 + 12, f"{_fmtL(csi_ls)}", 11, CSI, "end"))
+    s.append(_txt(xc - 14, (y_lsl_cs0+y_lsl_cs1)/2 + 12, f"{_fmtL_na(p.get('csi_ls'))}", 11, CSI, "end"))
     s.append(_line(xc, y_lsl_cs1, xc, y_gnd, WIRE))
 
     # ================= gate drivers =================
@@ -396,8 +407,8 @@ def schematic(p):
         out.append(_res_h(cy, gx + 28, gx + 50, WIRE))
         out.append(_txt((gx + 8 + gx + 28) / 2, cy - 8, tag.split()[0] + " gate", 9.5,
                         INK, "middle"))
-        out.append(_txt(gx + 66, cy + 24, f"L={_fmtL(l_gate)}", 9.5, INK, "start"))
-        out.append(_txt(gx + 66, cy + 36, f"R={_fmtR(r_gate)} (Cu)", 9.5, INK, "start"))
+        out.append(_txt(gx + 66, cy + 24, f"L={_fmtL_na(l_gate)}", 9.5, INK, "start"))
+        out.append(_txt(gx + 66, cy + 36, f"R={_fmtR_na(r_gate)} (Cu)", 9.5, INK, "start"))
         gd_r = (gd or {}).get("r")
         gd_d = (gd or {}).get("d")
         if gd_r or gd_d:
@@ -437,11 +448,11 @@ def schematic(p):
         out.append(_line(rpx, ret_y, xc, ret_y, WIRE, 1.6, dash=dash))
         return "".join(out)
 
-    s.append(driver(cy_hs, g_hs, y_nhs, y_sw, _num(p.get("L_gate_hs")) or 0.0,
-                    _num(p.get("R_gate_hs")) or 0.0, t["hs"]["kelvin"], "HS gate",
+    s.append(driver(cy_hs, g_hs, y_nhs, y_sw, p.get("L_gate_hs"),
+                    p.get("R_gate_hs"), t["hs"]["kelvin"], "HS gate",
                     t["hs"].get("gate_drive")))
-    s.append(driver(cy_ls, g_ls, y_nls, y_gnd, _num(p.get("L_gate_ls")) or 0.0,
-                    _num(p.get("R_gate_ls")) or 0.0, t["ls"]["kelvin"], "LS gate",
+    s.append(driver(cy_ls, g_ls, y_nls, y_gnd, p.get("L_gate_ls"),
+                    p.get("R_gate_ls"), t["ls"]["kelvin"], "LS gate",
                     t["ls"].get("gate_drive")))
 
     # ================= title + legend =================

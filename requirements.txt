@@ -1,6 +1,8 @@
 # pip dependencies for the system-python solve/reduce/emit step
 numpy
 PyYAML
+scipy            # density.py: sparse DC nodal solve for the copper loss-density map
+matplotlib       # density.py / mesh_viewer.py / power_copper.py: heatmap + mesh rasters
 
 # NOT installable via pip — provided externally (see README.md):
 #   pcbnew    : bundled with KiCad; the geometry step runs under KiCad's own

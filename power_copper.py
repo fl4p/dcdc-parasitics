@@ -13,54 +13,15 @@ Emits <stem>_full.png and <stem>_zoom.png.
 Usage:
     power_copper.py [model.inp] [--copper copper.json] [--zoom X0 X1 Y0 Y1] [--stem OUT]
 """
-import re, json, math, argparse
+import os, sys, json, math, argparse
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection, PolyCollection
-from matplotlib.patches import Polygon
+from matplotlib.collections import LineCollection
 
-F_CU, B_CU = "#e07000", "#12b0bb"      # top / bottom copper
-VIA, LEAD, PORT, CAP = "#ff2d2d", "#ffffff", "#ffe000", "#c8c8c8"
-
-
-def parse_inp(path):
-    N, segs, ext = {}, [], []
-    for ln in open(path):
-        s = ln.strip()
-        m = re.match(r"(N\S+)\s+x=([-\d.]+)\s+y=([-\d.]+)\s+z=([-\d.]+)", s)
-        if m:
-            N[m.group(1)] = (float(m.group(2)), float(m.group(3)), float(m.group(4)))
-        elif s.startswith("E"):
-            t = s.split()
-            if len(t) >= 3 and t[1] in N and t[2] in N:
-                segs.append((t[1], t[2]))
-        elif s.startswith(".external"):
-            t = s.split()
-            ext.append((t[1], t[2]))
-    return N, segs, ext
-
-
-def cap_names(ports_json):
-    """port label -> cap refdes, from the .ports.json sidecar."""
-    p = json.load(open(ports_json))
-    cin_ports = p.get("cin_ports", [])
-    cin_used = p.get("cin_used", [])
-    names = {lbl: cin_used[i] for i, lbl in enumerate(cin_ports) if i < len(cin_used)}
-    for lbl in p.get("ports", []):
-        if lbl.startswith("P_cin_"):
-            names[lbl] = lbl[len("P_cin_"):]
-        elif lbl == "P_bulk":
-            names[lbl] = "bulk"
-    return names
-
-
-def plane(z):
-    if abs(z) < 0.5:
-        return "top"
-    if abs(z + 1.6) < 0.5:
-        return "bot"
-    return "lead"                         # z≈3 mm FET exposed-lead / die plane
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from mesh_geom import (F_CU, B_CU, VIA, LEAD, PORT, CAP,  # noqa: E402
+                       parse_inp, plane, load_cap_names, draw_copper_underlay)
 
 
 def classify(N, segs):
@@ -96,38 +57,10 @@ def cap_symbol(ax, p1, p2, name, z=7):
                 fontsize=6.5, ha="center", va="center", zorder=z, alpha=0.85)
 
 
-def _track_rects(tracks):
-    """Each routed track -> a width-accurate rectangle in DATA (mm) units, so its
-    real copper width shows and scales on zoom (matplotlib linewidths are POINTS,
-    which drew thin traces as fixed hairlines regardless of zoom)."""
-    rects = []
-    for x1, y1, x2, y2, w in tracks:
-        dx, dy = x2 - x1, y2 - y1
-        L = math.hypot(dx, dy)
-        h = w / 2.0
-        if L < 1e-9:                      # zero-length track -> small square
-            rects.append([(x1 - h, y1 - h), (x1 + h, y1 - h), (x1 + h, y1 + h), (x1 - h, y1 + h)])
-            continue
-        nx, ny = -dy / L * h, dx / L * h  # perpendicular offset = half-width
-        rects.append([(x1 + nx, y1 + ny), (x2 + nx, y2 + ny), (x2 - nx, y2 - ny), (x1 - nx, y1 - ny)])
-    return rects
-
-
 def draw_copper(ax, cu):
-    """Faint filled real PCB copper (zones/tracks/pads) UNDER the mesh (z 1-4)."""
-    for ring in cu["zones"]["B"]:
-        ax.add_patch(Polygon(ring, closed=True, facecolor=B_CU, edgecolor="none", alpha=0.16, zorder=1))
-    for ring in cu["zones"]["F"]:
-        ax.add_patch(Polygon(ring, closed=True, facecolor=F_CU, edgecolor="none", alpha=0.16, zorder=2))
-    # tracks as width-accurate filled rectangles (data units), not point-width lines
-    ax.add_collection(PolyCollection(_track_rects(cu["tracks"]["B"]), facecolors=B_CU,
-                                     edgecolors="none", alpha=0.3, zorder=1))
-    ax.add_collection(PolyCollection(_track_rects(cu["tracks"]["F"]), facecolors=F_CU,
-                                     edgecolors="none", alpha=0.3, zorder=2))
-    for ring in cu["pads"]["B"]:
-        ax.add_patch(Polygon(ring, closed=True, facecolor=B_CU, alpha=0.38, zorder=3, edgecolor="none"))
-    for ring in cu["pads"]["F"]:
-        ax.add_patch(Polygon(ring, closed=True, facecolor=F_CU, alpha=0.38, zorder=4, edgecolor="none"))
+    """Faint filled real PCB copper (zones/tracks/pads) UNDER the mesh (B behind F)."""
+    draw_copper_underlay(ax, cu, "B", B_CU, alpha=(0.16, 0.3, 0.38), zbase=1)
+    draw_copper_underlay(ax, cu, "F", F_CU, alpha=(0.16, 0.3, 0.38), zbase=2)
     for e in cu["edge"]:
         ax.plot([e[0], e[2]], [e[1], e[3]], color="#666", lw=0.8, zorder=0)
 
@@ -176,7 +109,7 @@ def main():
     ports_json = args.ports or (args.inp + ".ports.json")
     ports = json.load(open(ports_json))["ports"]
     pmap = dict(zip(ports, ext))            # .external order == ports order
-    capname = cap_names(ports_json)
+    capname = load_cap_names(ports_json)
     top, bot, via, lead = classify(N, segs)
     cu = json.load(open(args.copper)) if args.copper else None
     print(f"{args.inp}: {len(N)} nodes, F.Cu {len(top)}, B.Cu {len(bot)}, "

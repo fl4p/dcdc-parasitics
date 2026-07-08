@@ -141,6 +141,13 @@ every cap, `L[i,i] = L_shared + Lb_i` and `L[i,j] ≈ L_shared`, so `L_shared` i
 off-diagonal mean and `Lb_i = L[i,i] − L_shared` (same for R at the conduction
 freq). The result is `cin_branches` + `cin_L_shared`/`cin_R_shared` in the JSON.
 
+If the raw full-bank trunk is larger than the selected HF loop basis, the JSON
+keeps the decomposition as `cin_*_raw` diagnostics but clamps the default fields
+that consumers read: `cin_L_shared <= L_loop`, `L_loop_switch >= 0`, and
+`cin_branches` recomputed from the model shared trunk. The loss deck should keep
+using `cin_L_shared`/`cin_branches`; use the `_raw` fields only to debug
+cap-selection or basis mismatches.
+
 This is **copper only** — parasitics stays parts-DB-free. The loss tool owns the
 complete `cin_network` subckt: it enriches each `ref` with its datasheet C/ESR/ESL
 from its parts DB and assembles `Lb_<ref>`(copper) in series with `Cel_<ref>`(bulk)
@@ -156,6 +163,12 @@ merge, and every track/via/pad node is bonded to its pour (fixes fragmented
 copper); a union-find prune keeps only port-reachable copper. `L = Im(Z)/2πf`,
 `R = Re(Z)` read at a low-MHz plateau.
 
+FET package inductance has a strict modeling boundary with the loss tool and
+MOSFET SPICE models. The legacy `--lead-mm` path is an artificial die-plane
+extension, not a physical bent-lead package model; use copper-only extraction for
+loss when the MOSFET model already carries package leads. See
+[docs/fet-package-boundary.md](docs/fet-package-boundary.md) for the full contract.
+
 ## Usage
 
 ```sh
@@ -164,7 +177,9 @@ python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
         [--cin-parallel 4 | --cin-refs C17 C18 C9 C16] [--include-bulk-cin] \
         [--cin-esl 0.5 --cin-esr 3] [--emit-cin-network] \
         [--hs-ref Q1 Q3 --ls-ref Q2] [--hs-gate NET --ls-gate NET] \
-        [--hs-kelvin] [--ls-kelvin] [--weld-tol 0.6] [--margin 8] [--svg] -o OUTDIR
+        [--hs-kelvin] [--ls-kelvin] [--weld-tol 0.6] [--zone-mesh grid|polygon] \
+        [--terminal-mode padland|single|finite|point] \
+        [--margin 8] [--svg] -o OUTDIR
 ```
 
 All CLI arguments can also be supplied from YAML:
@@ -191,6 +206,8 @@ cin_refs: [C9, C16, C17, C18, C21, C22]
 pitch: [2.0, 1.0]
 emit_cin_network: true
 weld_tol: 0.6
+zone_mesh: grid
+terminal_mode: padland
 margin: 8.0
 cu_thickness: 0.035
 lf_freq: 100000
@@ -200,7 +217,13 @@ out: out/
 `--hs-ref`/`--ls-ref` take **multiple** refdes for paralleled switches (e.g.
 `--hs-ref Q1 Q3`). `--weld-tol` fuses same-net nodes within N mm (mesh
 de-fragmentation, see below); `--margin` sets the pour-meshing ROI around the
-FETs/Cin.
+FETs/Cin. `--zone-mesh grid` is the validated/default pour mesher. `--zone-mesh
+polygon` is an experimental KiPEX-style cell-edge mesher for cross-checks; it is
+not the production default because current simple-hb/Fugu2 checks under-read.
+`--terminal-mode padland` is the validated/default pad-to-pour contact model.
+`single` is a KiPEX-like one-mesh-node terminal, `finite` is an experimental
+finite pad-contact model, and `point` is the legacy/debug pad-center stitch path
+for A/B comparisons.
 
 `--parallel-fets per-device` opts into the issue #5 extraction model for
 paralleled switches: each physical FET keeps its own die/source/gate branch and
@@ -279,8 +302,11 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
   loop R), `r_sw` (SW spreading residual), `r_cond_freq` (the freq they were read
   at), and `cond_ref` (`{ref, cls}` — the bulk cap they anchor on). With
   `--emit-cin-network`: `cin_branches` (`[{ref, cls, Lb, Rb}]` — per-cap copper
-  branch) + `cin_L_shared`/`cin_R_shared` (the shared Vin/GND trunk); the loss
-  tool fills each cap's datasheet C/ESR/ESL from dslib and assembles `cin_network`.
+  branch) + `cin_L_shared`/`cin_R_shared` (the model shared Vin/GND trunk);
+  `cin_branches_raw`/`cin_L_shared_raw`/`cin_R_shared_raw` preserve the raw
+  decomposition when the model trunk is clamped to the selected loop/residual
+  basis. The loss tool fills each cap's datasheet C/ESR/ESL from dslib and
+  assembles `cin_network` from the model fields.
 - **`report.md`** — table + a topology sketch of where CSI sits.
 - **`schematic.svg`** (with `--svg`) — a standalone half-bridge drawing of the
   extracted network: each parasitic as a labelled coil, the two common-source
@@ -408,3 +434,28 @@ covered by running on the real boards below.
 - `Fugu2` (2-layer buck, paralleled HS `Q1∥Q3`, LS `Q2`, 6-cap HF bank): loop L
   ≈ 8.2 nH (6 caps ‖), CSI_hs ≈ 0.43 nH, CSI_ls ≈ 1.25 nH, gate Rg `R4/R10 = 4.7`
   — exercises paralleled FETs, the weld pass, and multi-cap reduction.
+
+## Copper power-loss density (`density.py`)
+
+`density.py` renders a **per-copper-layer W/mm² heatmap** from the extracted mesh and a
+set of injected port currents. It solves the mesh as a **DC resistive network**
+(`R_seg = length/(σ·w·h)`, `.equiv` = short), so it recovers how the current *spreads*
+through the pours — a lumped R can't be placed spatially. It is **loss-agnostic**: the
+currents (and optional per-phase `norm_W` totals) are just inputs, so it is fully
+unit-testable without KiCad/FastHenry/SPICE (see `test/test_density.py`). The extractor
+now persists the finest-pitch mesh at `<out>/mesh/model.inp` for this and other consumers.
+
+    density.py <out>/mesh/model.inp --currents SPEC.json --copper <out>/mesh/copper.json -o density/
+
+Pour layers render as a smooth **node-binned field** (`--style field`, default) — the raw
+per-filament mesh (`--style filaments`) shows a directional checkerboard, so the field
+averages the edges at each node and alpha-ramps with density so hotspots glow over the
+faint real-PCB **board overlay** (`--copper`, the same `copper.json` the mesh viewer uses;
+persisted by the extractor at `<out>/mesh/copper.json`).
+
+`SPEC.json` names phases: a 2-terminal conduction phase (`{"port":"P_hs","i_rms":..}`) or
+a Cin-ripple phase (`{"tap":"P_pwr","cap_currents":{"C18":..}}`, currents summing into the
+Vin/GND trunk). `norm_W` rescales a phase so its Σ matches a reference bucket. The loss
+tool's `loss/loss_density.py` builds the spec from a real run's SPICE `.raw` and calls this.
+Caveat: the DC solve sets the spatial *shape* only — no skin/proximity — so magnitudes
+should come from the loss run (`norm_W`); it is a conduction-density map, not an HF ring map.
