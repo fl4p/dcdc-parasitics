@@ -7,8 +7,9 @@ The browser composites raster instantly, so even the 0.2mm mesh (170k+ filaments
 stays responsive — no 100k-element SVG DOM.
 
 Layers:
-  Top (F.Cu)      F copper underlay (if --copper) + F mesh + top-layer SMD caps/ports
-  Bottom (B.Cu)   B copper underlay + B mesh + bottom-layer SMD caps/ports
+  PCB copper      Real PCB copper underlay (if --copper) — fade with the opacity slider
+  Top (F.Cu)      F mesh + top-layer SMD caps/ports
+  Bottom (B.Cu)   B mesh + bottom-layer SMD caps/ports
   Vias/FET leads  inter-layer vias, FET-lead risers, FET-plane caps/ports (shared)
 
 With --copper <json> (from copper_dump.py) the REAL PCB copper is drawn faint under
@@ -24,50 +25,14 @@ import base64
 import json
 import math
 import os
-import re
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
-from matplotlib.patches import Polygon  # noqa: E402
+from matplotlib.collections import LineCollection  # noqa: E402
 
-F_CU, B_CU = "#e07000", "#12b0bb"
-VIA, LEAD, PORT, CAP = "#ff2d2d", "#ffffff", "#ffe000", "#c8c8c8"
-
-
-def parse_inp(path):
-    N, segs, ext = {}, [], []
-    for ln in open(path):
-        s = ln.strip()
-        m = re.match(r"(N\S+)\s+x=([-\d.]+)\s+y=([-\d.]+)\s+z=([-\d.]+)", s)
-        if m:
-            N[m.group(1)] = (float(m.group(2)), float(m.group(3)), float(m.group(4)))
-        elif s.startswith("E"):
-            t = s.split()
-            if len(t) >= 3 and t[1] in N and t[2] in N:
-                segs.append((t[1], t[2]))
-        elif s.startswith(".external"):
-            t = s.split(); ext.append((t[1], t[2]))
-    return N, segs, ext
-
-
-def plane(z):
-    return "top" if abs(z) < 0.5 else ("bot" if abs(z + 1.6) < 0.5 else "lead")
-
-
-def track_rects(tracks):
-    """Real-copper tracks -> width-accurate rectangles in DATA (mm) units (matplotlib
-    linewidths are POINTS, which drew thin traces as fixed hairlines regardless of zoom)."""
-    out = []
-    for x1, y1, x2, y2, w in tracks:
-        dx, dy = x2 - x1, y2 - y1; L = math.hypot(dx, dy); h = w / 2
-        if L < 1e-9:
-            out.append([(x1 - h, y1 - h), (x1 + h, y1 - h), (x1 + h, y1 + h), (x1 - h, y1 + h)])
-        else:
-            nx, ny = -dy / L * h, dx / L * h
-            out.append([(x1 + nx, y1 + ny), (x2 + nx, y2 + ny), (x2 - nx, y2 - ny), (x1 - nx, y1 - ny)])
-    return out
+from mesh_geom import (F_CU, B_CU, VIA, LEAD, PORT, CAP,  # noqa: E402
+                       parse_inp, plane, cap_names, draw_copper_underlay)
 
 
 def cap_glyph(ax, p1, p2):
@@ -80,18 +45,6 @@ def cap_glyph(ax, p1, p2):
         cx, cy = mx + ux * g * s, my + uy * g * s
         ax.plot([cx - vx * pl, cx + vx * pl], [cy - vy * pl, cy + vy * pl], color=CAP, lw=1.6, solid_capstyle="round")
         ax.plot([cx, cx + ux * ll * s], [cy, cy + uy * ll * s], color=CAP, lw=1.0)
-
-
-def _cap_names(pj):
-    """port label -> cap refdes, from the .ports.json sidecar."""
-    names = {l: pj.get("cin_used", [])[i] for i, l in enumerate(pj.get("cin_ports", []))
-             if i < len(pj.get("cin_used", []))}
-    for l in pj.get("ports", []):
-        if l.startswith("P_cin_"):
-            names[l] = l[6:]
-        elif l == "P_bulk":
-            names[l] = "bulk"
-    return names
 
 
 def _new_ax(bbox, figsize, dpi):
@@ -113,7 +66,7 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
     pj = json.load(open(ports_json))
     ports = pj["ports"]
     pmap = dict(zip(ports, ext))
-    capname = _cap_names(pj)
+    capname = cap_names(pj)
     cu = json.load(open(copper)) if copper else None
 
     top, bot, via, lead = [], [], [], []
@@ -165,24 +118,18 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
             ax.scatter([q[0] for q in lst], [q[1] for q in lst], s=8, marker="s",
                        c=PORT, edgecolors="k", linewidths=.25)
 
+    if cu:
+        def d_pcb(ax):
+            draw_copper_underlay(ax, cu, "F", F_CU)
+            draw_copper_underlay(ax, cu, "B", B_CU)
+        layer("pcb", "PCB copper", d_pcb)
+
     def d_fcu(ax):
-        if cu:
-            for r in cu["zones"]["F"]:
-                ax.add_patch(Polygon(r, closed=True, facecolor=F_CU, edgecolor="none", alpha=0.20))
-            ax.add_collection(PolyCollection(track_rects(cu["tracks"]["F"]), facecolors=F_CU, edgecolors="none", alpha=0.35))
-            for r in cu["pads"]["F"]:
-                ax.add_patch(Polygon(r, closed=True, facecolor=F_CU, alpha=0.45, edgecolor="none"))
         ax.add_collection(LineCollection(top, colors=F_CU, linewidths=0.3))
         caps(ax, tcap); ports_mk(ax, tport)
     layer("fcu", "Top (F.Cu) + top SMD", d_fcu)
 
     def d_bcu(ax):
-        if cu:
-            for r in cu["zones"]["B"]:
-                ax.add_patch(Polygon(r, closed=True, facecolor=B_CU, edgecolor="none", alpha=0.20))
-            ax.add_collection(PolyCollection(track_rects(cu["tracks"]["B"]), facecolors=B_CU, edgecolors="none", alpha=0.35))
-            for r in cu["pads"]["B"]:
-                ax.add_patch(Polygon(r, closed=True, facecolor=B_CU, alpha=0.45, edgecolor="none"))
         ax.add_collection(LineCollection(bot, colors=B_CU, linewidths=0.3))
         caps(ax, bcap); ports_mk(ax, bport)
     layer("bcu", "Bottom (B.Cu) + bottom SMD", d_bcu)
@@ -206,8 +153,13 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
         return (f'<label><input type="checkbox" checked '
                 f'onchange="document.getElementById(\'{lid}\').style.display=this.checked?\'block\':\'none\'">'
                 f'<span class="swatch" style="background:{sw}"></span>{label}</label>')
+    def op_slider(lid):
+        return (f'<label class="op-row"><span>opacity</span>'
+                f'<input type="range" min="0" max="1" step="0.05" value="1" '
+                f'oninput="document.getElementById(\'{lid}\').style.opacity=this.value"></label>')
+    pcb_ctrl = ("\n" + chk("pcb", F_CU, lab["pcb"]) + op_slider("pcb")) if cu else ""
     controls = ("<h2>Layers</h2>\n" + chk("fcu", F_CU, lab["fcu"]) + "\n" + chk("bcu", B_CU, lab["bcu"])
-                + "\n<h2>Overlays</h2>\n" + chk("annot", VIA, lab["annot"]))
+                + "\n<h2>Overlays</h2>\n" + chk("annot", VIA, lab["annot"]) + pcb_ctrl)
     total_png = sum(os.path.getsize(fn) for _, _, fn in layers)
     counts = (f"F.Cu mesh {len(top)}, B.Cu mesh {len(bot)}, vias {len(via)}, "
               f"ports {len(ext)}, caps {len(capname)}" + (", + real-copper overlay" if cu else ""))
@@ -222,6 +174,8 @@ h1{{font-size:14px;margin:0 0 12px;font-weight:650}}
 h2{{font-size:11px;margin:16px 0 6px;color:#9a9a9a;text-transform:uppercase}}
 label{{display:flex;align-items:center;gap:8px;min-height:26px;cursor:pointer}}
 .swatch{{display:inline-block;width:12px;height:12px;border-radius:2px;border:1px solid rgba(255,255,255,.2)}}
+.op-row{{display:flex;align-items:center;gap:6px;min-height:22px;padding-left:20px;font-size:11px;color:#9a9a9a}}
+.op-row input[type=range]{{flex:1;accent-color:#6af;cursor:pointer}}
 .meta{{color:#8a8a8a;font-size:11px;margin-top:14px}}
 .viewer{{min-height:0;overflow:hidden;background:#0a0a0a;cursor:grab;position:relative;
  user-select:none;-webkit-user-select:none}}
