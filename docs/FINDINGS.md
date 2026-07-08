@@ -66,3 +66,65 @@ appears once real board geometry drives the FastHenry solve.
   and drops `cond(Zc)` 293 → 76.
 - **Fix.** The warning now names the real cause/fix — pass `--cin-esl/--cin-esr` for the
   physical split — instead of only "review polarity/geometry". (`100b258`)
+
+## Altium `.PcbDoc` conversion (ReboostV2, GaN half-bridge)
+
+Consolidated Altium→KiCad converter at `lib/altium_import.py`, auto-invoked by
+`extract_parasitics.py` when the input ends in `.PcbDoc`. Board: ReboostV2.1
+(GaN half-bridge, HS=Q1/LS=Q2 GS61008T, SW=`HSS`, Vin=`Vb`, GND=`GND`, 4-layer).
+
+### 5. KiCad's programmatic Altium importer inverts the board and drops a copper pour
+
+- **Symptom.** A straight `PCB_IO_MGR.Load(ALTIUM_DESIGNER)` + `Save(KICAD_SEXP)` yields a
+  board that meshes to **0 segments** (empty commutation loop); the `remapUnsureLayers()`
+  asserts during Load are not cosmetic.
+- **Root cause.** The importer flips ~the whole board onto B.Cu (491/507 SMD pads land
+  B.Cu, `GetLayer()` reports F.Cu but `IsOnLayer(F_Cu)` is False), and **silently drops**
+  the FET-area `Vb` copper — it was a *ShapeBasedRegion* on the top layer, the primitive
+  KiCad's Altium reader loses. Zones also import as outlines only (no fill).
+- **Fix.** `altium_import.py` 3-tier repair: (a) swap B.Cu-only pad layer sets → F.Cu
+  (+mask/paste); (b) relayer power-net tracks only B.Cu→F.Cu (moving all 1184 tracks makes
+  a degenerate all-NaN mesh); (c) `AddLayer(F.Cu)` to power zones — this KEEPS B.Cu so the
+  4-layer via-stitched GND return survives ({F.Cu,B.Cu,In2}, 166 vias — NOT a 2D squash);
+  synthesize the dropped `Vb` pour as a minimal bridge (bbox from FET-drain + Cin-Vin pads
+  within 8 mm, 56.56 mm²) via S-expression text insert (the `pcbnew.ZONE()` ctor hangs);
+  `ZONE_FILLER.Fill()` only after a Save+native-reopen (fill on the raw Altium board
+  SIGSEGVs). Provenance to `OUT.altium.json` sidecar (stdout is polluted by KiCad noise).
+- **Takeaway.** GUI import is the gold path when available; the programmatic pipeline is
+  the headless fallback and every fix it applies is flagged PROVISIONAL in `report.md`.
+
+### 6. Auto-discovery mis-includes a BJT and contaminates L_loop
+
+- **Symptom.** Auto-discovery gave `L_loop = 2.61 nH`. (A mid-session transient state also
+  reported 4.05 nH — **both were wrong**; the reproducible committed-code value is ~8.3 nH,
+  see finding 7.)
+- **Root cause.** On this GaN board auto-discovery pulled in **Q3 (MMBT5401, a gate-drive
+  BJT)** as a second HS device, spawning 15 ports that kept the Zc matrix non-degenerate
+  *while `P_ls` was silently dropped*. The 2.61 nH solve never had a real LS
+  common-source port — a bogus BJT port propped up a degenerate matrix.
+- **Fix / rule.** **Always pass explicit `--hs-ref Q1 --ls-ref Q2` for GaN/SiC boards.**
+  Never trust an auto-discovery loop-L on a board with non-power transistors.
+
+### 7. Pad-in-void POINT injection inflates loop L (the real ReboostV2 blocker)
+
+- **Symptom.** With explicit refs, `L_loop` was **not reproducible** (a mid-session state
+  reported 4.05 nH; committed code gives ~9 nH) and every run warned
+  `N pad-land terminal fallback(s) used point-style pad nodes`.
+- **Root cause.** 6 FET/Cin terminals sit in pour **clearance voids** (or are smaller than
+  the mesh pitch), so no zone node falls strictly inside the pad land. `_pad_land_terminal`
+  then dropped to a single welded pad-centre node = **POINT injection**, which concentrates
+  current and inflates local loop L, and is sensitive to *which* node welds — hence the
+  irreproducibility. `--weld-tol 3.0` and `--terminal-mode finite` do **not** clear it.
+- **Fix.** `_pad_land_terminal` proximity fallback: when no node is strictly inside the pad,
+  bond to the nearest same-net pour nodes within `radius = pad_half_diag + 1.5·pitch`
+  (nearest-first, cap 8) as a *distributed contact patch* (`_pad_proximity_contacts`,
+  `terminal_regions[].proximity=True`). Strictly additive — inert where pads already bond.
+- **Evidence.** ReboostV2 `L_loop`: grid no-fix **8.98 nH** (6 point-fallbacks) → grid+fix
+  **8.27 nH** (2 fallbacks) → **converges with the independent polygon mesher's 8.31 nH**.
+  So the trustworthy ReboostV2 loop L is **~8.3 nH** — not the contaminated 2.61 nor the
+  transient 4.05. Fugu2 impact is 1 pad (geom-only 5→4 fallbacks) → negligible. 88 tests pass.
+- **Notes.** The synthesized Vb bridge pour is a non-issue (56.56 vs 550 mm² → Δ0.01 nH),
+  and the *real* dropped pour recovered from the `.PcbDoc` (ShapeBasedRegions6[55], via
+  `altium_monkey`, `x+=65.494, y=195.004−y` transform) gives the same ~8.3 nH. CSI = 0
+  (gate routing dropped by the importer — expected, not a real zero). Separately, `fugu2-cu`
+  can hit a pre-existing degenerate-filament FastHenry crash at fine pitch (unrelated).

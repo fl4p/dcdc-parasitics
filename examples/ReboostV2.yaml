@@ -1,0 +1,24 @@
+# Fugu2 COPPER-ONLY commutation-loop extraction for the LOSS deck consumer.
+# lead_mm=0.1 -> the die-plane short sits ~on the board, so L_loop is board copper
+# only (~4.1 nH). The loss deck (deck.py) supplies the FET package leads itself
+# (TO-220 Ld/Ls table); pairing it with a lead-inclusive extraction (the default
+# examples/fugu2.yaml, lead_mm=3 -> 8.2 nH) double-counts the leads and rings ~2x
+# too inductive. Use THIS config for loss; use examples/fugu2.yaml (lead-inclusive)
+# for DPT/gate-drive sims that want the full package. --lead-mm 0 trips the
+# zero-length-filament SVD guard, so 0.1 mm is the copper-only stand-in.
+# See fl4p/dcdc-tools#3.
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+hs_ref: [Q1, Q3]
+ls_ref: [Q2]
+cin_refs: [C9, C16, C17, C18, C21, C22] # without C27
+pitch: [1.0]
+lead_mm: 0.1
+lf_freq: 39000
+emit_cin_network: true
+weld_tol: 0.6
+margin: 8.0
+out: out/fugu2-cu/
+svg: true
