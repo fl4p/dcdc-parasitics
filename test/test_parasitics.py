@@ -133,6 +133,45 @@ def test_markdown_per_device_table():
     assert "| HS | Q1 | `P_ghs_Q1` | `P_hs_Q1` | 9.00 nH | 1.10 nH | 0.20 nH | 11.00 nH | 3.00 mΩ |" in md
 
 
+def test_missing_gate_ports_render_unavailable_not_zero():
+    """Gate ports absent (--allow-missing-gate-ports): csi/L_gate come back None.
+    report.md must LABEL them, and the .lib must mark 0-valued branches as
+    placeholders — never a bare 0.00 nH that reads as a measured zero."""
+    p = _p(csi_hs=None, csi_ls=None, csi_hs_loop=None, csi_ls_loop=None,
+           L_gate_hs=None, R_gate_hs=None, L_gate_ls=None, R_gate_ls=None,
+           m_gate=None, gate_ports_available=dict(hs=False, ls=False))
+    md = emit.markdown(p)
+    assert "| HS common-source inductance | **n/a — gate routing unavailable** |" in md
+    assert "| LS common-source inductance | **n/a — gate routing unavailable** |" in md
+    assert "| HS gate-loop L | n/a — gate routing unavailable |" in md
+    assert "7.00 nH" in md                      # L_loop still valid + numeric
+
+    lib, warn = emit.subckt(p)
+    assert "PLACEHOLDER" in lib                  # branch labelled, not a bare 0
+    assert any("UNAVAILABLE" in w for w in warn)
+
+    # a normal (gate-present) dict still renders numeric CSI, no label
+    md2 = emit.markdown(_p())
+    assert "0.60 nH" in md2 and "gate routing unavailable" not in md2
+
+
+def test_schematic_renders_unavailable_gate_as_na_not_zero():
+    """--svg must label null csi/L_gate as 'n/a', not a fabricated 0.00 nH."""
+    svg = emit_svg.schematic(_p(
+        csi_hs=None, csi_ls=None, L_gate_hs=None, R_gate_hs=None,
+        L_gate_ls=None, R_gate_ls=None, m_gate=None,
+        gate_ports_available=dict(hs=False, ls=False)))
+    assert "n/a" in svg
+    # the CSI/gate labels specifically must not read as a measured zero. L_loop
+    # (7 nH) legitimately renders numerically, so only assert no 0.00 *nH* leaked
+    # from the now-None gate fields: with all gate fields None, a "0.00 nH" would
+    # only come from the bug this guards.
+    assert "0.00 nH" not in svg
+    # a normal dict still shows numeric CSI and no n/a
+    svg2 = emit_svg.schematic(_p())
+    assert "2.40 nH" in svg2 or "0.60 nH" in svg2
+
+
 def test_schematic_kelvin_toggle():
     # subtitle carries "(Kelvin)" vs "(non-Kelvin)" — the parenthesised form
     # distinguishes them ("(non-Kelvin)" does not contain "(Kelvin)").
@@ -214,6 +253,134 @@ def test_model_uses_configured_copper_thickness():
     assert m.segs[-1][4] == 0.07
 
 
+def test_demarcation_plane_cap_only_whole_cell_bridge():
+    m = kicad_geom.Model()
+    hs1 = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    hs2 = m.node("VIN", 0, 1.0, 0.0, 0.0)
+    ls1 = m.node("GND", 0, 2.0, 0.0, 0.0)
+    ls2 = m.node("GND", 0, 3.0, 0.0, 0.0)
+    topo = dict(
+        hs=dict(_devices=[dict(_drn_pad_node=hs1), dict(_drn_pad_node=hs2)]),
+        ls=dict(_devices=[dict(_src_pad_node=ls1), dict(_src_pad_node=ls2)]))
+    kicad_geom.setup_demarcation_plane(m, topo, "cap_only", closure="cell_bridge")
+    eq = {frozenset(e) for e in m.equivs}
+    assert frozenset((hs1, hs2)) in eq
+    assert frozenset((ls1, ls2)) in eq
+    assert frozenset((hs1, ls1)) in eq
+    plane = topo["demarcation_plane"]
+    assert plane["closure"] == "cell_bridge"
+    assert plane["cap_only_bridge"] == [hs1, ls1]
+
+
+def test_demarcation_plane_per_fet_does_not_bridge_groups():
+    m = kicad_geom.Model()
+    hs = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    ls = m.node("GND", 0, 1.0, 0.0, 0.0)
+    topo = dict(hs=dict(_drn_pad_node=hs), ls=dict(_src_pad_node=ls))
+    kicad_geom.setup_demarcation_plane(m, topo, "cap_only", closure="per_fet")
+    assert m.equivs == []
+    plane = topo["demarcation_plane"]
+    assert plane["closure"] == "per_fet"
+    assert "cap_only_bridge" not in plane
+
+
+def test_demarcation_plane_switch_residual_port():
+    m = kicad_geom.Model()
+    hs = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    ls = m.node("GND", 0, 1.0, 0.0, 0.0)
+    topo = dict(hs=dict(_drn_pad_node=hs), ls=dict(_src_pad_node=ls))
+    kicad_geom.setup_demarcation_plane(m, topo, "switch_residual", closure="cell_bridge")
+    assert ("P_sw_residual", hs, ls) in m.ports
+    assert topo["demarcation_plane"]["switch_residual_port"] == "P_sw_residual"
+
+
+def test_switch_residual_validation_rejects_extra_solved_ports():
+    m = kicad_geom.Model()
+    hs = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    ls = m.node("GND", 0, 1.0, 0.0, 0.0)
+    g0 = m.node("GATE", 0, 2.0, 0.0, 0.0)
+    g1 = m.node("GATE", 0, 3.0, 0.0, 0.0)
+    topo = dict(hs=dict(_drn_pad_node=hs), ls=dict(_src_pad_node=ls))
+    kicad_geom.setup_demarcation_plane(m, topo, "switch_residual", closure="cell_bridge")
+    kicad_geom.validate_switch_residual_ports(m, topo)  # no raise
+
+    m.port("P_ghs_Q1", g0, g1)
+    try:
+        kicad_geom.validate_switch_residual_ports(m, topo)
+    except ValueError as e:
+        assert "extra solved port" in str(e)
+        assert "P_ghs_Q1" in str(e)
+    else:
+        raise AssertionError("switch_residual must reject non-gauge ports")
+
+
+def test_demarcation_plane_per_fet_switch_residual_ports():
+    m = kicad_geom.Model()
+    hd = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    hs = m.node("SW", 0, 0.5, 0.0, 0.0)
+    ld = m.node("SW", 0, 1.0, 0.0, 0.0)
+    ls = m.node("GND", 0, 1.5, 0.0, 0.0)
+    topo = dict(
+        hs=dict(_devices=[dict(ref="QH", _drn_pad_node=hd, _src_pad_node=hs)]),
+        ls=dict(_devices=[dict(ref="QL", _drn_pad_node=ld, _src_pad_node=ls)]))
+    kicad_geom.setup_demarcation_plane(m, topo, "switch_residual", closure="per_fet")
+    assert ("P_sw_residual_hs_QH", hd, hs) in m.ports
+    assert ("P_sw_residual_ls_QL", ld, ls) in m.ports
+
+
+def test_demarcation_plane_per_fet_skips_equiv_residual_ports():
+    m = kicad_geom.Model()
+    hd = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    hs = m.node("SW", 0, 0.5, 0.0, 0.0)
+    ld = m.node("SW", 0, 1.0, 0.0, 0.0)
+    ls = m.node("GND", 0, 1.5, 0.0, 0.0)
+    m.equiv(hd, hs)
+    m.equiv(ld, ls)
+    topo = dict(
+        hs=dict(_devices=[dict(ref="QH", _drn_pad_node=hd, _src_pad_node=hs)]),
+        ls=dict(_devices=[dict(ref="QL", _drn_pad_node=ld, _src_pad_node=ls)]))
+    kicad_geom.setup_demarcation_plane(m, topo, "switch_residual", closure="per_fet")
+    plane = topo["demarcation_plane"]
+    assert plane["switch_residual_ports"] == []
+    assert {e["label"] for e in plane["switch_residual_ports_skipped"]} == {
+        "P_sw_residual_hs_QH",
+        "P_sw_residual_ls_QL",
+    }
+    assert plane["gauge_fix_status"] == "structurally_not_required"
+    assert plane["gauge_fix_reason"] == "zero_by_plane_p_equiv"
+    assert not [p for p in m.ports if p[0].startswith("P_sw_residual")]
+
+
+def test_prune_retains_explicit_unported_components():
+    m = kicad_geom.Model()
+    pa = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    pb = m.node("GND", 0, 1.0, 0.0, 0.0)
+    m.seg(pa, pb, 0.5)
+    m.port("P_pwr", pa, pb)
+
+    fa = m.node("SW", 0, 10.0, 0.0, 0.0)
+    fb = m.node("SW", 0, 11.0, 0.0, 0.0)
+    m.seg(fa, fb, 0.5)
+    m.keep_nodes.add(fa)
+
+    seen = m.prune()
+    assert fa in seen and fb in seen
+    assert any(s[1] == fa and s[2] == fb for s in m.segs)
+
+
+def test_zero_lead_lumped_parallel_fets_fail_loud():
+    try:
+        kicad_geom._require_valid_lead_parallel_mode("hs", ["Q1", "Q3"], 0.0, "lumped")
+    except ValueError as e:
+        assert "lumped parallel FETs" in str(e)
+        assert "--parallel-fets per-device" in str(e)
+    else:
+        raise AssertionError("zero-lead lumped parallel FETs should fail")
+
+    kicad_geom._require_valid_lead_parallel_mode("hs", ["Q1"], 0.0, "lumped")
+    kicad_geom._require_valid_lead_parallel_mode("hs", ["Q1", "Q3"], 0.0, "per-device")
+
+
 def test_mesh_complexity_counts_sweep_points_and_work_units():
     stats = dict(nodes=10, segs=20, ports=3)
     c = kicad_geom.mesh_complexity(stats, nwinc=2, nhinc=3,
@@ -229,6 +396,121 @@ def test_freq_count_boundaries():
     assert kicad_geom.freq_count(1e5, 1e5, 3) == 1
     assert kicad_geom.freq_count(0, 1e8, 3) == 0
     assert kicad_geom.freq_count(1e8, 1e5, 3) == 0
+
+
+def test_axis_cuts_include_pitch_bounds_and_polygon_vertices():
+    cuts = kicad_geom._axis_cuts(0.0, 5.0, 2.0, extras=[1.25, 4.75])
+    assert cuts == [0.0, 1.25, 2.0, 4.0, 4.75, 5.0]
+
+
+def test_axis_cuts_merge_tiny_slivers():
+    cuts = kicad_geom._axis_cuts(0.0, 2.0, 1.0, extras=[1.001])
+    assert cuts == [0.0, 1.0, 2.0]
+
+
+def test_bounded_poly_axis_vertices_drops_large_cross_product():
+    outline = [(float(i), float(i % 7)) for i in range(100)]
+    xs, ys, note = kicad_geom._bounded_poly_axis_vertices([(outline, [])])
+    assert xs == []
+    assert ys == []
+    assert note["reason"] == "too_many_polygon_vertex_cuts"
+
+
+def test_polygon_inclusive_contains_outer_edge_but_not_hole_interior():
+    poly = ([(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+            [[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]])
+    assert kicad_geom.point_in_polys_inclusive(0.0, 2.0, [poly])
+    assert kicad_geom.point_in_polys_inclusive(0.5, 0.5, [poly])
+    assert not kicad_geom.point_in_polys_inclusive(2.0, 2.0, [poly])
+
+
+def test_segment_inside_rejects_void_crossing():
+    poly = ([(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+            [[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]])
+    contains = kicad_geom._polys_contains_inclusive([poly])
+    assert kicad_geom._segment_inside(contains, 0.0, 0.5, 4.0, 0.5, step=0.25)
+    assert not kicad_geom._segment_inside(contains, 0.0, 2.0, 4.0, 2.0, step=0.25)
+
+
+class _FakePad:
+    def GetSizeX(self):
+        return 1_000_000
+
+    def GetSizeY(self):
+        return 1_000_000
+
+
+class _FakeFp:
+    def GetReference(self):
+        return "C1"
+
+
+def _terminal_mode_model(mode):
+    m = kicad_geom.Model(terminal_mode=mode)
+    for x, y in ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)):
+        m.node("VIN", 0, x, y, 0.0, zone=True)
+    return m
+
+
+def _with_fake_pad_contains(fn):
+    old = kicad_geom._pad_contains
+    kicad_geom._pad_contains = lambda pad, lid: (
+        lambda x, y: -0.1 <= x <= 1.1 and -0.1 <= y <= 1.1)
+    try:
+        return fn()
+    finally:
+        kicad_geom._pad_contains = old
+
+
+def test_padland_terminal_equivs_all_pad_contacts():
+    def run():
+        m = _terminal_mode_model("padland")
+        n = kicad_geom._pad_land_terminal(m, "VIN", 0, 0.5, 0.5, 0.0,
+                                          _FakePad(), fp=_FakeFp())
+        assert n in m.distributed_terminals
+        assert len(m.equivs) == 4
+        assert not m.segs
+        assert m.terminal_regions[-1]["mode"] == "padland"
+        assert m.terminal_regions[-1]["ref"] == "C1"
+    _with_fake_pad_contains(run)
+
+
+def test_single_terminal_uses_one_nearest_pad_contact():
+    def run():
+        m = _terminal_mode_model("single")
+        n = kicad_geom._pad_land_terminal(m, "VIN", 0, 0.5, 0.5, 0.0,
+                                          _FakePad(), fp=_FakeFp())
+        assert n in m.zone_nodes
+        assert not m.equivs
+        assert not m.segs
+        assert m.terminal_regions[-1]["mode"] == "single"
+        assert m.terminal_regions[-1]["used_contacts"] == 1
+    _with_fake_pad_contains(run)
+
+
+def test_finite_terminal_connects_pad_contacts_with_segments():
+    def run():
+        m = _terminal_mode_model("finite")
+        n = kicad_geom._pad_land_terminal(m, "VIN", 0, 0.5, 0.5, 0.0,
+                                          _FakePad(), fp=_FakeFp())
+        assert n in m.distributed_terminals
+        assert not m.equivs
+        assert len(m.segs) == 4
+        assert m.terminal_regions[-1]["mode"] == "finite"
+        assert m.terminal_regions[-1]["contact_width"] > 0
+    _with_fake_pad_contains(run)
+
+
+def test_point_terminal_uses_legacy_pad_center_fallback():
+    def run():
+        m = _terminal_mode_model("point")
+        n = kicad_geom._pad_land_terminal(m, "VIN", 0, 0.5, 0.5, 0.0,
+                                          _FakePad(), fp=_FakeFp())
+        assert n is None
+        assert not m.equivs
+        assert not m.segs
+        assert m.terminal_fallbacks[-1]["reason"] == "legacy_point_mode"
+    _with_fake_pad_contains(run)
 
 
 def test_gate_driver_node_ignores_disconnected_same_net_island():
@@ -368,6 +650,31 @@ def test_required_ports_reject_missing_gate_loop():
         assert "P_ghs" in str(e)
     else:
         raise AssertionError("missing gate-loop port must fail")
+
+
+def test_required_ports_allow_missing_gate_loop_when_explicit():
+    m = kicad_geom.Model()
+    a = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    b = m.node("GND", 0, 1.0, 0.0, 0.0)
+    m.port("P_pwr", a, b)
+    m.port("P_gls", a, b)
+    kicad_geom.validate_required_ports(
+        m, _topo(), allow_missing_gate_ports=True)  # no raise
+
+
+def test_required_ports_still_reject_missing_power_loop_when_gate_missing_allowed():
+    m = kicad_geom.Model()
+    a = m.node("GATE", 0, 0.0, 0.0, 0.0)
+    b = m.node("GATE", 0, 1.0, 0.0, 0.0)
+    m.port("P_ghs", a, b)
+    m.port("P_gls", a, b)
+    try:
+        kicad_geom.validate_required_ports(
+            m, _topo(), allow_missing_gate_ports=True)
+    except ValueError as e:
+        assert "P_pwr" in str(e)
+    else:
+        raise AssertionError("missing P_pwr must fail even when gate ports are allowed")
 
 
 def main():

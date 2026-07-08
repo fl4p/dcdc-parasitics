@@ -46,17 +46,32 @@ def _split_rest(l_loop, csi_hs, csi_ls):
 def subckt(p):
     """Return the .SUBCKT text (nanohenry / milliohm values)."""
     nH = 1e9
-    csi_hs = max(p["csi_hs"], 0.0)
-    csi_ls = max(p["csi_ls"], 0.0)
+    # A None CSI/gate value means the gate port was unavailable (gate routing
+    # dropped by an importer, extracted with --allow-missing-gate-ports). The
+    # SPICE netlist needs a number, so these branches are emitted as 0 — but
+    # LABELLED as placeholders + a header WARNING, so a 0 here is never mistaken
+    # for a measured zero. parasitics.json carries the honest null.
+    hs_gate_available = p.get("csi_hs") is not None
+    ls_gate_available = p.get("csi_ls") is not None
+    csi_hs = max(p["csi_hs"] or 0.0, 0.0)
+    csi_ls = max(p["csi_ls"] or 0.0, 0.0)
+    lg_hs = p["L_gate_hs"] or 0.0
+    lg_ls = p["L_gate_ls"] or 0.0
     loop_hs, loop_ls = _split_rest(p["L_loop"], csi_hs, csi_ls)
-    lghs_rest = max(p["L_gate_hs"] - csi_hs, 0.0)
-    lgls_rest = max(p["L_gate_ls"] - csi_ls, 0.0)
+    lghs_rest = max(lg_hs - csi_hs, 0.0)
+    lgls_rest = max(lg_ls - csi_ls, 0.0)
 
     warn = []
-    if p["L_gate_hs"] - csi_hs < 0:
+    if hs_gate_available and lg_hs - csi_hs < 0:
         warn.append("CSI_hs exceeds HS gate-loop L (clamped) — check gate-return/Kelvin detection")
-    if p["L_gate_ls"] - csi_ls < 0:
+    if ls_gate_available and lg_ls - csi_ls < 0:
         warn.append("CSI_ls exceeds LS gate-loop L (clamped)")
+    if not hs_gate_available:
+        warn.append("HS CSI / gate-loop UNAVAILABLE (HS gate routing missing from the "
+                    "extraction) — Lscs_hs/Lghs below are 0 PLACEHOLDERS, not measured zeros")
+    if not ls_gate_available:
+        warn.append("LS CSI / gate-loop UNAVAILABLE (LS gate routing missing from the "
+                    "extraction) — Lscs_ls/Lgls below are 0 PLACEHOLDERS, not measured zeros")
 
     # per-side loop R: total is the HF ring R_loop (plateau, damping), split by the
     # real LF conduction proportion (r_hs:r_ls) when available, else 50/50.
@@ -100,11 +115,15 @@ def subckt(p):
         "* ------------------------------------------------------------------",
         ".SUBCKT pwrstage VIN SW GND HSG LSG HSKEL LSKEL",
         f"Lloop_hs VIN  nHS   {L(loop_hs)}n Rser={_fmt(rser_hs)}",
-        f"Lscs_hs  nHS  SW    {L(csi_hs)}n            ; HS source lead (SHARED = CSI)",
+        f"Lscs_hs  nHS  SW    {L(csi_hs)}n            ; HS source lead (SHARED = CSI)"
+        + ("" if hs_gate_available else "  [PLACEHOLDER 0 — HS gate unavailable]"),
         f"Lloop_ls SW   nLS   {L(loop_ls)}n Rser={_fmt(rser_ls)}",
-        f"Lscs_ls  nLS  GND   {L(csi_ls)}n            ; LS source lead (SHARED = CSI)",
-        f"Lghs     HSG  nHS   {L(lghs_rest)}n Rser={_fmt(p['R_gate_hs'])}  ; HS gate branch (driver->die)",
-        f"Lgls     LSG  nLS   {L(lgls_rest)}n Rser={_fmt(p['R_gate_ls'])}  ; LS gate branch",
+        f"Lscs_ls  nLS  GND   {L(csi_ls)}n            ; LS source lead (SHARED = CSI)"
+        + ("" if ls_gate_available else "  [PLACEHOLDER 0 — LS gate unavailable]"),
+        f"Lghs     HSG  nHS   {L(lghs_rest)}n Rser={_fmt(p['R_gate_hs'] or 0.0)}  ; HS gate branch (driver->die)"
+        + ("" if hs_gate_available else "  [PLACEHOLDER 0]"),
+        f"Lgls     LSG  nLS   {L(lgls_rest)}n Rser={_fmt(p['R_gate_ls'] or 0.0)}  ; LS gate branch"
+        + ("" if ls_gate_available else "  [PLACEHOLDER 0]"),
         "Rhskel   nHS  HSKEL 0                        ; HS die-source (Kelvin tap)",
         "Rlskel   nLS  LSKEL 0                        ; LS die-source (Kelvin tap)",
         ".ENDS pwrstage",
@@ -112,13 +131,62 @@ def subckt(p):
     return "\n".join(lines) + "\n", warn
 
 
+def _altium_banner(p):
+    """Provenance banner for boards converted from Altium by lib/altium_import.py.
+
+    Returns a list of blockquote markdown lines (empty if the board was not an
+    Altium import). The imported board is a RECONSTRUCTION — the KiCad importer
+    inverts layers and can DROP copper pours — so absolute L values are flagged
+    PROVISIONAL and pinned to a GUI-import cross-check."""
+    ai = (p.get("meta") or {}).get("altium_import")
+    if not ai:
+        return []
+    relayer = ai.get("relayer", "partial")
+    b = [
+        "> ⚠️ **PROVISIONAL — converted from Altium `.PcbDoc`** by "
+        f"`lib/altium_import.py` (relayer=`{relayer}`).",
+    ]
+    fixes = []
+    if ai.get("pads_fixed"):
+        fixes.append(f"{ai['pads_fixed']} pad layer-sets de-inverted")
+    if ai.get("tracks_relayered"):
+        fixes.append(f"{ai['tracks_relayered']} power tracks relayered")
+    if ai.get("zones_relayered"):
+        fixes.append(f"{ai['zones_relayered']} power zones relayered")
+    if fixes:
+        b.append("> The KiCad importer inverted the stack onto B.Cu; corrected: "
+                 + ", ".join(fixes) + ". The multilayer via-stitched return is preserved.")
+    vp = ai.get("vb_pour_synthesized")
+    if vp:
+        bb = vp.get("bbox")
+        bbs = (f" bbox {bb}" if bb else "")
+        b.append(f"> **A dropped Vin pour was SYNTHESIZED** ({vp.get('area_mm2','?')} mm²{bbs}) "
+                 "to bridge the FET drain to the local Cin — this is INVENTED copper, "
+                 "so `L_loop` carries geometry uncertainty.")
+    sens = ai.get("sensitivity")
+    if sens and sens.get("L_loop_lo") is not None and sens.get("L_loop_hi") is not None:
+        lo, hi = sens["L_loop_lo"] * 1e9, sens["L_loop_hi"] * 1e9
+        basis = sens.get("basis", "synth-pour size sweep")
+        b.append(f"> Synth-pour sensitivity: `L_loop` spans **{lo:.2f}–{hi:.2f} nH** "
+                 f"({basis}).")
+    b.append("> **Validate against a KiCad GUI import** before trusting absolute values.")
+    for w in ai.get("warnings", []):
+        b.append(f"> - {w}")
+    b.append("")
+    return b
+
+
 def markdown(p):
     nH = 1e9
     t = p["topo"]
     L = lambda v: f"{v*nH:.2f} nH"  # noqa: E731
+    # None => gate port unavailable (routing dropped, --allow-missing-gate-ports);
+    # label it, never render a fabricated 0.00 nH that looks like a measurement.
+    LA = lambda v: L(v) if v is not None else "n/a — gate routing unavailable"  # noqa: E731
     lines = [
         f"# Power-stage parasitics — {os.path.basename(t.get('pcb',''))}",
         "",
+        *_altium_banner(p),
         f"Extracted by `dcdc-tools/parasitics` at the {p['freq_Hz']:g} Hz plateau "
         f"(mesh pitch {p['meta'].get('pitch')} mm, FET lead {p['meta'].get('lead_mm')} mm).",
         "",
@@ -161,11 +229,11 @@ def markdown(p):
     lines += [
         f"| Commutation loop R (HF ring @ {p['freq_Hz']:.2g} Hz{rtemp}) | {p['R_loop']*1e3:.2f} mΩ |",
         *cond_rows,
-        f"| HS common-source inductance | **{L(p['csi_hs'])}** |",
-        f"| LS common-source inductance | **{L(p['csi_ls'])}** |",
-        f"| HS gate-loop L | {L(p['L_gate_hs'])} |",
-        f"| LS gate-loop L | {L(p['L_gate_ls'])} |",
-        f"| gate–gate mutual | {L(p.get('m_gate',0))} |",
+        f"| HS common-source inductance | **{LA(p['csi_hs'])}** |",
+        f"| LS common-source inductance | **{LA(p['csi_ls'])}** |",
+        f"| HS gate-loop L | {LA(p['L_gate_hs'])} |",
+        f"| LS gate-loop L | {LA(p['L_gate_ls'])} |",
+        f"| gate–gate mutual | {LA(p.get('m_gate'))} |",
         "",
         "## Where the common-source inductance sits",
         "",
@@ -288,7 +356,7 @@ def markdown(p):
                          f"ineffective at the edge): {', '.join(excl)}. "
                          f"Re-run with `--include-bulk-cin` to keep them.")
         for wm in warns:
-            lines.append(f"- ⚠️ {wm}")
+            lines.append(f"- **WARNING:** {wm}")
         lines += depop
 
     return "\n".join(lines) + "\n"
@@ -341,7 +409,7 @@ def _depop_notes(p):
         # sub-threshold cap could plausibly be a ceramic (known-mlcc or not-yet-classified),
         # never for a known-bulk-only set.
         if any(cls_of.get(r) != "bulk" for r, _ in sub):
-            return ["- ⚠️ ring-current split is the **ideal-cap (copper-only)** limit — "
+            return ["- **WARNING:** ring-current split is the **ideal-cap (copper-only)** limit — "
                     "it treats each MLCC as a short and over-rates far caps, so "
                     "depopulation candidates are **not** flagged. Re-run with "
                     "`--cin-esl/--cin-esr` for the physical split."]
