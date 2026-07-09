@@ -197,7 +197,7 @@ class Model:
             d2 = dx*dx + dy*dy + dz*dz
             if d2 < 1e-12:
                 return
-            if d2 < (0.01 * 0.01) and w > 0.2:
+            if d2 < (0.01 * 0.01) and w > 0.2 and (dx*dx + dy*dy) > dz*dz:
                 return
         self._si += 1
         if h is None:

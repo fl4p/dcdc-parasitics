@@ -979,7 +979,7 @@ def main():
 
     # --- Altium auto-conversion (subprocess under KiCad Python) ---
     altium_meta = None
-    if args.pcb.lower().endswith(".pcbdoc"):
+    if pcb_input.lower().endswith(".pcbdoc"):
         kicad_path = os.path.join(workdir, "altium_converted.kicad_pcb")
         print(f"  Altium .PcbDoc detected — converting to KiCad ...")
         cmd = [

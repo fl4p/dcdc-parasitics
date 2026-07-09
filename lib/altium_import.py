@@ -54,27 +54,6 @@ KICAD_PY_DEFAULT = (
 )
 
 MM = pcbnew.FromMM
-NM = pcbnew.FromMM
-
-
-def _board_bbox_mm(board, nets, refs):
-    """Bounding box (x0, y0, x1, y1) in mm of pads on the given nets
-    that ALSO belong to the given refs.  This intersection (not union)
-    keeps the bbox tight around the power-stage components."""
-    xs, ys = [], []
-    for fp in board.GetFootprints():
-        ref = str(fp.GetReference())
-        if ref not in refs:
-            continue
-        for p in fp.Pads():
-            pn = str(p.GetNetname())
-            if pn in nets:
-                pos = p.GetPosition()
-                xs.append(pos.x / 1e6)
-                ys.append(pos.y / 1e6)
-    if not xs:
-        return None
-    return min(xs), min(ys), max(xs), max(ys)
 
 
 def _power_stage_bbox(board, vin_net, fet_refs, cin_refs, max_dist=8.0):
@@ -187,8 +166,12 @@ def _insert_vb_zone(pcb_path, net_code, net_name, bbox, margin=1.0,
     if match:
         text = text[: match.start()] + zone_block + text[match.start():]
     else:
-        # Append before the final closing paren of the kicad_pcb element
-        text = text.rstrip() + "\n" + zone_block + ")\n"
+        # Insert before the final closing paren of the kicad_pcb element
+        stripped = text.rstrip()
+        idx = stripped.rfind(")")
+        if idx < 0:
+            raise ValueError("cannot find closing paren in .kicad_pcb")
+        text = stripped[:idx] + zone_block + stripped[idx:] + "\n"
 
     with open(pcb_path, "w") as f:
         f.write(text)
@@ -284,10 +267,10 @@ def convert(
         for t in board.GetTracks():
             if t.Type() != pcbnew.PCB_TRACE_T:
                 continue
-            if t.GetLayer() != 2:  # B.Cu
+            if t.GetLayer() != pcbnew.B_Cu:
                 continue
             if str(t.GetNetname()) in power_nets:
-                t.SetLayer(0)  # F.Cu
+                t.SetLayer(pcbnew.F_Cu)
                 meta["tracks_relayered"] += 1
 
         # --- Step 5: Add F.Cu to power-net zone layer sets ---
