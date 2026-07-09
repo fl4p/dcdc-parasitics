@@ -241,6 +241,21 @@ def test_merge_requires_reachability_on_every_pour_layer():
     assert len(m.segs) == 2
 
 
+def test_merge_reachability_boundary_matches_stitch_strict_lt():
+    """The gate must use the SAME strict < as stitch_zones. A centroid exactly
+    3*pitch from the only mesh node is NOT bonded by stitch_zones, so the gate must
+    treat it as unreachable — an inclusive <= would merge a barrel that then floats
+    and is silently pruned."""
+    vias = [_Via("Vb", 2.9, 0.0), _Via("Vb", 3.1, 0.0)]   # centroid (3.0, 0.0)
+    # mesh nodes exactly 3*pitch away: dist^2 = 9.0 == (3*1.0)^2  -> strict < fails
+    at = _run(vias, pitch=1.0, zone_nodes=[("Vb", 0, 0.0, 0.0), ("Vb", 2, 0.0, 0.0)])
+    assert at.via_merge["clusters_merged"] == 0
+    assert at.via_merge["unreachable_fallback_clusters"] == 1
+    # a hair inside 3*pitch -> bonds -> merges
+    inside = _run(vias, pitch=1.0, zone_nodes=[("Vb", 0, 0.05, 0.0), ("Vb", 2, 0.05, 0.0)])
+    assert inside.via_merge["clusters_merged"] == 1
+
+
 def test_merge_falls_back_when_pour_layer_has_no_mesh_nodes():
     """pour_index says the bottom endpoint layer is filled at the centroid, but
     add_zones created ZERO mesh nodes there. A missing bucket must count as

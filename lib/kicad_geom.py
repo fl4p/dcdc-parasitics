@@ -725,7 +725,10 @@ def _centroid_reaches_mesh(buckets, pour_index, net, span_lids, x, y, thr2):
         if not pour_here and not nodes:
             continue                         # genuinely no same-net pour on this layer
         saw_pour = True
-        if not nodes or not any((bx - x) ** 2 + (by - y) ** 2 <= thr2
+        # strict < to MATCH stitch_zones' bond test (< thr); an inclusive <= here
+        # would pass a centroid exactly at (3*pitch)^2 that stitch_zones then does
+        # NOT bond -> the barrel would float and be silently pruned.
+        if not nodes or not any((bx - x) ** 2 + (by - y) ** 2 < thr2
                                 for (bx, by) in nodes):
             return False                     # pour present but no mesh node in reach
     return saw_pour

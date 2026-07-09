@@ -245,6 +245,25 @@ check("per-device ref fallback preserves underscores",
       p10e["parallel_devices"]["hs"][0]["ref"] == "Q_1",
       p10e["parallel_devices"]["hs"][0]["ref"])
 
+# 10f. PARTIAL per-device gate drop: one paralleled device's gate port is missing
+#      from the solved ports (P_ghs_Q3 absent, Q1 present). device_ports() drops Q3,
+#      so ih still resolves from Q1 — but the side must be marked UNAVAILABLE and
+#      null its scalars (not report a number covering only the surviving device),
+#      naming the dropped ref. The fully-present LS side stays numeric.
+rows10f = ["P_pwr", "P_ghs_Q1", "P_gls_Q2", "P_hs_Q1", "P_hs_Q3", "P_ls_Q2"]  # no P_ghs_Q3
+p10f = reduce(np.eye(len(rows10f)) * 5e-9, rows10f, ["P_pwr"], topo10c)
+check("partial per-device HS drop -> side unavailable",
+      p10f["gate_ports_available"]["hs"] is False and
+      p10f["gate_ports_available"]["ls"] is True,
+      str(p10f["gate_ports_available"]))
+check("partial per-device HS drop names the dropped ref",
+      p10f["gate_ports_available"]["hs_dropped_devices"] == ["Q3"],
+      str(p10f["gate_ports_available"].get("hs_dropped_devices")))
+check("partial per-device HS drop nulls side scalars (not a fabricated number)",
+      p10f["csi_hs"] is None and p10f["L_gate_hs"] is None and p10f["m_gate"] is None)
+check("partial per-device fully-present LS side stays numeric",
+      p10f["csi_ls"] is not None and p10f["L_gate_ls"] is not None)
+
 # 11. cin branch decomposition: shared Vin/GND trunk + private branch per cap.
 L_sh, Lb = 8e-9, [2e-9, 3e-9, 5e-9]
 R_sh, Rb = 0.5e-3, [1e-3, 2e-3, 0.5e-3]
