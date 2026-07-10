@@ -292,7 +292,8 @@ def run_geom(args, pitch, outdir, tag=None):
     cmd += ["--cin-extraction-basis", args.cin_extraction_basis]
     cmd += ["--cin-closure", args.cin_closure]
     cmd += ["--parallel-fets", args.parallel_fets]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    env = dict(os.environ, PYTHONHASHSEED="0")
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         raise SystemExit(f"kicad_geom failed (pitch {pitch})")

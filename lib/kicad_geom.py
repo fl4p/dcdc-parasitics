@@ -135,7 +135,7 @@ class Model:
         if not buckets:
             return
         thr = (3 * pitch) ** 2
-        for nm_, (net, lid) in list(self.meta.items()):
+        for nm_, (net, lid) in sorted(self.meta.items(), key=lambda kv: str(kv[0])):
             if nm_ in self.zone_nodes:
                 continue
             if nm_ in self.distributed_terminals:
@@ -144,7 +144,7 @@ class Model:
             if not cand:
                 continue
             x, y, _ = self._pos[nm_]
-            bx, by, bn = min(cand, key=lambda t: (t[0] - x) ** 2 + (t[1] - y) ** 2)
+            bx, by, bn = min(cand, key=lambda t: ((t[0] - x) ** 2 + (t[1] - y) ** 2, t[1]))
             if (bx - x) ** 2 + (by - y) ** 2 < thr:
                 self.seg(nm_, bn, pitch)
 
@@ -166,18 +166,18 @@ class Model:
         tol2 = tol * tol
         done = set()
         welded = 0
-        for nm_, (net, lid) in self.meta.items():
+        for nm_, (net, lid) in sorted(self.meta.items(), key=lambda kv: str(kv[0])):
             x, y, _ = self._pos[nm_]
             cx, cy = round(x / cell), round(y / cell)
             best, bd = None, tol2
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    for b in grid.get((net, lid, cx + dx, cy + dy), ()):
+                    for b in sorted(grid.get((net, lid, cx + dx, cy + dy), ()), key=str):
                         if b == nm_:
                             continue
                         xb, yb, _ = self._pos[b]
                         dd = (x - xb) ** 2 + (y - yb) ** 2
-                        if dd <= bd:
+                        if best is None or dd < bd or (dd == bd and str(b) < str(best)):
                             bd, best = dd, b
             if best is not None:
                 key = frozenset((nm_, best))
@@ -1085,6 +1085,34 @@ def _pad_proximity_contacts(model, net, lid, x, y, radius, cap=8):
     return [zn for _, zn in near[:cap]]
 
 
+def _pad_via_top_contacts(model, net, lid, x, y, radius, cap=4):
+    """Same-net via-barrel top nodes on `lid` within `radius` mm of (x, y).
+
+    Cross-layer fallback for a pad in a clearance void where the pour is on a
+    DIFFERENT layer than the pad (e.g. HSS pour on B.Cu, FET pad on F.Cu).
+    Bonds to via-top nodes on the pad's layer — the via barrel then carries
+    the inductance down to the pour layer, preserving the via impedance in
+    the loop path (unlike a direct cross-layer bond which would short it).
+
+    Searches ALL model nodes (not just zone_nodes) for same-net same-layer
+    nodes within radius, excluding zone_nodes already tried by proximity.
+    Deterministic tie-break: distance, then x, then y, then node-id."""
+    r2 = radius * radius
+    near = []
+    zone_set = model.zone_nodes
+    for n in model.meta:
+        if n in zone_set:
+            continue
+        if model.meta.get(n) != (net, lid):
+            continue
+        nx, ny, _ = model._pos[n]
+        d2 = (nx - x) ** 2 + (ny - y) ** 2
+        if d2 <= r2:
+            near.append((d2, nx, ny, n))
+    near.sort(key=lambda t: (t[0], t[1], t[2], t[3]))
+    return [n for _, _, _, n in near[:cap]]
+
+
 def _same_net_zone_count(model, net, lid):
     return sum(1 for zn in model.zone_nodes
                if model.meta.get(zn) == (net, lid))
@@ -1176,13 +1204,22 @@ def _pad_land_terminal(model, net, lid, x, y, z, pad, fp=None):
         radius = half_diag + 1.5 * pitch
         contacts = _pad_proximity_contacts(model, net, lid, x, y, radius) if zn else []
         if not contacts:
-            model.terminal_fallbacks.append(
-                dict(ref=_pad_ref(fp), net=net,
-                     layer=int(lid) if isinstance(lid, int) else str(lid),
-                     x=x, y=y,
-                     reason=("no_mesh_node_inside_pad" if zn else "no_same_net_zone_mesh"),
-                     zone_nodes=zn))
-            return None
+            # Cross-layer fallback: pour may be on a different layer than the pad
+            # (e.g. HSS pour on B.Cu, FET pad on F.Cu, connected via vias).
+            # Bond to via-top nodes on the pad's layer — the via barrel carries
+            # the inductance down to the pour, preserving via impedance in the loop.
+            via_contacts = _pad_via_top_contacts(model, net, lid, x, y, radius)
+            if via_contacts:
+                contacts = via_contacts
+                proximity = True
+            else:
+                model.terminal_fallbacks.append(
+                    dict(ref=_pad_ref(fp), net=net,
+                         layer=int(lid) if isinstance(lid, int) else str(lid),
+                         x=x, y=y,
+                         reason=("no_mesh_node_inside_pad" if zn else "no_same_net_zone_mesh"),
+                         zone_nodes=zn))
+                return None
         proximity = True
     if mode == "single":
         n = _nearest_contact(model, x, y, contacts)

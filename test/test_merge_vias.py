@@ -345,7 +345,7 @@ def test_run_geom_appends_flags_only_when_enabled():
                 parallel_fets="lumped", allow_missing_gate_ports=False)
     captured = {}
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, env=None):
         captured["cmd"] = cmd
         # write a minimal sidecar so run_geom's json.load + require_gate_ports pass
         inp = cmd[cmd.index("-o") + 1]

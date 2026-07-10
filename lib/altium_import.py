@@ -356,9 +356,10 @@ if __name__ == "__main__":
     ap.add_argument("--hs-ref", nargs="*", default=None, help="HS FET refdes")
     ap.add_argument("--ls-ref", nargs="*", default=None, help="LS FET refdes")
     ap.add_argument("--cin-refs", nargs="*", default=None, help="Cin refdes")
-    ap.add_argument("--relayer", choices=("partial", "none"), default="partial",
-                    help="relayer strategy: partial (flip pads+tracks to F.Cu) "
-                         "or none (keep raw B.Cu, preserves multilayer loop)")
+    ap.add_argument("--relayer", choices=("partial", "none", "groundtruth"), default="partial",
+                    help="relayer strategy: partial (flip pads+tracks to F.Cu), "
+                         "none (keep raw B.Cu), or groundtruth (rebuild zones from "
+                         ".PcbDoc via altium_monkey, requires /tmp/altium-venv)")
     args = ap.parse_args()
 
     meta = convert(
