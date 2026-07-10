@@ -1506,8 +1506,17 @@ def build_fet(board, model, zmap, topo, role, lead_mm, parallel_mode="lumped",
         # degenerate zero-length FastHenry filaments.
         die_layer = "DIE" if parallel_mode == "lumped" else f"DIE_{ref}"
         if lead_mm <= 0:
-            dref = dn
-            sref = sn
+            # GaN / leadless package: no external leads, but the die-short must
+            # NOT .equiv the pad nodes at z=0 — that shorts drain to source at
+            # the board surface, bypassing all copper impedance and collapsing
+            # loop R. Instead, create a die plane at a small epsilon above the
+            # pad so the channel short is at the die, not the board, and the
+            # pad-to-die seg carries a small finite impedance.
+            eps = 0.001  # 1um die-plane offset — negligible L, preserves R
+            dref = model.node(drain, die_layer, *dpos, eps)
+            sref = model.node(source, die_layer, *spos, eps)
+            model.seg(dn, dref, 1.0)
+            model.seg(sn, sref, 1.0)
         else:
             dref = model.node(drain, die_layer, *dpos, lead_mm)
             sref = model.node(source, die_layer, *spos, lead_mm)
