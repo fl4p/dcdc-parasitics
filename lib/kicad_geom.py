@@ -2200,12 +2200,22 @@ def main():
                     help="copper thickness in mm for FastHenry segment height")
     ap.add_argument("--lf-freq", type=float, default=1e3,
                     help="lowest sweep frequency Hz for near-DC conduction R")
+    ap.add_argument("--hf-freq", type=float, default=1e8,
+                    help="highest sweep frequency Hz; default 100 MHz. Lower it "
+                         "(e.g. 1e7) to drop the slow, worst-conditioned top-decade "
+                         "solves — harmless when it stays above --plateau")
+    ap.add_argument("--ndec", type=int, default=3,
+                    help="FastHenry frequency points per decade; default 3")
     ap.add_argument("-o", "--out", required=True, help="output .inp path")
     args = ap.parse_args()
     if args.cu_thickness <= 0:
         raise SystemExit("--cu-thickness must be > 0 mm")
     if args.lf_freq <= 0:
         raise SystemExit("--lf-freq must be > 0 Hz")
+    if args.hf_freq < args.lf_freq:
+        raise SystemExit("--hf-freq must be >= --lf-freq")
+    if args.ndec <= 0:
+        raise SystemExit("--ndec must be > 0")
     if args.merge_vias and args.merge_via_radius <= 0:
         raise SystemExit("--merge-via-radius must be > 0 mm")
 
@@ -2241,11 +2251,12 @@ def main():
             f"pitch {args.pitch} mm: {', '.join(dropped)} — their copper never bonded "
             f"into the meshed pour (distant bulk cap?). Lower --pitch / raise "
             f"--weld-tol / --margin to include them.\n")
-    stats = model.write(args.out, fmin=args.lf_freq,
-                        nwinc=args.nwinc, nhinc=args.nhinc,
+    stats = model.write(args.out, fmin=args.lf_freq, fmax=args.hf_freq,
+                        ndec=args.ndec, nwinc=args.nwinc, nhinc=args.nhinc,
                         sigma=sigma_at(args.cu_temp))
     complexity = mesh_complexity(stats, nwinc=args.nwinc, nhinc=args.nhinc,
-                                 fmin=args.lf_freq)
+                                 fmin=args.lf_freq, fmax=args.hf_freq,
+                                 ndec=args.ndec)
     # sidecar: port order + topology for the reduce step
     ports = [lbl for lbl, _, _ in model.ports]
     cin_used = topo.get("cin_used", [])

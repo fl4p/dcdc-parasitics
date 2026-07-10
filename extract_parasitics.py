@@ -191,6 +191,8 @@ DEFAULTS = {
     "cu_temp": 20.0,
     "cu_thickness": 0.035,
     "lf_freq": 1e3,
+    "hf_freq": 1e8,
+    "ndec": 3,
     "plateau": 5e6,
     "svg": False,
     "viewer": True,
@@ -232,6 +234,8 @@ SCALAR_TYPES = {
     "cu_temp": float,
     "cu_thickness": float,
     "lf_freq": float,
+    "hf_freq": float,
+    "ndec": int,
     "plateau": float,
     "out": str,
     "config": str,
@@ -262,6 +266,7 @@ def run_geom(args, pitch, outdir, tag=None):
            "--nhinc", str(args.nhinc), "--cu-temp", str(args.cu_temp),
            "--cu-thickness", str(args.cu_thickness),
            "--lf-freq", str(args.lf_freq),
+           "--hf-freq", str(args.hf_freq), "--ndec", str(args.ndec),
            "--weld-tol", str(args.weld_tol), "--zone-mesh", args.zone_mesh,
            "--terminal-mode", args.terminal_mode,
            "--margin", str(args.margin),
@@ -841,6 +846,12 @@ def build_parser():
     ap.add_argument("--lf-freq", type=float, default=argparse.SUPPRESS,
                     help="lowest FastHenry sweep frequency Hz for near-DC conduction "
                          "R; default 1 kHz")
+    ap.add_argument("--hf-freq", type=float, default=argparse.SUPPRESS,
+                    help="highest FastHenry sweep frequency Hz; default 100 MHz. "
+                         "Lower it (e.g. 1e7) to drop the slow, worst-conditioned "
+                         "top-decade solves — harmless while it stays above --plateau")
+    ap.add_argument("--ndec", type=int, default=argparse.SUPPRESS,
+                    help="FastHenry frequency points per decade; default 3")
     ap.add_argument("--plateau", type=float, default=argparse.SUPPRESS,
                     help="L-plateau frequency Hz")
     ap.add_argument("--svg", action=argparse.BooleanOptionalAction,
@@ -944,6 +955,10 @@ def parse_args(argv=None):
         ap.error("--cu-thickness must be > 0 mm")
     if merged["lf_freq"] <= 0:
         ap.error("--lf-freq must be > 0 Hz")
+    if merged["hf_freq"] < merged["lf_freq"]:
+        ap.error("--hf-freq must be >= --lf-freq")
+    if merged["ndec"] <= 0:
+        ap.error("--ndec must be > 0")
     if merged.get("merge_vias") and merged["merge_via_radius"] <= 0:
         ap.error("--merge-via-radius must be > 0 mm")
     if merged["parallel_fets"] not in ("lumped", "per-device"):
