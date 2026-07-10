@@ -1244,7 +1244,10 @@ def _pad_land_terminal(model, net, lid, x, y, z, pad, fp=None):
     if mode != "padland":
         raise ValueError(f"unknown terminal mode {mode!r}")
     for zn in contacts:
-        model.equiv(term, zn)
+        if proximity:
+            model.seg(term, zn, _pad_size_min(pad) or 0.5)
+        else:
+            model.equiv(term, zn)
     model.terminal_regions.append(
         dict(ref=_pad_ref(fp), net=net,
              layer=int(lid) if isinstance(lid, int) else str(lid),
