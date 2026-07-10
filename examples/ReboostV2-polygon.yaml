@@ -1,0 +1,32 @@
+# ReboostV2 commutation-loop extraction using the POLYGON zone mesher.
+#
+# zone_mesh: polygon -> dcdc's quad/polygon pour mesher (add_zones_polygon)
+# instead of the default rectangular grid. On this 4-layer GaN board the
+# polygon mesh is ~4x fewer segments than the grid at pitch 1.0 and solves
+# far faster, and cross-checks the grid L_loop to a few %. NOTE polygon is
+# dcdc's EXPERIMENTAL mesher (a lower-bound shift is still under study); the
+# grid mesher remains the validated default. Use this for a fast loop-L
+# first pass / cross-check, and confirm against a grid run before trusting.
+#
+# Board: the committed KiCad conversion of ReboostV2.1 (Altium source at
+# ee/ReboostV2-Hardware/ReboostV2.1.PcbDoc). Q1=HS, Q2=LS are GS61008T GaN
+# (LEADLESS LGA) -> lead_mm: 0 (no TO-220 lead risers; the ecb5240 epsilon
+# die-plane makes lead_mm=0 solve). Q3 is excluded (not a power FET).
+# Run from the parasitics/ directory.
+pcb: boards/ReboostV2.1_fixed.kicad_pcb
+sw: HSS
+gnd: GND
+vin: Vb
+hs_ref: [Q1]
+ls_ref: [Q2]
+cin_loop_refs: [C37]        # 1uF MLCC nearest the FETs = the loop cap
+cin_parallel: 1
+zone_mesh: polygon
+lead_mm: 0                  # leadless GaN -> no fictitious package leads
+pitch: [1.0]
+weld_tol: 1.7              # Altium-imported pads: pad<->via gaps exceed the 0.6 default
+allow_missing_gate_ports: true   # GaN gate routing not modelled here (loop L only)
+lf_freq: 25000            # ReboostV2 fsw (ReboostTool config); near-DC R sweep floor
+margin: 8.0
+out: out/reboostv2-polygon/
+svg: true
