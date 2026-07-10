@@ -601,10 +601,16 @@ class Translator():
                 self.elements[pad_node.position, bridge_node.position] = element
 
     def vias(self) -> None:
-        """Only very basic vias for now."""
-        if not self.is_two_layer() or not self.via_mode == ViaMode.ignore_inner_layers:
-            raise Exception("Only two layers with most basic vias implemented.")
-        
+        """Through-via barrels, bonded to same-net copper on every layer spanned.
+
+        Multilayer: a barrel is now a chain of segments through every copper z
+        between its start and end layer, each intermediate node bonded to the
+        same-net pour mesh on that layer — so inner-plane current paths are
+        modelled. Previously a single element jumped start->end, skipping inner
+        layers (the 2-layer limitation)."""
+        if self.via_mode != ViaMode.ignore_inner_layers:
+            raise Exception("only ignore_inner_layers via mode implemented")
+
         PHs: list[PlatedHole] = []
 
         for via in self.board.get_vias():
@@ -640,68 +646,44 @@ class Translator():
                 )
                 PHs.append(ph)
 
+        zlevels_all = sorted(set(self.zs.values()))
         for ph in PHs:
-            start_pos = Point3D(ph.x, ph.y, self.zs[ph.start_layer])
-            end_pos   = Point3D(ph.x, ph.y, self.zs[ph.end_layer])
-            start_node = self.nodes.get(start_pos)
-            end_node   = self.nodes.get(end_pos)
+            z0, z1 = self.zs[ph.start_layer], self.zs[ph.end_layer]
+            lo, hi = min(z0, z1), max(z0, z1)
+            span = [z for z in zlevels_all if lo - 1 <= z <= hi + 1]
+            #! Via resistance underestimated: solid conductor of via diameter.
+            barrel = [self._via_node(ph.net, ph.x, ph.y, z) for z in span]
+            for a, b in zip(barrel, barrel[1:]):
+                self.element_index += 1
+                self.elements[a.position, b.position] = Element(
+                    self.element_index, a, b, ph.diameter, ph.diameter,
+                    sigma=ph.conductance)
 
-            net_nodes = [n for n in self.nodes.values() if n.net == ph.net]
-            if not start_node:
-                closest_node = None
-                closest_distance = 1e9
-                for node in net_nodes:
-                    if node.position.z != start_pos.z: continue
-                    if not closest_node: closest_node = node
-                    distance = start_pos.distance2D(node.position)
-                    if distance < closest_distance:
-                        closest_node = node
-                        closest_distance = distance
-                if not closest_node:
-                    self.node_index += 1
-                    start_node = Node(self.node_index, ph.net, start_pos)
-                    self.nodes[start_pos] = start_node
-                    closest_node = None
-                else:
-                    self.node_index += 1
-                    start_node = Node(self.node_index, ph.net, start_pos)
-                    self.nodes[start_pos] = start_node
-                    self.eqivs.append(Equivalence([start_node, closest_node]))
-                    closest_node = None
-                if closest_node:
-                    raise Exception(f"No Start-Node found for {ph}")
-            if False:
-                self.node_index += 1
-                start_node = Node(self.node_index, ph.net, start_pos)
-                self.nodes[start_pos] = start_node
-                self.eqivs.append(Equivalence([start_node, closest_node]))
-            if not end_node:
-                closest_node = None
-                closest_distance = 1e9
-                for node in net_nodes:
-                    if node.position.z != end_pos.z: continue
-                    if not closest_node: closest_node = node
-                    distance = end_pos.distance2D(node.position)
-                    if distance < closest_distance:
-                        closest_node = node
-                        closest_distance = distance
-                self.node_index += 1
-                end_node = Node(self.node_index, ph.net, end_pos)
-                self.nodes[end_pos] = end_node
-                if closest_node:
-                    self.eqivs.append(Equivalence([end_node, closest_node]))
-            
-            via_conductance = ph.conductance
-            #! Vastly underestimating Via resistance with solid copper conductor the size of via diameter.
-            self.element_index += 1
-            element = Element(
-                self.element_index,
-                start_node,
-                end_node,
-                ph.diameter,
-                ph.diameter,
-                sigma=via_conductance)
-            self.elements[start_node.position, end_node.position] = element
+    def _via_node(self, net, x, y, z):
+        """Node at (x,y,z) on a via barrel, bonded (.equiv) to the nearest
+        same-net node already at that z ONLY if it is within one quad cell
+        (a real via landing on same-net pour). A far "nearest" node means the
+        via is not on same-net copper on that layer (antipad/clearance), so it
+        passes through unbonded — bonding to it would be a multi-mm/cm
+        zero-impedance teleport that shorts across the plane and collapses L."""
+        pos = Point3D(x, y, z)
+        node = self.nodes.get(pos)
+        if node is not None:
+            return node
+        bond_thr = from_mm(self.quad_upper_mm)   # ~one quad cell
+        closest, cdist = None, 1e9
+        for n in self.nodes.values():
+            if n.net != net or n.position.z != z:
+                continue
+            d = pos.distance2D(n.position)
+            if d < cdist:
+                cdist, closest = d, n
+        self.node_index += 1
+        node = Node(self.node_index, net, pos)
+        self.nodes[pos] = node
+        if closest is not None and cdist <= bond_thr:
+            self.eqivs.append(Equivalence([node, closest]))
+        return node
 
     def ports(self) -> None:
         for pre_port in self.preliminary_ports:

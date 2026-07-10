@@ -44,6 +44,17 @@ LAYER_MAP = {
 }
 
 
+def board_copper_layers(board):
+    """Enabled copper layers, top->bottom, that we can map (F, In1, In2, B).
+
+    Multilayer support: earlier the adapter forced everything onto F.Cu/B.Cu.
+    On real 4-layer power boards the commutation-loop return runs through the
+    inner planes, so a 2-layer view opens the loop; we now mesh every mapped
+    copper layer. Inner layers beyond In2 would need LAYER_MAP + the KiPEX
+    BoardLayer enum extended."""
+    return [l for l in board.GetEnabledLayers().CuStack() if l in LAYER_MAP]
+
+
 @dataclass
 class Vec:
     x: int
@@ -162,7 +173,7 @@ class Zone:
         self._zone = zone
         self.net = Net(zone.GetNetname())
         self.filled_polygons = {}
-        for pcb_layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+        for pcb_layer in board_copper_layers(board):
             if not zone.GetLayerSet().Contains(pcb_layer):
                 continue
             try:
@@ -200,20 +211,25 @@ class StackLayer:
 
 
 class Stackup:
+    CU_T = 35_000  # 35 um copper in nm
+
     def __init__(self, board=None):
-        # KiPEX only supports 2-layer via modeling. For multi-layer boards,
-        # report only F.Cu + B.Cu + dielectric (inner layers are ignored;
-        # through-vias still connect F.Cu<->B.Cu). This is a reasonable
-        # approximation for commutation loop L on 4-layer boards where the
-        # loop current is primarily on outer layers.
+        # All mapped copper layers, top->bottom, separated by equal dielectric
+        # gaps summing to the board thickness. This gives each inner plane a
+        # real z, so the via barrels (multi-layer now) and the inner-plane
+        # return path are modelled instead of collapsed onto F/B.
         thick = pcbnew.FromMM(1.6)
+        cu_layers = [pcbnew.F_Cu, pcbnew.B_Cu]
         if board is not None:
             thick = board.GetDesignSettings().GetBoardThickness()
-        self.layers = [
-            StackLayer(BoardLayer.BL_F_Cu, 35_000, "copper"),
-            StackLayer(BoardLayer.BL_UNDEFINED, int(thick), "fr4"),
-            StackLayer(BoardLayer.BL_B_Cu, 35_000, "copper"),
-        ]
+            cu_layers = board_copper_layers(board)
+        n = len(cu_layers)
+        diel = max(1, int((thick - n * self.CU_T) / max(1, n - 1)))
+        self.layers = []
+        for i, l in enumerate(cu_layers):
+            self.layers.append(StackLayer(LAYER_MAP[l], self.CU_T, "copper"))
+            if i < n - 1:
+                self.layers.append(StackLayer(BoardLayer.BL_UNDEFINED, diel, "fr4"))
 
 
 class Board:
@@ -226,7 +242,7 @@ class Board:
 
     def get_tracks(self):
         return [Track(t) for t in self._board.GetTracks()
-                if t.GetClass() == "PCB_TRACK" and t.GetLayer() in (pcbnew.F_Cu, pcbnew.B_Cu)]
+                if t.GetClass() == "PCB_TRACK" and t.GetLayer() in LAYER_MAP]
 
     def get_vias(self):
         return [Via(t) for t in self._board.GetTracks() if t.GetClass() == "PCB_VIA"]

@@ -44,11 +44,13 @@ density, default 3.0/1.0 mm), `KIPEX_OUT` (output dir), `KIPEX_PYDEPS`.
 
 ## Limitations
 
-1. **2-layer only**: KiPEX's `translator.py` raises "Only two layers with most
-   basic vias implemented" for >2 copper layers. The adapter reports only
-   F.Cu + B.Cu in the stackup (inner layers ignored; through-vias still
-   connect F.Cu↔B.Cu). This is a reasonable approximation for commutation loop
-   L where current is primarily on outer layers.
+1. **Multilayer (F/In1/In2/B) supported**: the translator now meshes every
+   mapped copper layer, assigns each a real z, and runs via barrels through all
+   spanned layers with per-layer pour bonding (bond capped at one quad cell to
+   avoid `.equiv` teleport shorts). `LAYER_MAP` covers F/In1/In2/B; >4 layers
+   needs it + the KiPEX `BoardLayer` enum extended. The old 2-layer-only path
+   (F/B, inner layers ignored) mis-modelled boards whose loop return runs on the
+   inner planes — see ReboostV2 below. 2-layer boards are a bit-identical no-op.
 
 2. **Altium-imported zone fills produce degenerate FastHenry filaments**: the
    KiCad Altium importer's zone fills contain sliver/overlap polygons that
@@ -61,8 +63,14 @@ density, default 3.0/1.0 mm), `KIPEX_OUT` (output dir), `KIPEX_PYDEPS`.
 
 | Board | KiPEX L_loop | dcdc L_loop | Notes |
 |-------|-------------|------------|-------|
-| Fugu2 | 4.51 nH | 4.13 nH (lead_mm=0.1) | Good agreement (8%) |
-| simple-hb | 6.64 nH | 9.08 nH | dcdc over-extracts (rectangular zone mesh) |
-| ReboostV2 | BLOCKED | ~9 nH (inflated) | Altium zone fill degenerate filaments |
+| Fugu2 | 4.51 nH | 4.13 nH (lead_mm=0.1) | Good agreement (8%), 2-layer |
+| simple-hb | 6.64 nH | 9.08 nH | dcdc over-extracts (rectangular zone mesh), 2-layer |
+| ReboostV2 (2-layer view) | 2.08 nH | 2.64 nH | F/B-only misses the inner-plane return |
+| ReboostV2 (4-layer) | 2.55 nH | 2.64 nH | agrees 3.5%; ~12x faster; kipex_reboostv2_loop.py |
+
+The ReboostV2 4-layer run uses `kipex_reboostv2_loop.py` (shorted-die single
+cap-port loop formulation) on the ground-truth zone rebuild; the 2-layer view
+reads low because the commutation-loop return current flows through the inner
+GND/HSS planes. Loop L only — R is not yet validated for the multilayer path.
 
 See `docs/cross-check-findings.md` for the full Fugu2/simple-hb analysis.
