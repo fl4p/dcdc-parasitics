@@ -69,9 +69,28 @@ def mm(v):
     return v / NM
 
 
+# Diagnostic: DCDC_ONLY_FB=1 restricts the copper stack to F.Cu + B.Cu only
+# (inner layers ignored, through-vias collapse to an F<->B barrel). This makes
+# the grid extractor model the same 2-layer copper KiPEX's polygon path sees,
+# for a controlled mesher-vs-mesher comparison. Board surgery (deleting inner
+# zones) does NOT work — it severs via landings and opens the loop — because the
+# inner planes are load-bearing; this filter keeps the through-vias so the loop
+# still closes. Not a product feature; off unless the env var is set.
+_ONLY_FB = os.environ.get("DCDC_ONLY_FB") == "1"
+
+
+def _cu_stack(board):
+    """Enabled copper layers top->bottom, optionally filtered to F/B only."""
+    cu = list(board.GetEnabledLayers().CuStack())
+    if _ONLY_FB:
+        keep = {pcbnew.F_Cu, pcbnew.B_Cu}
+        cu = [l for l in cu if l in keep]
+    return cu
+
+
 def layer_z_map(board):
     """Return {layer_id: z_mm} for the copper stack (top = 0, going down)."""
-    cu = list(board.GetEnabledLayers().CuStack())
+    cu = _cu_stack(board)
     n = len(cu)
     thick = 1.6
     try:
@@ -772,7 +791,7 @@ def add_vias(board, model, zmap, nets, merge_vias=False, merge_radius=1.0,
         the centroid, so the merged barrel would float and be silently pruned.
         This reachability gate is the sufficient condition; without it the cluster
         falls back to per-via (each member bonds at its own real location)."""
-    cu = list(board.GetEnabledLayers().CuStack())
+    cu = _cu_stack(board)
     merge_nets = merge_nets or set()
     pour_index = pour_index or {}
     # reachability index: pour-mesh nodes add_zones already created (None if pitch
@@ -1265,7 +1284,7 @@ def _pad_node_stack(board, model, zmap, fp, want_net):
     avoids forcing the whole sheet current through a single detached pad-centre
     stitch while still keeping the terminal region limited to real contact copper.
     """
-    cu = list(board.GetEnabledLayers().CuStack())
+    cu = _cu_stack(board)
     top_node = None
     for pad in fp.Pads():
         if pad.GetNetname() != want_net:
