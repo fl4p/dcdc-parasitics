@@ -462,14 +462,14 @@ def _with_fake_pad_contains(fn):
         kicad_geom._pad_contains = old
 
 
-def test_padland_terminal_equivs_all_pad_contacts():
+def test_padland_terminal_segs_all_pad_contacts():
     def run():
         m = _terminal_mode_model("padland")
         n = kicad_geom._pad_land_terminal(m, "VIN", 0, 0.5, 0.5, 0.0,
                                           _FakePad(), fp=_FakeFp())
         assert n in m.distributed_terminals
-        assert len(m.equivs) == 4
-        assert not m.segs
+        assert len(m.segs) == 4
+        assert not m.equivs
         assert m.terminal_regions[-1]["mode"] == "padland"
         assert m.terminal_regions[-1]["ref"] == "C1"
     _with_fake_pad_contains(run)
