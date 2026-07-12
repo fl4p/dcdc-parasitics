@@ -1,0 +1,11 @@
+{
+  "footprints_flipped": 184,
+  "output": "boards/ReboostV2.1_fixed.kicad_pcb",
+  "pads_fixed": 0,
+  "relayer": "faithful",
+  "source": "/Users/fab/dev/ee/ReboostV2-Hardware/ReboostV2.1.PcbDoc",
+  "tracks_relayered": 1436,
+  "vb_pour_synthesized": null,
+  "warnings": [],
+  "zones_relayered": 18
+}
