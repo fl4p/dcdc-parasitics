@@ -179,6 +179,48 @@ def _insert_vb_zone(pcb_path, net_code, net_name, bbox, margin=1.0,
     return round(area, 2)
 
 
+def _swap_cu(layer):
+    """F.Cu<->B.Cu and In1.Cu<->In2.Cu; other layers unchanged.
+
+    The KiCad Altium importer maps layers DIRECT (Altium TOP->F.Cu,
+    BOTTOM->B.Cu, MID1->In1, MID2->In2). The dcdc/ground-truth convention is
+    the consistent global FLIP (Altium BOTTOM->F.Cu, TOP->B.Cu, MID1->In2,
+    MID2->In1) so the bottom-mounted power stage lands on F.Cu. That flip is
+    exactly this uniform swap applied to the raw import."""
+    return {
+        pcbnew.F_Cu: pcbnew.B_Cu, pcbnew.B_Cu: pcbnew.F_Cu,
+        pcbnew.In1_Cu: pcbnew.In2_Cu, pcbnew.In2_Cu: pcbnew.In1_Cu,
+    }.get(layer, layer)
+
+
+def _relayer_faithful(board, meta):
+    """Faithful full-board relayer: uniform global flip of the raw import.
+
+    Flip every footprint to the opposite side (pcbnew mirrors pads + side +
+    geometry atomically) and swap the copper layer of every standalone track
+    and zone. Because it starts from the RAW import (where the importer put
+    pads AND their tracks on the same direct-mapped layer), the uniform swap
+    preserves pad<->track consistency while reaching the flipped convention —
+    unlike the 'partial' relayer, which moves pads but leaves signal tracks,
+    stranding them on the opposite layer."""
+    for fp in board.GetFootprints():
+        fp.Flip(fp.GetPosition(), False)
+        meta["footprints_flipped"] += 1
+    for t in board.GetTracks():
+        if t.Type() != pcbnew.PCB_TRACE_T:
+            continue
+        nl = _swap_cu(t.GetLayer())
+        if nl != t.GetLayer():
+            t.SetLayer(nl)
+            meta["tracks_relayered"] += 1
+    for i in range(board.GetAreaCount()):
+        a = board.GetArea(i)
+        nl = _swap_cu(a.GetLayer())
+        if nl != a.GetLayer():
+            a.SetLayer(nl)
+            meta["zones_relayered"] += 1
+
+
 def convert(
     src_pcbdoc,
     dst_kicad_pcb,
@@ -226,6 +268,7 @@ def convert(
         "pads_fixed": 0,
         "tracks_relayered": 0,
         "zones_relayered": 0,
+        "footprints_flipped": 0,
         "vb_pour_synthesized": None,
         "warnings": [],
     }
@@ -246,7 +289,9 @@ def convert(
     # --- Step 2: Re-open as native KiCad (rebuilds connectivity state) ---
     board = pcbnew.LoadBoard(dst_kicad_pcb)
 
-    if do_relayer:
+    if relayer == "faithful":
+        _relayer_faithful(board, meta)
+    elif do_relayer:
         # --- Step 3: Fix pad layer sets (B.Cu -> F.Cu) ---
         for fp in board.GetFootprints():
             for p in fp.Pads():
@@ -289,7 +334,8 @@ def convert(
     pcbnew.PCB_IO_MGR.Save(pcbnew.PCB_IO_MGR.KICAD_SEXP, dst_kicad_pcb, board)
 
     # --- Step 6: Vb-pour fallback (if no Vb zone covers the FET area) ---
-    if vin_net:
+    # partial-relayer only; faithful keeps real Altium copper (no synth pour).
+    if vin_net and relayer == "partial":
         # Compute power-stage bbox from FET drain pads + LOCAL Cin Vin pads
         # only (filter Cin to those within 5mm of a FET drain pad)
         bbox = _power_stage_bbox(board, vin_net, fet_refs, cin_ref_set)
@@ -356,10 +402,12 @@ if __name__ == "__main__":
     ap.add_argument("--hs-ref", nargs="*", default=None, help="HS FET refdes")
     ap.add_argument("--ls-ref", nargs="*", default=None, help="LS FET refdes")
     ap.add_argument("--cin-refs", nargs="*", default=None, help="Cin refdes")
-    ap.add_argument("--relayer", choices=("partial", "none", "groundtruth"), default="partial",
-                    help="relayer strategy: partial (flip pads+tracks to F.Cu), "
-                         "none (keep raw B.Cu), or groundtruth (rebuild zones from "
-                         ".PcbDoc via altium_monkey, requires /tmp/altium-venv)")
+    ap.add_argument("--relayer", choices=("partial", "none", "groundtruth", "faithful"),
+                    default="partial",
+                    help="relayer strategy: partial (flip pads+power tracks to F.Cu, "
+                         "for power-loop extraction), faithful (uniform global flip of "
+                         "the whole board -> correct full-board layers), none (keep raw), "
+                         "or groundtruth (rebuild power zones from .PcbDoc via altium_monkey)")
     args = ap.parse_args()
 
     meta = convert(
