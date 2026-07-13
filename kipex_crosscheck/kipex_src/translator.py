@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 from typing import TextIO
 from math import ceil
 from kipy import KiCad
@@ -152,6 +153,8 @@ class Translator():
         self.element_index: int = 0
         self.copper_zones: list[CopperZone] = []
         self.eqivs: list[Equivalence] = []
+        # via-barrel landings that found no same-net copper to bond to
+        self.unbonded_via_nodes: list[tuple[str, int, int, int]] = []
 
     def set_frequency_range(self, fmin: float, fmax: float, ndec: int = 1) -> None:
         self.frequency = Frequencies(fmin, fmax, ndec)
@@ -659,6 +662,25 @@ class Translator():
                     self.element_index, a, b, ph.diameter, ph.diameter,
                     sigma=ph.conductance)
 
+        # A barrel node with no same-net copper within one quad cell is left
+        # UNBONDED (see _via_node): that landing carries no current. Silently
+        # dropping it opens the inner-plane return and still prints a confident
+        # L_loop — and the failure is ANTI-MONOTONE (a finer mesh shrinks the
+        # bond threshold and drops MORE landings). So it must be counted and
+        # reported, never swallowed.
+        if self.unbonded_via_nodes:
+            by_net = {}
+            for net, _x, _y, _z in self.unbonded_via_nodes:
+                by_net[net] = by_net.get(net, 0) + 1
+            detail = ", ".join(f"{n}:{c}" for n, c in sorted(by_net.items()))
+            sys.stderr.write(
+                f"WARNING: {len(self.unbonded_via_nodes)} via-barrel landing(s) "
+                f"bonded to NO same-net copper within one quad cell "
+                f"({self.quad_upper_mm} mm) [{detail}]. Those landings conduct "
+                f"nothing: the layer-to-layer return through them is OPEN, so "
+                f"L_loop is biased HIGH. Check the pour/antipad geometry on those "
+                f"nets before trusting this cross-check.\n")
+
     def _via_node(self, net, x, y, z):
         """Node at (x,y,z) on a via barrel, bonded (.equiv) to the nearest
         same-net node already at that z ONLY if it is within one quad cell
@@ -683,6 +705,9 @@ class Translator():
         self.nodes[pos] = node
         if closest is not None and cdist <= bond_thr:
             self.eqivs.append(Equivalence([node, closest]))
+        else:
+            # unbonded: recorded and reported by vias() — never silently dropped
+            self.unbonded_via_nodes.append((net, x, y, z))
         return node
 
     def ports(self) -> None:

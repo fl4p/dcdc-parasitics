@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import types
@@ -45,14 +46,27 @@ LAYER_MAP = {
 
 
 def board_copper_layers(board):
-    """Enabled copper layers, top->bottom, that we can map (F, In1, In2, B).
+    """Enabled copper layers, top->bottom. Raises on any layer we cannot map.
 
     Multilayer support: earlier the adapter forced everything onto F.Cu/B.Cu.
     On real 4-layer power boards the commutation-loop return runs through the
     inner planes, so a 2-layer view opens the loop; we now mesh every mapped
-    copper layer. Inner layers beyond In2 would need LAYER_MAP + the KiPEX
-    BoardLayer enum extended."""
-    return [l for l in board.GetEnabledLayers().CuStack() if l in LAYER_MAP]
+    copper layer (F, In1, In2, B).
+
+    A board with copper beyond In2 is REFUSED, not silently filtered: dropping
+    In3/In4 would remove tracks, pour mesh and via landings from the model and
+    still print a confident L_loop (too high, or an open loop) with no error.
+    Extending support means extending LAYER_MAP *and* the KiPEX BoardLayer enum."""
+    cu = list(board.GetEnabledLayers().CuStack())
+    unmapped = [l for l in cu if l not in LAYER_MAP]
+    if unmapped:
+        names = ", ".join(board.GetLayerName(l) for l in unmapped)
+        raise NotImplementedError(
+            f"board enables copper layers this adapter cannot map: {names}. "
+            f"Only F.Cu/In1.Cu/In2.Cu/B.Cu are supported — meshing without the "
+            f"others would silently drop conduction paths from the cross-check. "
+            f"Extend LAYER_MAP and the KiPEX BoardLayer enum to proceed.")
+    return cu
 
 
 @dataclass
@@ -210,37 +224,174 @@ class StackLayer:
         self.material_name = material
 
 
+_STACKUP_LAYER_RE = re.compile(
+    r'\(layer\s+"([^"]+)"\s*\(type\s+"([^"]+)"\)'
+    r'(?:\s*\(color\s+"[^"]*"\))?'
+    r'(?:\s*\(thickness\s+([0-9.]+)[^)]*\))?')
+
+
+class StackupUnparseable(Exception):
+    """The board HAS a stackup block, but we could not read it faithfully.
+
+    Distinct from "no stackup block" on purpose: an absent stackup is a known,
+    benign state (every Altium-imported board), while an unreadable one means we
+    are about to substitute a guess for data that EXISTS. Collapsing both to None
+    would make a parse failure indistinguishable from a board that never had a
+    stackup — absence of evidence encoding absence of the problem."""
+
+
+def read_board_stackup(path):
+    """Real per-layer thicknesses from the board's `(stackup ...)` block.
+
+    Returns an ordered list of (kind, name, thickness_nm) for the copper and
+    dielectric layers, None when the board carries NO stackup block, and raises
+    StackupUnparseable when a block is present but cannot be read faithfully.
+
+    pcbnew's GetStackupDescriptor() is not usable from SWIG (it returns an
+    opaque SwigPyObject with no GetList), so we read the S-expression."""
+    with open(path) as f:
+        txt = f.read()
+    i = txt.find("(stackup")
+    if i < 0:
+        return None  # no stackup block at all (every Altium-imported board)
+    depth, end = 0, None
+    for j in range(i, len(txt)):
+        if txt[j] == "(":
+            depth += 1
+        elif txt[j] == ")":
+            depth -= 1
+            if depth == 0:
+                end = j
+                break
+    if end is None:
+        raise StackupUnparseable("unbalanced parens in the (stackup) block")
+    block = txt[i:end]
+    # A dielectric with sublayers repeats (thickness ...) inside one (layer ...);
+    # our flat regex would take only the first and understate the z span.
+    if "addsublayer" in block:
+        raise StackupUnparseable("stackup uses sublayered dielectrics (addsublayer)")
+    out = []
+    for name, typ, thick in _STACKUP_LAYER_RE.findall(block):
+        t = typ.lower()
+        if t == "copper":
+            kind = "copper"
+        elif t in ("core", "prepreg") or name.startswith("dielectric"):
+            kind = "dielectric"
+        else:
+            continue  # silk/mask/paste: not part of the copper-to-copper z span
+        if not thick:
+            raise StackupUnparseable(f"layer {name!r} has no thickness")
+        out.append((kind, name, int(round(float(thick) * 1e6))))  # mm -> nm
+    if not out:
+        raise StackupUnparseable("stackup block lists no copper/dielectric layers")
+    return out
+
+
 class Stackup:
     CU_T = 35_000  # 35 um copper in nm
 
-    def __init__(self, board=None):
-        # All mapped copper layers, top->bottom, separated by equal dielectric
-        # gaps summing to the board thickness. This gives each inner plane a
-        # real z, so the via barrels (multi-layer now) and the inner-plane
-        # return path are modelled instead of collapsed onto F/B.
+    def __init__(self, board=None, path=None):
+        # All mapped copper layers, top->bottom. Layer z comes from the board's
+        # real stackup when it has one; otherwise from equal dielectric gaps
+        # summing to the board thickness. Either way each inner plane gets a z,
+        # so the via barrels (multi-layer now) and the inner-plane return path
+        # are modelled instead of collapsed onto F/B.
+        #
+        # The gap matters: loop-return current image-couples to the NEAREST
+        # plane, so a wrong F<->In1 spacing scales L_loop directly. A typical
+        # 4-layer build is asymmetric (thin ~0.2 mm prepreg F<->In1, thick core
+        # in the middle); the equal-gap guess puts In1 ~2.5x too far away.
         thick = pcbnew.FromMM(1.6)
         cu_layers = [pcbnew.F_Cu, pcbnew.B_Cu]
         if board is not None:
             thick = board.GetDesignSettings().GetBoardThickness()
             cu_layers = board_copper_layers(board)
         n = len(cu_layers)
-        diel = max(1, int((thick - n * self.CU_T) / max(1, n - 1)))
+
+        real, unparseable = None, None
+        if path:
+            try:
+                real = read_board_stackup(path)
+            except StackupUnparseable as e:
+                unparseable = str(e)
+                sys.stderr.write(
+                    f"WARNING: this board HAS a (stackup) block but it could not be "
+                    f"read ({e}) — falling back to a GUESSED uniform layer spacing. "
+                    f"The real z data exists and is being ignored; L_loop scales with "
+                    f"the F<->In1 gap, so fix the reader before trusting this run.\n")
+        if real is not None:
+            n_cu = sum(1 for k, _, _ in real if k == "copper")
+            if n_cu != n:
+                sys.stderr.write(
+                    f"WARNING: board stackup lists {n_cu} copper layers but "
+                    f"{n} are enabled; ignoring the stackup block and GUESSING "
+                    f"uniform layer spacing.\n")
+                unparseable = f"copper count {n_cu} != {n} enabled layers"
+                real = None
+
         self.layers = []
-        for i, l in enumerate(cu_layers):
-            self.layers.append(StackLayer(LAYER_MAP[l], self.CU_T, "copper"))
-            if i < n - 1:
-                self.layers.append(StackLayer(BoardLayer.BL_UNDEFINED, diel, "fr4"))
+        if real is not None:
+            self.z_source = "board_stackup"
+            cu_i = 0
+            for kind, _name, t in real:
+                if kind == "copper":
+                    self.layers.append(
+                        StackLayer(LAYER_MAP[cu_layers[cu_i]], t, "copper"))
+                    cu_i += 1
+                else:
+                    self.layers.append(
+                        StackLayer(BoardLayer.BL_UNDEFINED, t, "fr4"))
+            # trailing dielectric (below the last copper) is not part of the span
+            while self.layers and self.layers[-1].layer == BoardLayer.BL_UNDEFINED:
+                self.layers.pop()
+        else:
+            # No stackup block (e.g. every Altium-imported board), or one we could
+            # not read: the inner-plane z is a GUESS. Say so — an inflated F<->In1
+            # gap inflates L_loop, and a cross-check that silently guessed its
+            # geometry is not a cross-check. The two cases are NOT the same and the
+            # provenance string keeps them apart.
+            self.z_source = ("uniform_gap_guess_after_parse_failure: " + unparseable
+                             if unparseable else "uniform_gap_guess_no_stackup_block")
+            diel = max(1, int((thick - n * self.CU_T) / max(1, n - 1)))
+            if n > 2:
+                sys.stderr.write(
+                    f"WARNING: board has no (stackup) block — inner-plane z is a "
+                    f"GUESS ({n} copper layers at equal {diel/1e6:.3f} mm gaps over "
+                    f"{thick/1e6:.2f} mm). Real 4-layer builds are asymmetric (thin "
+                    f"F<->In1 prepreg), and L_loop scales with that gap, so treat "
+                    f"the absolute value as provisional.\n")
+            for i, l in enumerate(cu_layers):
+                self.layers.append(StackLayer(LAYER_MAP[l], self.CU_T, "copper"))
+                if i < n - 1:
+                    self.layers.append(
+                        StackLayer(BoardLayer.BL_UNDEFINED, diel, "fr4"))
 
 
 class Board:
     def __init__(self, path):
+        self._path = path
         self._board = pcbnew.LoadBoard(path)
+        board_copper_layers(self._board)  # fail fast on unmappable copper
         self._fps = [FootprintInstance(fp) for fp in self._board.GetFootprints()]
 
     def get_stackup(self):
-        return Stackup(self._board)
+        return Stackup(self._board, path=self._path)
 
     def get_tracks(self):
+        # PCB_ARC is copper too. This adapter models a track as a straight
+        # start->end segment, which is wrong for an arc, so REFUSE a board that
+        # has any rather than silently dropping that copper from the mesh (a
+        # dropped arc opens the path it was carrying and biases L_loop high).
+        arcs = [t for t in self._board.GetTracks()
+                if t.GetClass() == "PCB_ARC" and t.GetLayer() in LAYER_MAP]
+        if arcs:
+            raise NotImplementedError(
+                f"board has {len(arcs)} copper ARC track(s); this adapter models "
+                "tracks as straight segments only. Dropping them would silently "
+                "remove conduction paths from the cross-check — implement arc "
+                "segmentation before running this board.")
+        # every enabled copper layer is mappable (checked in __init__), so this
+        # filter only excludes genuinely non-copper track layers
         return [Track(t) for t in self._board.GetTracks()
                 if t.GetClass() == "PCB_TRACK" and t.GetLayer() in LAYER_MAP]
 

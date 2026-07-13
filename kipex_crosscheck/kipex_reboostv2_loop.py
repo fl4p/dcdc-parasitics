@@ -112,8 +112,14 @@ def run():
     subprocess.run([FASTHENRY, "-p", "diag", "-S", "kiloop",
                     os.path.basename(inp)], cwd=OUT, check=True)
 
+    # Provenance: a cross-check that guessed its layer z (no (stackup) block on
+    # the board) or dropped via landings is not a clean cross-check — say so in
+    # the artifact, don't just print a number.
     out = {"pcb": PCB, "quad_limits": [QUAD_MAX, QUAD_MIN],
-           "formulation": "shorted-dies single cap port", "frequencies": {}}
+           "formulation": "shorted-dies single cap port",
+           "layer_z_source": board.get_stackup().z_source,
+           "unbonded_via_nodes": len(tr.unbonded_via_nodes),
+           "frequencies": {}}
     zc_by_freq = read_zmat(os.path.join(OUT, "Zckiloop.mat"))
     for freq, z in sorted(zc_by_freq.items()):
         zc = z[0][0]
