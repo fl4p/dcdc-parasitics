@@ -30,6 +30,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXTRACT = os.path.join(HERE, "extract_parasitics.py")
 
 
+def _scaled(v, k):
+    """Scale an optional parasitics.json quantity; None stays None.
+
+    r_hs/r_ls are legitimately null (eff_rdc() returns None when a switch has no
+    conduction ports, e.g. --allow-missing-gate-ports runs), so they must survive
+    as "n/a" rather than crash or be reported as a plausible 0.000."""
+    return None if v is None else v * k
+
+
+def _fmt(v, prec=3):
+    return "n/a" if v is None else f"{v:.{prec}f}"
+
+
 def one_run(python, param_flag, value, out_dir, passthrough, logf):
     """Run a single extraction; return (value, seconds, result-dict-or-error)."""
     cmd = [python, EXTRACT, *passthrough, param_flag, str(value), "-o", out_dir]
@@ -42,12 +55,16 @@ def one_run(python, param_flag, value, out_dir, passthrough, logf):
     try:
         with open(os.path.join(out_dir, "parasitics.json")) as fh:
             d = json.load(fh)
+        # L_loop is the point of the sweep: a run that did not produce one is an
+        # error, never a 0.000 nH data point.
+        if d.get("L_loop") is None:
+            return value, dt, {"error": f"parasitics.json has no L_loop; see {logf}"}
         return value, dt, {
-            "L_nH": d.get("L_loop", 0.0) * 1e9,
-            "r_hs_mOhm": d.get("r_hs", 0.0) * 1e3,
-            "r_ls_mOhm": d.get("r_ls", 0.0) * 1e3,
+            "L_nH": d["L_loop"] * 1e9,
+            "r_hs_mOhm": _scaled(d.get("r_hs"), 1e3),
+            "r_ls_mOhm": _scaled(d.get("r_ls"), 1e3),
         }
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, TypeError) as e:
         return value, dt, {"error": f"no/invalid parasitics.json: {e}"}
 
 
@@ -95,8 +112,8 @@ def main():
             v, dt, res = fut.result()
             results[v] = (dt, res)
             tag = res.get("error") or (
-                f"L={res['L_nH']:.3f} nH  r_hs={res['r_hs_mOhm']:.3f}  "
-                f"r_ls={res['r_ls_mOhm']:.3f} mOhm")
+                f"L={res['L_nH']:.3f} nH  r_hs={_fmt(res['r_hs_mOhm'])}  "
+                f"r_ls={_fmt(res['r_ls_mOhm'])} mOhm")
             print(f"  {param_flag}={v}: {dt:.0f} s  {tag}", flush=True)
     total = time.time() - t0
 
@@ -110,8 +127,8 @@ def main():
         slowest = max(slowest, dt)
         serial += dt
         tag = res.get("error") or (
-            f"L_loop={res['L_nH']:7.3f} nH   r_hs={res['r_hs_mOhm']:.3f}   "
-            f"r_ls={res['r_ls_mOhm']:.3f} mOhm")
+            f"L_loop={res['L_nH']:7.3f} nH   r_hs={_fmt(res['r_hs_mOhm'])}   "
+            f"r_ls={_fmt(res['r_ls_mOhm'])} mOhm")
         print(f"{param_flag}={v:<6} {tag}")
     print(f"\nwall-clock {total:.0f} s (slowest single run {slowest:.0f} s; "
           f"sum-of-runs {serial:.0f} s → {serial/total:.1f}x speedup vs serial)")
