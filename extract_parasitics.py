@@ -318,12 +318,14 @@ def fmt_work_units(n):
     return f"{n:.0f}"
 
 
-def mesh_complexity_line(pitch, side):
+def mesh_complexity_line(pitch, side, basis=None):
     mesh = side.get("mesh") or {}
     if not mesh:
         return None
     return (
-        f"pitch {pitch:>4} mm mesh: "
+        f"pitch {pitch:>4} mm mesh"
+        + (f" [{basis}]" if basis else "")
+        + ": "
         f"{mesh.get('nodes', 0)} nodes, {mesh.get('segs', 0)} segs, "
         f"~{mesh.get('filaments_est', 0)} filaments "
         f"(nwinc={mesh.get('nwinc', 1)}, nhinc={mesh.get('nhinc', 1)}), "
@@ -367,9 +369,15 @@ def _inject_packages(args, side):
 
 def _run_reduce_basis(args, pitch, workdir, pcb_input, pcb_sha256, config_sha256,
                       altium_meta, basis, suffix, run_geom_fn=run_geom,
-                      solve_fn=solve_reduce.solve):
+                      solve_fn=solve_reduce.solve, label_basis=False):
     basis_args = _clone_args(args, cin_extraction_basis=basis)
     inp, side = run_geom_fn(basis_args, pitch, workdir, tag=basis)
+    # Before solve_fn: FastHenry is the multi-minute step, so a complexity readout
+    # is only actionable if it lands ahead of it. Tag the basis only when more than one
+    # can run for this pitch (matrix Cin) — a single-basis run has nothing to disambiguate.
+    line = mesh_complexity_line(pitch, side, basis=basis if label_basis else None)
+    if line:
+        print(line, flush=True)
     _inject_packages(args, side)
     meta = _meta_for_side(
         basis_args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta)
@@ -1056,9 +1064,6 @@ def main():
                   + (f" (finer than {pitch:g}; the shipped default is 1)."
                      if pitch > 1 else "."))
             raise
-        line = mesh_complexity_line(pitch, side)
-        if line:
-            print(line)
         results.append((pitch, p))
         if (args.emit_cin_network and args.cin_network_model in (
                 "matrix", "matrix_with_sw_coupling")
@@ -1112,7 +1117,7 @@ def main():
         arts.append("mesh/model.inp")
     viewer_msg = None
     if args.viewer:
-        # `inp`/`side` are the finest pitch here (loop ends coarse->fine).
+        # `inp` is the finest pitch here (loop ends coarse->fine).
         viewer_msg = write_viewer(args, inp, workdir)
         if viewer_msg:
             arts.append("mesh/mesh.html")
