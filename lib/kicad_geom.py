@@ -2297,6 +2297,16 @@ def main():
         sys.stderr.write(
             f"WARNING: {len(model.zone_mesh_notes)} zone polygon-mesh note(s); "
             f"see {args.out}.ports.json zone_mesh_notes.\n")
+    # DCDC_ONLY_FB deletes the inner copper from the model. It is a diagnostic,
+    # not a product mode, so it must be LOUD and must reach the artifacts —
+    # otherwise a 2-layer-view run is indistinguishable from a full-stack one in
+    # parasitics.json / report.md (ReboostV2: ~2.1 nH vs ~2.6 nH).
+    cu_layers = [board.GetLayerName(l) for l in _cu_stack(board)]
+    if _ONLY_FB:
+        sys.stderr.write(
+            "WARNING: DCDC_ONLY_FB=1 — copper stack restricted to F.Cu+B.Cu; "
+            "inner-layer copper is NOT modelled. This is a mesher-comparison "
+            "diagnostic; L_loop is NOT a full-stack extraction.\n")
     side = dict(ports=ports, cin_ports=getattr(model, "cin_ports", ["P_pwr"]),
                 aux_ports={k: list(v) for k, v in getattr(model, "aux_ports", {}).items()},
                 cin_used=cin_used, cin_requested=args.cin_parallel, cin_warn=cin_warn,
@@ -2305,6 +2315,8 @@ def main():
                       for k, v in topo.items()},
                 pitch=args.pitch, lead_mm=args.lead_mm, cu_temp=args.cu_temp,
                 cu_thickness=args.cu_thickness, lf_freq=args.lf_freq,
+                hf_freq=args.hf_freq, ndec=args.ndec,
+                cu_layers=cu_layers, only_fb=_ONLY_FB,
                 cin_extraction_basis=args.cin_extraction_basis,
                 cin_closure=args.cin_closure,
                 mesh=complexity,

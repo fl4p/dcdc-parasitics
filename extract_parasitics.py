@@ -28,6 +28,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = os.path.join(HERE, "lib")
@@ -328,10 +331,88 @@ def _clone_args(args, **updates):
     return argparse.Namespace(**vals)
 
 
+def _load_altium_sidecar(pcb_input, resolved_pcb, workdir):
+    """Conversion provenance for a board that was converted from Altium EARLIER.
+
+    A pre-converted `.kicad_pcb` carries its provenance in a committed
+    `<board>.altium.json` sidecar. Without it, feeding the board (rather than the
+    `.PcbDoc`) drops the whole "PROVISIONAL — converted from Altium" banner and
+    the dropped-pour warning, and the reconstruction reads as an ordinary,
+    fully-trusted extraction.
+
+    The sidecar must be looked for beside the ORIGINAL input: `resolved_pcb` has
+    already been rewritten into a temp workdir for URL inputs, where no sidecar
+    can ever exist — so keying off it alone silently drops the provenance for
+    every remote board. Returns None when the board is not an Altium import.
+    """
+    if pcb_source.is_url(pcb_input):
+        url = pcb_source.normalize_pcb_url(pcb_input) + ".altium.json"
+        # Fetch the sidecar DIRECTLY rather than via pcb_source.download_url():
+        # that helper collapses every failure — 404, DNS outage, an expired
+        # GITHUB_TOKEN — into one SystemExit. Catching that indiscriminately would
+        # make "the network hiccuped" indistinguishable from "this board has no
+        # sidecar", and would silently drop the PROVISIONAL banner off an Altium
+        # reconstruction. Only a definite 404/410 means "not an Altium import";
+        # anything else is UNVERIFIED and must say so.
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "dcdc-tools-parasitics"})
+        token = os.environ.get("GITHUB_TOKEN")
+        if token and urllib.parse.urlparse(url).netloc in (
+                "github.com", "raw.githubusercontent.com"):
+            req.add_header("Authorization", f"Bearer {token}")
+        path = os.path.join(workdir, "remote.altium.json")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                return None  # no sidecar beside the board: an ordinary KiCad board
+            return {"warnings": [
+                f"could not fetch {os.path.basename(url)} (HTTP {e.code}) — cannot "
+                "tell whether this board is an Altium reconstruction; provenance is "
+                "UNVERIFIED, not absent"]}
+        except Exception as e:  # noqa: BLE001 — DNS/TLS/timeout: inconclusive, not absent
+            return {"warnings": [
+                f"could not fetch {os.path.basename(url)} ({type(e).__name__}: {e}) "
+                "— cannot tell whether this board is an Altium reconstruction; "
+                "provenance is UNVERIFIED, not absent"]}
+        with open(path, "wb") as f:
+            f.write(body)
+    else:
+        path = resolved_pcb + ".altium.json"
+        if not os.path.exists(path):
+            return None
+
+    try:
+        with open(path) as f:
+            meta = json.load(f)
+    except (OSError, ValueError) as e:
+        # The sidecar EXISTS, so this board IS an Altium reconstruction — we just
+        # cannot read its provenance. That is strictly worse than no sidecar, and
+        # must not degrade to "ordinary board".
+        return {"warnings": [
+            f"altium sidecar {os.path.basename(path)} present but unreadable ({e}); "
+            "this board IS an Altium reconstruction, of UNKNOWN provenance"]}
+    if not isinstance(meta, dict):
+        return {"warnings": [
+            f"altium sidecar {os.path.basename(path)} is not a JSON object "
+            f"(got {type(meta).__name__}); board is an Altium reconstruction of "
+            "UNKNOWN provenance"]}
+    meta["provenance"] = "sidecar"
+    _info(f"Altium-converted board (provenance from {os.path.basename(path)}, "
+          f"relayer={meta.get('relayer', '?')})")
+    return meta
+
+
 def _meta_for_side(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
     return dict(pitch=pitch, lead_mm=side.get("lead_mm"),
                 cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
                 lf_freq=side.get("lf_freq"),
+                hf_freq=side.get("hf_freq"), ndec=side.get("ndec"),
+                plateau=args.plateau,
+                # copper actually meshed. only_fb=True means the DCDC_ONLY_FB
+                # diagnostic dropped the inner layers: NOT a full-stack run.
+                cu_layers=side.get("cu_layers"), only_fb=side.get("only_fb"),
                 zone_mesh=side.get("zone_mesh"),
                 terminal_mode=side.get("terminal_mode"),
                 via_merge=side.get("via_merge"),
@@ -885,7 +966,7 @@ def build_parser():
     ap.add_argument("--hf-freq", type=float, default=argparse.SUPPRESS,
                     help="highest FastHenry sweep frequency Hz; default 100 MHz. "
                          "Lower it (e.g. 1e7) to drop the slow, worst-conditioned "
-                         "top-decade solves — harmless while it stays above --plateau")
+                         "top-decade solves; must stay >= --plateau (enforced)")
     ap.add_argument("--ndec", type=int, default=argparse.SUPPRESS,
                     help="FastHenry frequency points per decade; default 3")
     ap.add_argument("--plateau", type=float, default=argparse.SUPPRESS,
@@ -995,6 +1076,14 @@ def parse_args(argv=None):
         ap.error("--hf-freq must be >= --lf-freq")
     if merged["ndec"] <= 0:
         ap.error("--ndec must be > 0")
+    # pick_plateau() takes the swept frequency NEAREST --plateau, so the plateau
+    # must lie INSIDE the swept band — on BOTH sides. A band that stops below it
+    # (hf < plateau) or starts above it (lf > plateau) silently returns the
+    # nearest edge frequency and labels it the plateau L.
+    if not (merged["lf_freq"] <= merged["plateau"] <= merged["hf_freq"]):
+        ap.error(f"--plateau ({merged['plateau']:g} Hz) must lie inside the swept "
+                 f"band [--lf-freq {merged['lf_freq']:g}, --hf-freq "
+                 f"{merged['hf_freq']:g}] Hz, else L_loop is read off-plateau")
     if merged.get("merge_vias") and merged["merge_via_radius"] <= 0:
         ap.error("--merge-via-radius must be > 0 mm")
     if merged["parallel_fets"] not in ("lumped", "per-device"):
@@ -1063,23 +1152,42 @@ def main():
                 altium_meta = _json.load(mf)
         except (OSError, ValueError):
             altium_meta = {"warnings": ["altium conversion metadata parse failed"]}
-        for w in altium_meta.get("warnings", []):
-            _warn(w)
+        # warnings are emitted once, below, for BOTH the .PcbDoc and sidecar paths
         vp = altium_meta.get("vb_pour_synthesized")
         print(f"  Converted: {altium_meta.get('pads_fixed', 0)} pads fixed, "
               f"{altium_meta.get('tracks_relayered', 0)} tracks relayered, "
               f"{altium_meta.get('zones_relayered', 0)} zones relayered"
               + (f", Vb pour synthesized ({vp['area_mm2']} mm^2)" if vp else ""))
         args.pcb = kicad_path
+    else:
+        altium_meta = _load_altium_sidecar(pcb_input, args.pcb, workdir)
 
     pcb_sha256 = pcb_source.file_sha256(args.pcb)
+    if altium_meta:
+        # Bind the sidecar to the board it claims to describe. Once the user
+        # follows our own advice and restores the pour in the GUI, a stale
+        # sidecar would keep asserting the OLD conversion's warnings about a
+        # board that no longer exists.
+        claimed = altium_meta.get("output_sha256")
+        if claimed and claimed != pcb_sha256:
+            _warn(f"altium sidecar describes a DIFFERENT board "
+                  f"(sha256 {claimed[:12]}… != {pcb_sha256[:12]}…) — the board has "
+                  "changed since it was converted, so the conversion provenance "
+                  "below may be stale")
+            altium_meta["stale"] = True
+        elif not claimed:
+            _warn("altium sidecar carries no output_sha256 — cannot verify it "
+                  "describes THIS board; provenance is unverified")
+            altium_meta["stale"] = None
+        for w in altium_meta.get("warnings", []):
+            _warn(w)
     config_sha256 = pcb_source.file_sha256(args.config) if args.config else None
 
     pitches = sorted(set(args.pitch), reverse=True)  # coarse -> fine
     results = []
     for i, pitch in enumerate(pitches):
         try:
-            inp, side, p = solve_pitch(
+            inp, _side, p = solve_pitch(
                 args, pitch, i, workdir, pcb_input, pcb_sha256, config_sha256,
                 altium_meta)
         except np.linalg.LinAlgError as e:

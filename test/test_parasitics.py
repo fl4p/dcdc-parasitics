@@ -677,6 +677,42 @@ def test_required_ports_still_reject_missing_power_loop_when_gate_missing_allowe
         raise AssertionError("missing P_pwr must fail even when gate ports are allowed")
 
 
+def test_only_fb_banner_declares_the_dropped_inner_layers():
+    """A DCDC_ONLY_FB diagnostic run must not read as a full-stack extraction."""
+    assert emit._only_fb_banner({"meta": {"only_fb": False}}) == []
+    assert emit._only_fb_banner({"meta": {}}) == []
+    b = "\n".join(emit._only_fb_banner(
+        {"meta": {"only_fb": True, "cu_layers": ["F.Cu", "B.Cu"]}}))
+    assert "DIAGNOSTIC RUN" in b and "DCDC_ONLY_FB" in b
+    assert "not" in b.lower() and "full-stack" in b
+
+
+def test_altium_banner_describes_the_relayer_that_actually_ran():
+    """'faithful' relabels the WHOLE board; 'partial' only power nets. The banner
+    must not describe one as the other."""
+    faithful = "\n".join(emit._altium_banner({"meta": {"altium_import": dict(
+        relayer="faithful", tracks_relayered=1436, zones_relayered=18,
+        pads_relayered=509, footprints_relayered=184)}}))
+    assert "whole board" in faithful
+    assert "509 pad layer-sets relabelled" in faithful
+    assert "power tracks relayered" not in faithful  # that is the partial relayer
+    assert "no geometry was moved" in faithful.lower()
+
+    partial = "\n".join(emit._altium_banner({"meta": {"altium_import": dict(
+        relayer="partial", pads_fixed=12, tracks_relayered=30)}}))
+    assert "power nets only" in partial
+    assert "30 power tracks relayered" in partial
+
+
+def test_altium_banner_surfaces_a_dropped_vin_pour_that_was_not_synthesized():
+    """The importer drops pours; a relayer that does not bridge one must still
+    say the pour is missing (absence of evidence != absence of the problem)."""
+    b = "\n".join(emit._altium_banner({"meta": {"altium_import": dict(
+        relayer="faithful", vb_pour_check="MISSING (not synthesized)",
+        warnings=["No Vb pour covers the power-stage bbox on F.Cu — ..."])}}))
+    assert "No Vb pour covers the power-stage bbox" in b
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     fails = 0

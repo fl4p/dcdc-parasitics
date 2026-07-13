@@ -62,6 +62,15 @@ def subckt(p):
     lgls_rest = max(lg_ls - csi_ls, 0.0)
 
     warn = []
+    # The DCDC_ONLY_FB diagnostic drops the inner copper. It must ride along on the
+    # .lib header and the returned warn list too, not only report.md — the .lib is
+    # what the loss consumer reads, and an unflagged 2-layer L_loop would flow
+    # straight into the loss budget as if it were a full-stack extraction.
+    if (p.get("meta") or {}).get("only_fb"):
+        warn.append("DCDC_ONLY_FB=1 DIAGNOSTIC extraction: inner copper layers were "
+                    "NOT modelled (stack restricted to F.Cu+B.Cu). L_loop is a "
+                    "2-layer-view number, NOT a full-stack extraction — do not feed "
+                    "it to a loss budget")
     if hs_gate_available and lg_hs - csi_hs < 0:
         warn.append("CSI_hs exceeds HS gate-loop L (clamped) — check gate-return/Kelvin detection")
     if ls_gate_available and lg_ls - csi_ls < 0:
@@ -146,21 +155,60 @@ def _altium_banner(p):
     ai = (p.get("meta") or {}).get("altium_import")
     if not ai:
         return []
-    relayer = ai.get("relayer", "partial")
+    # Do NOT default to "partial": a degenerate sidecar (unreadable / not a JSON
+    # object) carries no relayer at all, and naming one would assert a conversion
+    # that was never observed.
+    relayer = ai.get("relayer") or "unknown"
     b = [
         "> ⚠️ **PROVISIONAL — converted from Altium `.PcbDoc`** by "
         f"`lib/altium_import.py` (relayer=`{relayer}`).",
     ]
+    # The sidecar is provenance for a SPECIFIC board. If it no longer matches the
+    # board being extracted, everything below describes a board that no longer
+    # exists — say so before the reader takes any of it as fact.
+    if ai.get("stale") is True:
+        b.append("> 🚨 **This provenance is STALE**: the board's SHA-256 does not "
+                 "match the one recorded at conversion — the board has been edited "
+                 "since (e.g. a pour restored in the GUI). Every claim below, "
+                 "including any synthesized-pour note, may describe the OLD board. "
+                 "Re-run the conversion.")
+    elif ai.get("stale") is None and ai.get("provenance") == "sidecar":
+        b.append("> ⚠️ The sidecar records no board hash, so it could NOT be "
+                 "verified to describe this board.")
+    # The two relayers do DIFFERENT work; describe what actually ran. 'faithful'
+    # relabels the whole board (every net), 'partial' only touches power nets —
+    # reporting one as the other misstates the provenance.
     fixes = []
-    if ai.get("pads_fixed"):
-        fixes.append(f"{ai['pads_fixed']} pad layer-sets de-inverted")
-    if ai.get("tracks_relayered"):
-        fixes.append(f"{ai['tracks_relayered']} power tracks relayered")
-    if ai.get("zones_relayered"):
-        fixes.append(f"{ai['zones_relayered']} power zones relayered")
+    if relayer == "faithful":
+        scope = "whole board"
+        if ai.get("pads_relayered"):
+            fixes.append(f"{ai['pads_relayered']} pad layer-sets relabelled")
+        if ai.get("footprints_relayered"):
+            fixes.append(f"{ai['footprints_relayered']} footprint sides relabelled")
+        if ai.get("tracks_relayered"):
+            fixes.append(f"{ai['tracks_relayered']} tracks relabelled")
+        if ai.get("zones_relayered"):
+            fixes.append(f"{ai['zones_relayered']} zones relabelled")
+    else:
+        scope = "power nets only"
+        if ai.get("pads_fixed"):
+            fixes.append(f"{ai['pads_fixed']} pad layer-sets de-inverted")
+        if ai.get("tracks_relayered"):
+            fixes.append(f"{ai['tracks_relayered']} power tracks relayered")
+        if ai.get("zones_relayered"):
+            fixes.append(f"{ai['zones_relayered']} power zones relayered")
     if fixes:
-        b.append("> The KiCad importer inverted the stack onto B.Cu; corrected: "
-                 + ", ".join(fixes) + ". The multilayer via-stitched return is preserved.")
+        # The two relayers do different things to the stack; only 'faithful' is a
+        # whole-board relabel. Claiming that for 'partial' — which moves only
+        # power-net objects B.Cu->F.Cu and never touches In1/In2 — would describe
+        # work that was not done.
+        how = (". Copper layers were RELABELLED (F↔B, In1↔In2); no geometry was moved."
+               if relayer == "faithful" else
+               ". Only power-net objects were moved B.Cu→F.Cu; signal tracks and the "
+               "inner layers were left as the importer placed them.")
+        b.append(f"> The KiCad importer inverted the stack onto B.Cu; corrected "
+                 f"({scope}): " + ", ".join(fixes) + how +
+                 " The multilayer via-stitched return is preserved.")
     vp = ai.get("vb_pour_synthesized")
     if vp:
         bb = vp.get("bbox")
@@ -181,6 +229,27 @@ def _altium_banner(p):
     return b
 
 
+def _only_fb_banner(p):
+    """Banner for DCDC_ONLY_FB=1 runs: inner copper was NOT modelled.
+
+    A mesher-comparison diagnostic must never read as a full-stack extraction —
+    on a 4-layer power board the inner planes carry the commutation return, so
+    the L_loop below is a different quantity, not a slightly different number."""
+    meta = p.get("meta") or {}
+    if not meta.get("only_fb"):
+        return []
+    layers = ", ".join(meta.get("cu_layers") or []) or "F.Cu, B.Cu"
+    return [
+        "> ⚠️ **DIAGNOSTIC RUN — `DCDC_ONLY_FB=1`: inner copper layers were NOT "
+        f"modelled** (stack restricted to {layers}).",
+        "> The inner planes carry part of the commutation return on a multilayer "
+        "board, so `L_loop` here is a 2-layer-view number for mesher-vs-mesher "
+        "comparison — **not** a full-stack extraction. Unset `DCDC_ONLY_FB` for a "
+        "real run.",
+        "",
+    ]
+
+
 def markdown(p):
     nH = 1e9
     t = p["topo"]
@@ -191,6 +260,7 @@ def markdown(p):
     lines = [
         f"# Power-stage parasitics — {os.path.basename(t.get('pcb',''))}",
         "",
+        *_only_fb_banner(p),
         *_altium_banner(p),
         f"Extracted by `dcdc-tools/parasitics` at the {p['freq_Hz']:g} Hz plateau "
         f"(mesh pitch {p['meta'].get('pitch')} mm, FET lead {p['meta'].get('lead_mm')} mm).",
