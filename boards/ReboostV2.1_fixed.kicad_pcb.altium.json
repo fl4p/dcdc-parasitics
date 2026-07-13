@@ -1,11 +1,27 @@
 {
-  "footprints_flipped": 184,
+  "footprints_relayered": 184,
   "output": "boards/ReboostV2.1_fixed.kicad_pcb",
+  "output_sha256": "5b95503997fcbb719957892149e2b24bf24fabde392d12145781d83d60a3a005",
   "pads_fixed": 0,
+  "pads_relayered": 509,
   "relayer": "faithful",
+  "shapes_relayered": 26,
   "source": "/Users/fab/dev/ee/ReboostV2-Hardware/ReboostV2.1.PcbDoc",
   "tracks_relayered": 1436,
+  "vb_pour_check": "MISSING (not synthesized)",
+  "vb_pour_missing": {
+    "bbox": [
+      152.6,
+      110.1,
+      153.5,
+      113.15
+    ],
+    "layer": "F.Cu"
+  },
   "vb_pour_synthesized": null,
-  "warnings": [],
+  "vias_relayered": 0,
+  "warnings": [
+    "No filled Vb pour bridges the FET drain to the local Cin on F.Cu \u2014 the Altium importer most likely DROPPED it (importer bug 3). relayer=faithful does not synthesize a bridging pour, so the FET drain reaches the local Cin over TRACK copper only (or not at all): L_loop is extracted through a Vin path narrower than the real board's. Cross-check against a KiCad GUI import, use --relayer partial to bridge it, or restore the pour in the GUI."
+  ],
   "zones_relayered": 18
 }
