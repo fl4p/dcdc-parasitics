@@ -612,6 +612,53 @@ def _cin_matrix_from_reductions(full_p, cap_p, switch_p, floor=0.0):
     return payload
 
 
+def classify_cin_warnings(p):
+    """Split the scalar-trunk caveats into reduce_warn vs reduce_info from the FINAL cin_model.
+
+    Any caller that REPLACES p["cin_model"] after reduce_parasitics() returned MUST re-run
+    this. The cap_only/switch_residual split path does exactly that: each individual solve
+    resolves scalar_trunk (a single leg cannot see a matrix), and the valid matrix exists only
+    once _cin_matrix_from_reductions has combined the three legs. Deciding at solve time would
+    therefore never demote on that path — the common case for leaded (lead_mm>0) boards. So the
+    verdict is a pure function of the final model, and this is idempotent: it always recomputes
+    both lists from the two immutable inputs (reduce_warn_base, reduce_scalar_warn) instead of
+    mutating either in place, so re-running after a combine cannot double-append.
+
+    Demotion needs POSITIVE evidence on both axes (mode is a matrix AND matrix_valid is True).
+    matrix_valid None means "never evaluated" — unverified, not fine — and keeps the warnings.
+
+    CAVEAT on matrix_valid strength: for the single-run identity path, reduce_parasitics()
+    sets it from spice_realizable ALONE — weaker than extract_parasitics's
+    _matrix_valid_for_payload (gauge_fix_status, switch_board_copper, symmetry/PSD) and the
+    loss consumer's gate. That is safe only because solve_pitch() re-validates strictly and
+    aborts on disagreement. A direct caller of solve()/reduce_parasitics() that skips
+    solve_pitch() must re-check with the strict predicate before trusting a demotion here;
+    demotion never licenses consuming the matrix payload.
+    The scalar quantities (cin_L_shared/cin_R_shared, per-cap Lb/Rb, *_switch residuals) stay in
+    the JSON either way, so the text is re-labelled, never dropped: a consumer that reads them
+    anyway must still be able to find out why they are unsafe.
+    """
+    base = list(p.get("reduce_warn_base") or [])
+    scalar = list(p.get("reduce_scalar_warn") or [])
+    cm = p.get("cin_model") or {}
+    matrix_in_use = (cm.get("mode") in ("matrix", "matrix_with_sw_coupling")
+                     and cm.get("matrix_valid") is True)
+    if scalar and matrix_in_use:
+        p["reduce_warn"] = base
+        p["reduce_info"] = [
+            f"scalar shared-trunk Cin reduction was REJECTED and is not what this run emits "
+            f"(cin_model.mode={cm.get('mode')}, basis={cm.get('basis')!r}, matrix_valid=true). "
+            f"The {len(scalar)} message(s) below are the evidence for that rejection, not "
+            f"defects in the emitted matrix. They still apply to any scalar field left in the "
+            f"JSON (cin_L_shared, per-cap Lb/Rb in cin_branches and report.md, *_switch "
+            f"residuals) — do not consume those."
+        ] + scalar
+    else:
+        p["reduce_warn"] = base + scalar
+        p["reduce_info"] = []
+    return p
+
+
 def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                       cin_esl=0.0, cin_esr=0.0) -> dict:
     f, Z = pick_plateau(zc, plateau)
@@ -689,12 +736,19 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         split[name] = dict(re=wk.real, im=wk.imag, mag=abs(wk))
 
     warn = []
+    # Warnings that caveat ONLY the scalar shared-trunk reduction. They are collected
+    # apart from `warn` and re-joined below once matrix validity is known: if the run
+    # resolved a VALID matrix Cin model, the scalar trunk is not what any deck consumes,
+    # so these become INFO context rather than warnings on the emitted model. They are
+    # only ever demoted on positive evidence (mode==matrix AND matrix_valid is True) —
+    # an unevaluated/None validity keeps them at WARNING.
+    scalar_warn = []
     if cond > 1e6:
         warn.append(f"Zc ill-conditioned (cond={cond:.1e}) — parallel reduction "
                     f"unreliable; check cap ports / near-coincident caps")
     neg = [n for n, s in split.items() if s["re"] < -1e-3]
     if neg:
-        warn.append(
+        scalar_warn.append(
             f"negative ideal current share on {neg} — the shorted-cap parallel "
             f"solve contains a circulating current mode. This is allowed by the "
             f"passive port matrix, but it invalidates the scalar_trunk Cin "
@@ -802,12 +856,12 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         _Lsh = float(cin_dec["L_shared"])
         _Lsp = float(cin_dec["L_spread"])
         if _Lsh > 0 and _Lsp > 0.5 * _Lsh:
-            warn.append(
+            scalar_warn.append(
                 f"cin branch decomposition: off-diagonal L spread high "
                 f"({_Lsp*1e9:.2f} vs shared {_Lsh*1e9:.2f} nH) — single shared-trunk "
                 f"model approximate; per-cap Lb less reliable")
         if cin_dec.get("clamped"):
-            warn.append(
+            scalar_warn.append(
                 "cin shared-trunk clamped to the smallest cap self-L (heterogeneous "
                 "bulk+MLCC bank: off-diagonal mean exceeded a diagonal) — per-cap Lb "
                 "near the floor is a shared-trunk-model artifact, not a real ~0 branch")
@@ -828,7 +882,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 bits.append(
                     f"R_shared raw {cin_shared_model['R_shared_raw']*1e3:.2f} mOhm "
                     f"exceeds r_hs+r_ls {(r_limit or 0)*1e3:.2f} mOhm")
-            warn.append(
+            scalar_warn.append(
                 "cin shared-trunk model clamped for deck consumption: "
                 + "; ".join(bits)
                 + " — raw values preserved as *_raw")
@@ -861,7 +915,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         if L_loop is not None:
             L_loop_switch = L_loop - csh_L
             if L_loop_switch < -0.05e-9:
-                warn.append(
+                scalar_warn.append(
                     f"L_loop_switch negative ({L_loop_switch*1e9:.2f} nH): cin trunk "
                     f"L_shared ({csh_L*1e9:.2f}) exceeds L_loop ({L_loop*1e9:.2f}) — "
                     f"basis mismatch (HF nearest-MLCC loop vs full-bank trunk); clamped 0")
@@ -871,6 +925,12 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             r_hs_switch = r_hs - csh_R * f_hs
             r_ls_switch = r_ls - csh_R * (1.0 - f_hs)
             if r_hs_switch < -0.05e-3 or r_ls_switch < -0.05e-3:
+                # NOT scalar_warn: unlike L_loop_switch (which the matrix deck discards --
+                # loss/lib/deck.py:313 hardcodes Lsh=2e-15), r_hs_switch/r_ls_switch ARE
+                # required and consumed in matrix mode (deck.py:308-314, :363-367) as the
+                # loop-side Rser. Demoting this on a valid matrix run would hand the deck a
+                # silently clamped-to-zero conduction R for a whole loop side. It stays a
+                # WARNING in every mode.
                 warn.append(
                     f"switch-side residual R negative (r_hs_switch="
                     f"{r_hs_switch*1e3:.2f}, r_ls_switch={r_ls_switch*1e3:.2f} mOhm): "
@@ -887,7 +947,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         for d in cin_diag["diagnostics"]:
             msg = d.get("message")
             if msg:
-                warn.append("scalar cin model invalid: " + msg)
+                scalar_warn.append("scalar cin model invalid: " + msg)
     requested_cin_mode = (
         (topo or {}).get("cin_network_model") if isinstance(topo, dict) else None)
     resolved_cin_mode = "matrix" if cin_matrix else "scalar_trunk"
@@ -906,7 +966,16 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         else:
             # matrix WAS requested but cin_matrix wasn't produced — don't tell them to pass the
             # flag they already passed; point at the real blocker (the emission preconditions).
-            warn.append(
+            #
+            # scalar_warn, NOT warn: this asserts a RUN-LEVEL outcome ("falling back to the
+            # invalid scalar_trunk reduction"), but a single reduce_parasitics() call is not the
+            # whole run. On the cap_only/switch_residual split path every leg legitimately has
+            # cin_matrix=None — the matrix is assembled from the legs AFTERWARDS — so emitting
+            # this as a hard warning would tell an operator whose combine SUCCEEDED that no
+            # matrix was produced. Routing it here lets classify_cin_warnings settle it against
+            # the final model: still a WARNING if the run really did fall back to scalar, demoted
+            # to INFO if a valid matrix was ultimately emitted.
+            scalar_warn.append(
                 "scalar cin model invalid AND matrix mode was requested but not produced "
                 "(cin_matrix is None) — the identity matrix basis needs the pad-ideal fet "
                 "closure; check cin_extraction_basis / cin_closure in the extraction config. "
@@ -953,6 +1022,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         gauge_fix_reason=(cin_matrix.get("gauge_fix_reason") if cin_matrix else None),
         diagnostics=cin_diag["diagnostics"] + matrix_diag,
     )
+
 
     def eff_loop_csi(g):
         """Effective gate-loop mutual to the full commutation port set.
@@ -1084,7 +1154,13 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         L_loop_single=L_loop_single,          # nearest single cap, upper bound
         L_loop_physical=(L_loop if physical else None),
         per_cap_L=per_cap_L, current_split=split,
-        cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond, reduce_warn=warn,
+        cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond,
+        # The two immutable inputs to classify_cin_warnings(); reduce_warn/reduce_info below
+        # are DERIVED from them and are recomputed whenever cin_model is replaced (the
+        # cap_only/switch_residual combine). Keep both so that decision stays re-runnable.
+        reduce_warn_base=warn,
+        reduce_scalar_warn=scalar_warn,
+        reduce_warn=None, reduce_info=None,   # set by classify_cin_warnings() below
         L_eff_sweep=sweep, n_cin=len(cin_idx),
         L_gate_hs=L_gate_hs,
         R_gate_hs=R_gate_hs,
@@ -1132,6 +1208,9 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     )
     if is_per_device:
         p["parallel_devices"] = dict(hs=hs_devices, ls=ls_devices)
+    # Single-basis verdict. A caller that later replaces cin_model (the cap_only/
+    # switch_residual combine) must call classify_cin_warnings(p) again — it is idempotent.
+    classify_cin_warnings(p)
     return p
 
 

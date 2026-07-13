@@ -54,18 +54,6 @@ def _info(msg, file=sys.stdout):
     print(f"  INFO: {msg}", file=file)
 
 
-# scalar_trunk-reduction invalidity markers: noise when matrix mode is the resolved model
-# (the scalar decomposition is computed as a byproduct but not the deliverable). Demoted to
-# a single INFO line when cin_model resolves to a valid identity matrix. NOTE: this is a
-# NECESSARY subset of loss.py's consumption gate (_matrix_identity_invalid_reason also checks
-# gauge_fix_status / switch_board_copper / spice_realizable) — the extractor may demote here
-# while the loss consumer still refuses on one of those stricter fields, so the two are not
-# guaranteed identical.
-_SCALAR_CIN_REDUCE_MARKERS = (
-    "negative ideal current share",
-    "cin shared-trunk",  # matches both "…model clamped…" and "…clamped to the smallest cap…"
-    "scalar cin model invalid",
-)
 _CIN_SEPARABILITY_FLOOR_PLACEHOLDER = 0.05e-9
 
 
@@ -123,23 +111,23 @@ def _attach_cin_separability_floor(payload, floor_meta):
 
 
 def _emit_reduce_warnings(p, prefix=""):
-    """Print a reduce result's warnings, demoting scalar_trunk-invalidity context to one INFO
-    line when matrix mode resolved valid (so requesting cin_network_model=matrix doesn't spew
-    scalar warnings for a model that isn't being used)."""
-    cm = p.get("cin_model") or {}
-    matrix_ok = (cm.get("mode") in ("matrix", "matrix_with_sw_coupling")
-                 and bool(cm.get("matrix_valid")))
-    skipped = False
+    """Print a reduce result's warnings.
+
+    Classification of "this caveats the scalar trunk, not the emitted model" happens in the
+    producer (solve_reduce), which knows which warning it is raising; those land in
+    `reduce_info` instead of `reduce_warn` when — and only when — a valid matrix Cin model
+    resolved. This used to be re-derived HERE by substring-matching warning prose, which
+    silently missed any warning whose wording wasn't in the marker tuple (the off-diagonal
+    L-spread and the *_switch-residual warnings both leaked through as WARNINGs on runs whose
+    matrix model was fine). Do not reintroduce a text-matching classifier.
+
+    `reduce_info` is deliberately NOT printed: it only exists when the caller asked for matrix
+    mode and got it, so narrating the rejected scalar model on a successful matrix run is noise.
+    It is preserved in parasitics.json and as `* INFO:` comments in the .lib header, where the
+    rejection evidence stays available to anyone reading a scalar field out of the artifact.
+    """
     for w in p.get("reduce_warn") or []:
-        if matrix_ok and any(m in w for m in _SCALAR_CIN_REDUCE_MARKERS):
-            skipped = True
-            continue
         _warn(prefix + w)
-    if skipped:
-        _info(prefix + "scalar_trunk Cin reduction is invalid here (circulating share / "
-              "clamped negative switch residual) — expected on this heterogeneous bank; "
-              f"cin_network_model=matrix resolved valid "
-              f"(mode={cm.get('mode')}, basis={cm.get('basis')}), so it is used instead.")
 
 
 def _replay_warnings(text):
@@ -602,7 +590,35 @@ def _cap_only_region_assignment(payload, floor_meta=None):
     )
 
 
-def _apply_cin_matrix_payload(full_p, payload, requested_mode):
+def _merge_basis_warnings(p, legs):
+    """Fold the cap_only/switch_residual solves' warnings into the combined payload.
+
+    The emitted cin_matrix is DERIVED from those two solves, but the combined payload starts
+    life as dict(full_p) — so anything they warned about (an ill-conditioned Zc, a negative
+    per-switch conduction R) used to be dropped on the floor: the two solves that actually
+    build the matrix we ship were the only ones whose warnings nobody ever saw. That is
+    anti-monotone — a worse cap_only solve produced FEWER visible warnings — so merge them,
+    tagged with the basis they came from.
+
+    Deduped against the messages full_loop already raised: the per-basis geometry runs re-emit
+    identical board-level warnings (dropped ports, pad-land fallbacks), and printing those
+    three times says nothing new. Dedup is on the message text, so a warning that differs
+    numerically between bases (the interesting case) still survives.
+    """
+    for key in ("reduce_warn_base", "reduce_scalar_warn"):
+        merged = list(p.get(key) or [])
+        seen = set(merged)
+        for basis, leg in legs:
+            for w in (leg or {}).get(key) or []:
+                if w in seen:
+                    continue
+                seen.add(w)
+                merged.append(f"[{basis} basis] {w}")
+        p[key] = merged
+    return p
+
+
+def _apply_cin_matrix_payload(full_p, payload, requested_mode, legs=()):
     p = dict(full_p)
     p["cin_matrix"] = payload
     old_model = full_p.get("cin_model") or {}
@@ -646,6 +662,13 @@ def _apply_cin_matrix_payload(full_p, payload, requested_mode):
     p["cin_model"] = cin_model
     p["cin_model_valid"] = matrix_valid
     p["cin_model_diagnostics"] = cin_model["diagnostics"]
+    _merge_basis_warnings(p, legs)
+    # cin_model was just REPLACED with the combined cap_only/switch_residual verdict. The
+    # scalar-vs-matrix warning split that each individual leg computed was made against that
+    # leg's own (always scalar_trunk) model, so it is stale — re-derive it from the model this
+    # run actually emits. Without this the split-basis path could never demote, and would keep
+    # warning about the scalar trunk on a run whose combined matrix model is valid.
+    solve_reduce.classify_cin_warnings(p)
     return p
 
 
@@ -666,7 +689,8 @@ def solve_pitch(args, pitch, idx, workdir, pcb_input, pcb_sha256, config_sha256,
         "cap_only/switch_residual will run only if a split basis is required")
     full_inp, full_side, full_p = _run_reduce_basis(
         args, pitch, workdir, pcb_input, pcb_sha256, config_sha256, altium_meta,
-        "full_loop", f"p{idx}_full", run_geom_fn=run_geom_fn, solve_fn=solve_fn)
+        "full_loop", f"p{idx}_full", run_geom_fn=run_geom_fn, solve_fn=solve_fn,
+        label_basis=True)
     identity_payload = full_p.get("cin_matrix") or {}
     identity_model = full_p.get("cin_model") or {}
     identity_valid, identity_reason = _matrix_valid_for_payload(identity_payload)
@@ -683,15 +707,19 @@ def solve_pitch(args, pitch, idx, workdir, pcb_input, pcb_sha256, config_sha256,
             "pad-ideal identity basis")
     _cap_inp, _cap_side, cap_p = _run_reduce_basis(
         args, pitch, workdir, pcb_input, pcb_sha256, config_sha256, altium_meta,
-        "cap_only", f"p{idx}_cap", run_geom_fn=run_geom_fn, solve_fn=solve_fn)
+        "cap_only", f"p{idx}_cap", run_geom_fn=run_geom_fn, solve_fn=solve_fn,
+        label_basis=True)
     _sw_inp, _sw_side, switch_p = _run_reduce_basis(
         args, pitch, workdir, pcb_input, pcb_sha256, config_sha256, altium_meta,
-        "switch_residual", f"p{idx}_switch", run_geom_fn=run_geom_fn, solve_fn=solve_fn)
+        "switch_residual", f"p{idx}_switch", run_geom_fn=run_geom_fn, solve_fn=solve_fn,
+        label_basis=True)
     floor_meta = _cin_separability_floor_metadata()
     payload = combine_fn(
         full_p, cap_p, switch_p, floor=floor_meta["value"])
     _attach_cin_separability_floor(payload, floor_meta)
-    p = _apply_cin_matrix_payload(full_p, payload, requested)
+    p = _apply_cin_matrix_payload(
+        full_p, payload, requested,
+        legs=(("cap_only", cap_p), ("switch_residual", switch_p)))
     return full_inp, full_side, p
 
 

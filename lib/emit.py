@@ -111,6 +111,11 @@ def subckt(p):
             f"truth >= ideal-cap {p.get('L_loop_ideal', p['L_loop'])*nH:.3g} nH (lower).")
     for w in warn + (p.get("reduce_warn") or []):
         lines.append(f"* WARNING: {w}")
+    # Context for a model this run REJECTED (scalar trunk, when a valid matrix Cin resolved).
+    # Not a warning on what is emitted below, but kept in the artifact: the scalar fields are
+    # still in parasitics.json, so the reason they are unsafe to consume must travel with them.
+    for m in p.get("reduce_info") or []:
+        lines.append(f"* INFO: {m}")
     lines += [
         "* ------------------------------------------------------------------",
         ".SUBCKT pwrstage VIN SW GND HSG LSG HSKEL LSKEL",
@@ -311,6 +316,23 @@ def markdown(p):
             "",
             "## Input-cap branch network (`--emit-cin-network`)",
             "",
+        ]
+        # This table IS the shared-trunk decomposition. When the run resolved a valid matrix Cin
+        # model, that decomposition was REJECTED and is not what the run emits — say so here, on
+        # the table itself, not only in a Notes block at the bottom of the document. reduce_info
+        # carries the rejection evidence; without this the reader sees an authoritative-looking
+        # per-cap Lb/Rb table with nothing anywhere marking it as the model that lost.
+        cm = p.get("cin_model") or {}
+        if p.get("reduce_info") and cm.get("matrix_valid") is True:
+            lines += [
+                f"> ⚠️ **This shared-trunk decomposition was REJECTED for this board.** The run "
+                f"emits the **{cm.get('mode')}** Cin model (`{cm.get('basis')}` basis); the "
+                f"`Lb`/`Rb` values below are the losing model's, kept for reference only. "
+                f"**Do not consume them** — see the rejection evidence in `parasitics.json` "
+                f"(`reduce_info`) and the `.lib` header.",
+                "",
+            ]
+        lines += [
             f"Per-cap **copper at {_fmt_freq(cin_f)}** decomposed into a shared "
             f"Vin/GND trunk (**{cin_l*nH:.2f} nH** / {cin_r*1e3:.2f} mΩ) "
             f"plus a private branch per cap "
@@ -346,8 +368,9 @@ def markdown(p):
 
     excl = t.get("cin_excluded_bulk") or []
     warns = p.get("reduce_warn") or []
+    infos = p.get("reduce_info") or []
     depop = _depop_notes(p)
-    if excl or warns or depop:
+    if excl or warns or infos or depop:
         lines.append("")
         lines.append("## Notes")
         lines.append("")
@@ -357,6 +380,10 @@ def markdown(p):
                          f"Re-run with `--include-bulk-cin` to keep them.")
         for wm in warns:
             lines.append(f"- **WARNING:** {wm}")
+        # Context for the model this run REJECTED. Not a warning on what it emits, but the
+        # report renders the rejected model's table, so its evidence has to be in the report.
+        for im in infos:
+            lines.append(f"- **INFO:** {im}")
         lines += depop
 
     return "\n".join(lines) + "\n"
