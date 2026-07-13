@@ -407,8 +407,10 @@ def schematic(p):
         out.append(_res_h(cy, gx + 28, gx + 50, WIRE))
         out.append(_txt((gx + 8 + gx + 28) / 2, cy - 8, tag.split()[0] + " gate", 9.5,
                         INK, "middle"))
-        out.append(_txt(gx + 66, cy + 24, f"L={_fmtL_na(l_gate)}", 9.5, INK, "start"))
-        out.append(_txt(gx + 66, cy + 36, f"R={_fmtR_na(r_gate)} (Cu)", 9.5, INK, "start"))
+        # value labels sit under the glyph they belong to (coil -> L, resistor -> R),
+        # on separate rows so the two strings cannot collide.
+        out.append(_txt(gx + 18, cy + 22, f"L={_fmtL_na(l_gate)}", 9.5, INK, "middle"))
+        out.append(_txt(gx + 39, cy + 36, f"R={_fmtR_na(r_gate)} (Cu)", 9.5, INK, "middle"))
         gd_r = (gd or {}).get("r")
         gd_d = (gd or {}).get("d")
         if gd_r or gd_d:
