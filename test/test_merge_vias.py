@@ -336,6 +336,7 @@ def test_run_geom_appends_flags_only_when_enabled():
     from types import SimpleNamespace
     base = dict(pcb="b.kicad_pcb", sw="SW", gnd="GND", cin_parallel=1, lead_mm=0.1,
                 nwinc=1, nhinc=1, cu_temp=20.0, cu_thickness=0.035, lf_freq=1e5,
+                hf_freq=1e8, ndec=3,
                 weld_tol=0.6, zone_mesh="grid", terminal_mode="padland", margin=8.0,
                 vin=None, hs_gate=None, ls_gate=None, hs_ref=None, ls_ref=None,
                 cin_refs=None, cin_loop_refs=None, cin_network_refs=None,
