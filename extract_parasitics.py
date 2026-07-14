@@ -185,6 +185,8 @@ DEFAULTS = {
     "hf_freq": 1e8,
     "ndec": 3,
     "plateau": 5e6,
+    "ring_freq": solve_reduce.SKIN_RING_FREQ_HZ,
+    "skin_poles": solve_reduce.SKIN_POLES,
     "svg": False,
     "viewer": True,
     "config": None,
@@ -228,6 +230,8 @@ SCALAR_TYPES = {
     "hf_freq": float,
     "ndec": int,
     "plateau": float,
+    "ring_freq": float,
+    "skin_poles": int,
     "out": str,
     "config": str,
     "parallel_fets": str,
@@ -453,7 +457,8 @@ def _run_reduce_basis(args, pitch, workdir, pcb_input, pcb_sha256, config_sha256
     p = solve_fn(inp, side["ports"], side["topo"], meta,
                  plateau=args.plateau, suffix=suffix,
                  cin_ports=side.get("cin_ports"),
-                 cin_esl=args.cin_esl * 1e-9, cin_esr=args.cin_esr * 1e-3)
+                 cin_esl=args.cin_esl * 1e-9, cin_esr=args.cin_esr * 1e-3,
+                 skin_poles=args.skin_poles, ring_freq=args.ring_freq)
     return inp, side, p
 
 
@@ -971,6 +976,13 @@ def build_parser():
                     help="FastHenry frequency points per decade; default 3")
     ap.add_argument("--plateau", type=float, default=argparse.SUPPRESS,
                     help="L-plateau frequency Hz")
+    ap.add_argument("--ring-freq", type=float, default=argparse.SUPPRESS,
+                    help="SW-ring band Hz — the band the loop-copper skin ladder must be "
+                         "honest at; the sweep (--hf-freq) must reach it, or no ladder is "
+                         f"emitted. Default {solve_reduce.SKIN_RING_FREQ_HZ:g}")
+    ap.add_argument("--skin-poles", type=int, default=argparse.SUPPRESS,
+                    help="RL poles in the fitted loop-copper skin ladder; more poles track "
+                         f"R(f) tighter across the sweep. Default {solve_reduce.SKIN_POLES}")
     ap.add_argument("--svg", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
                     help="also write schematic.svg (half-bridge + parasitics)")

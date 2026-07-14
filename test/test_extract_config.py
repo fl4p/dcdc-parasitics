@@ -16,6 +16,7 @@ sys.path.insert(0, ROOT)
 import extract_parasitics  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 import pcb_source  # noqa: E402
+import solve_reduce  # noqa: E402
 
 
 def _yaml(text):
@@ -451,6 +452,8 @@ def test_matrix_solve_pitch_runs_three_bases_and_combines_payload():
         cin_network_model="matrix",
         cin_extraction_basis="full_loop",
         plateau=5e6,
+        ring_freq=solve_reduce.SKIN_RING_FREQ_HZ,
+        skin_poles=solve_reduce.SKIN_POLES,
         cin_esl=0.0,
         cin_esr=0.0,
         config=None,
@@ -480,7 +483,7 @@ def test_matrix_solve_pitch_runs_three_bases_and_combines_payload():
         }
 
     def fake_solve(inp, ports, topo, meta, plateau, suffix, cin_ports,
-                   cin_esl, cin_esr):
+                   cin_esl, cin_esr, skin_poles=None, ring_freq=None):
         basis = topo["cin_extraction_basis"]
         if basis == "switch_residual":
             return {
@@ -555,6 +558,8 @@ def test_matrix_solve_pitch_uses_identity_payload_without_split_runs():
         cin_network_model="matrix",
         cin_extraction_basis="full_loop",
         plateau=5e6,
+        ring_freq=solve_reduce.SKIN_RING_FREQ_HZ,
+        skin_poles=solve_reduce.SKIN_POLES,
         cin_esl=0.0,
         cin_esr=0.0,
         config=None,
@@ -585,7 +590,7 @@ def test_matrix_solve_pitch_uses_identity_payload_without_split_runs():
         }
 
     def fake_solve(inp, ports, topo, meta, plateau, suffix, cin_ports,
-                   cin_esl, cin_esr):
+                   cin_esl, cin_esr, skin_poles=None, ring_freq=None):
         return {
             "ports": ports,
             "topo": topo,
@@ -617,6 +622,8 @@ def test_matrix_solve_pitch_rejects_invalid_identity_without_split_fallback():
         cin_network_model="matrix",
         cin_extraction_basis="full_loop",
         plateau=5e6,
+        ring_freq=solve_reduce.SKIN_RING_FREQ_HZ,
+        skin_poles=solve_reduce.SKIN_POLES,
         cin_esl=0.0,
         cin_esr=0.0,
         config=None,
@@ -633,7 +640,7 @@ def test_matrix_solve_pitch_rejects_invalid_identity_without_split_fallback():
         }
 
     def fake_solve(inp, ports, topo, meta, plateau, suffix, cin_ports,
-                   cin_esl, cin_esr):
+                   cin_esl, cin_esr, skin_poles=None, ring_freq=None):
         return {
             "ports": ports,
             "topo": topo,

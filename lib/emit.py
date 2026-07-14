@@ -301,8 +301,26 @@ def markdown(p):
         if p.get("r_sw") is not None:
             cond_rows.append(
                 f"| ⤷ SW-node spreading R (residual) | {p['r_sw']*1e3:.2f} mΩ |")
+    # The plateau R is NOT the ring R — it is read ~10x below the band the SW ring actually
+    # decays in. Print both, so nobody damps a 39 MHz ring with a 3.9 MHz resistance again.
+    ring_rows = []
+    if p.get("R_loop_ring") is not None:
+        ring_rows.append(
+            f"| ⤷ at the SW-ring band @ {p['R_ring_freq_Hz']:.2g} Hz | "
+            f"**{p['R_loop_ring']*1e3:.2f} mΩ** "
+            f"({p['R_loop_ring']/max(p['R_loop'], 1e-12):.2f}× the plateau) |")
+    sk = p.get("cin_skin")
+    if sk:
+        ring_rows.append(
+            f"| ⤷ skin ladder for the loss deck | {len(sk['poles'])} RL poles, tracks R(f) to "
+            f"{sk['fit']['max_rel_err']*100:.1f}% over "
+            f"{sk['f_lo_Hz']/1e3:.0f} kHz–{sk['f_hi_Hz']/1e6:.0f} MHz |")
+    elif p.get("cin_skin_unavailable_reason"):
+        ring_rows.append(
+            f"| ⤷ skin ladder for the loss deck | **none** — {p['cin_skin_unavailable_reason']} |")
     lines += [
-        f"| Commutation loop R (HF ring @ {p['freq_Hz']:.2g} Hz{rtemp}) | {p['R_loop']*1e3:.2f} mΩ |",
+        f"| Commutation loop R (plateau @ {p['freq_Hz']:.2g} Hz{rtemp}) | {p['R_loop']*1e3:.2f} mΩ |",
+        *ring_rows,
         *cond_rows,
         f"| HS common-source inductance | **{LA(p['csi_hs'])}** |",
         f"| LS common-source inductance | **{LA(p['csi_ls'])}** |",

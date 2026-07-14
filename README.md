@@ -131,6 +131,36 @@ frequency**, raise the skin sub-mesh (`--nwinc/--nhinc > 1`); the per-frequency
 `L_eff_sweep` in the JSON then shows R rising across the band as skin/proximity effect
 crowds the current.
 
+#### Not two resistances — a curve (`cin_skin`)
+
+"Ring plateau" was itself a compromise: the plateau is read at ~5 MHz, roughly a decade
+**below** the band the SW ring actually decays in. Measured on Fugu2:
+
+| band | loop R | vs the exported plateau |
+|---|---|---|
+| 39 kHz (f<sub>sw</sub>) | 1.41 mΩ | 0.45× |
+| 3.9 MHz (exported `R_loop`) | 3.13 mΩ | 1.00× |
+| **39 MHz (SW ring)** | **5.34 mΩ** | **1.70×** |
+| 84 MHz | 5.48 mΩ | 1.75× — saturated |
+
+The rise is **sub-√f and saturates** above ~20 MHz: once the skin depth falls below the
+35 µm foil the current is already confined, so the textbook √f law over-predicts it. `L_loop`
+is flat over the same span (3.20 → 3.16 nH) — only R moves.
+
+A consumer that places a single R therefore damps its ring with the wrong number (the loss
+deck was **−71 %** on the loop R at the ring). So the reduction also fits a series **Foster RL
+ladder** to the swept solve and exports it as `cin_skin`: a set of (Rₖ, Lₖ) poles that add 0 Ω at
+DC and Σ Rₖ at the ring. Consumers place it in series with the commutation leg on top of the
+**DC-band** branch R (`cin_matrix.R_dc`) and get the whole curve, not two points. On Fugu2 five
+poles track R(f) to 1.2 % from 39 kHz to 84 MHz.
+
+The corners are FIXED (log-spaced) and only the pole resistances are solved, by **NNLS** — so the
+fit is deterministic and Rₖ ≥ 0 by construction (a negative pole would be an *active* element).
+`--ring-freq` sets the band it must be honest at (default 55 MHz) and `--skin-poles` the pole
+count. If the sweep (`--hf-freq`) never reaches the ring band, **no ladder is emitted** and
+`cin_skin_unavailable_reason` says why — the rise is not extrapolated, and "no ladder" must never
+be read as "copper is flat".
+
 ### Input-cap branch network (`--emit-cin-network`)
 
 For the loss tool's **Cin ESR / input-ripple** model, `--emit-cin-network` ports the

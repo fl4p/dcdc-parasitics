@@ -303,6 +303,152 @@ def _cin_model_valid_for_mode(model):
     return None
 
 
+SKIN_RING_FREQ_HZ = 55e6      # SW-ring band the ladder must be honest at (loss/lib/params.py)
+SKIN_POLES = 5
+SKIN_FIT_TOL = 0.10           # max acceptable |rel err| of the fitted loop R over the sweep
+
+
+def _skin_basis(freqs, tau):
+    """Foster-ladder R basis: pole k (an L_k ‖ R_k block) contributes
+    R_k · (wτ_k)²/(1+(wτ_k)²) — 0 at DC, R_k at HF, corner at f_k = 1/(2πτ_k)."""
+    w = 2 * np.pi * np.asarray(freqs, dtype=float)
+    return np.array([(w * t) ** 2 / (1.0 + (w * t) ** 2) for t in tau]).T
+
+
+def fit_skin_ladder(freqs, R_meas, R_flat, n_poles=SKIN_POLES):
+    """Fit a series Foster RL ladder to the frequency RISE of the commutation-loop copper R.
+
+    A SPICE deck realizes the Cin copper at ONE frequency, so its loop R is frozen there
+    (on Fugu2: -70% at the SW ring). This fits the residual
+
+        dR(f) = R_meas(f) - R_flat(f)
+
+    where R_flat(f) is what the deck's own frequency-flat network reduces to at f (NOT a
+    scalar — its cap current split still drifts with f), with a ladder of L_k ‖ R_k blocks
+    in series with the loop.
+
+    The pole corners are FIXED, log-spaced across the swept interior, so only the pole
+    resistances are free — the fit is then LINEAR and is solved by NNLS. That makes it
+    deterministic (no local minima) and passive by construction: R_k >= 0, hence
+    L_k = R_k/(2*pi*f_k) >= 0. A negative R_k would be an active element that manufactures
+    energy at the ring; NNLS cannot produce one.
+
+    Returns (poles, diag). `poles` is [{R, L, fc_Hz}]; `diag` carries the per-frequency
+    table and `max_rel_err`, the worst |R_deck/R_meas - 1| over the sweep. The caller
+    decides what to do with a poor fit — this function never silently ships one.
+    """
+    freqs = np.asarray(sorted(freqs), dtype=float)
+    R_meas = np.asarray(R_meas, dtype=float)
+    R_flat = np.asarray(R_flat, dtype=float)
+    if freqs.size < 3:
+        raise ValueError(f"skin-ladder fit needs >= 3 swept frequencies, got {freqs.size}")
+    if n_poles < 1:
+        raise ValueError(f"skin-ladder fit needs >= 1 pole, got {n_poles}")
+    if (R_meas <= 0).any():
+        raise ValueError("skin-ladder fit: non-positive measured loop R in the sweep")
+    dR = R_meas - R_flat
+    # corners inside the sweep (a corner at/outside an end point is not identifiable from it)
+    fc = np.geomspace(freqs[0] * 3.0, freqs[-1] / 3.0, n_poles)
+    tau = 1.0 / (2 * np.pi * fc)
+    X = _skin_basis(freqs, tau)
+    scale = float(max(abs(dR[-1]), 1e-12))
+    from scipy.optimize import nnls
+    Rk, _ = nnls(X / scale, dR / scale)
+    fit = X @ Rk
+    R_deck = R_flat + fit
+    rel = R_deck / R_meas - 1.0
+    poles = [dict(R=float(Rk[k]), L=float(Rk[k] * tau[k]), fc_Hz=float(fc[k]))
+             for k in range(n_poles) if Rk[k] > 0]
+    diag = dict(
+        n_poles=int(n_poles),
+        freq_Hz=[float(f) for f in freqs],
+        R_meas=[float(v) for v in R_meas],
+        R_deck_flat=[float(v) for v in R_flat],
+        R_deck_ladder=[float(v) for v in R_deck],
+        rel_err=[float(v) for v in rel],
+        max_rel_err=float(np.max(np.abs(rel))),
+        # what the deck's frozen-R network is guilty of TODAY, for the report
+        flat_max_rel_err=float(np.max(np.abs(R_flat / R_meas - 1.0))),
+        R_sum=float(Rk.sum()),
+        L_sum=float(sum(p["L"] for p in poles)),
+    )
+    return poles, diag
+
+
+def _cin_skin_payload(zc, net_idx, L_plateau, R_base, f_base, n_poles=SKIN_POLES,
+                      ring_freq_Hz=SKIN_RING_FREQ_HZ):
+    """Fit the loop-copper skin ladder for the emitted Cin matrix, or explain why not.
+
+    Returns (payload, reason). EXACTLY one is non-None: a run that cannot fit the ladder
+    gets a machine-readable reason, never a silent absence and never a fabricated
+    "no rise" ladder — the deck must be able to tell "copper is flat" (impossible) apart
+    from "we could not measure the rise" (common: a sweep that stops below the ring).
+
+    `R_base` is the R matrix the deck will place on the branches (the DC/fsw band) and
+    `L_plateau` the L matrix it will place; the ladder carries EVERYTHING above that base,
+    so the payload names the base band it was fitted against and the consumer must refuse
+    a mismatch (pairing this ladder with an R_100k base would double-count the 39-84 kHz
+    rise and under-state nothing — but the deck would be claiming a fit it does not have).
+    """
+    freqs = sorted(zc.keys())
+    f_hi = freqs[-1]
+    if f_hi < 0.7 * ring_freq_Hz:
+        return None, (
+            f"sweep stops at {f_hi/1e6:.3g} MHz, below the {ring_freq_Hz/1e6:.3g} MHz ring "
+            f"band — the copper R rise at the ring was NOT measured. Raise --hf-freq; the "
+            f"ladder is not extrapolated.")
+    if len(freqs) < 3:
+        return None, f"only {len(freqs)} swept frequencies — too few to fit a ladder"
+    ii = list(range(len(net_idx)))
+    sub = lambda M: M[np.ix_(net_idx, net_idx)]  # noqa: E731
+    Lp = sub(L_plateau)
+    Rb = sub(R_base)
+    R_meas, R_flat = [], []
+    for f in freqs:
+        Zm, *_ = _eff_commutation(sub(zc[f]), ii, None)
+        Zd, *_ = _eff_commutation(Rb + 1j * 2 * np.pi * f * Lp, ii, None)
+        R_meas.append(float(Zm.real))
+        R_flat.append(float(Zd.real))
+    R_meas = np.array(R_meas)
+    R_flat = np.array(R_flat)
+    dR = R_meas - R_flat
+    # Copper R is monotone non-decreasing in frequency (current crowds into less copper as
+    # the skin depth shrinks; it never spreads back out). A falling dR means the reduction
+    # or the port set is wrong, and a passive series ladder CANNOT realize it — refuse
+    # rather than emit the NNLS's best non-negative lie.
+    drop = float(np.min(np.diff(dR)) / max(abs(dR[-1]), 1e-12))
+    if drop < -0.05:
+        return None, (
+            f"the loop-R rise is not monotone in frequency (worst step {drop*100:.1f}% of "
+            f"the span) — a passive series ladder cannot realize a FALLING R(f); check the "
+            f"cap port set / reduction basis")
+    poles, diag = fit_skin_ladder(freqs, R_meas, R_flat, n_poles)
+    if not poles:
+        return None, (
+            "the fitted ladder is empty (no positive pole) — the measured loop R does not "
+            "rise above the base band, which contradicts skin effect; not emitting a ladder")
+    f_ring = min(freqs, key=lambda x: abs(np.log10(x) - np.log10(ring_freq_Hz)))
+    i_ring = freqs.index(f_ring)
+    i_base = min(range(len(freqs)), key=lambda i: abs(np.log10(freqs[i]) - np.log10(f_base)))
+    payload = dict(
+        poles=poles,
+        base_band="R_dc",                 # the R matrix the ladder is fitted ON TOP OF
+        base_freq_Hz=float(f_base),
+        ring_freq_Hz=float(ring_freq_Hz),
+        ring_read_freq_Hz=float(f_ring),  # the nearest SWEPT frequency (what was measured)
+        f_lo_Hz=float(freqs[0]),
+        f_hi_Hz=float(f_hi),
+        fit=diag,
+        fit_ok=bool(diag["max_rel_err"] <= SKIN_FIT_TOL),
+        fit_tol=SKIN_FIT_TOL,
+        # headline: the deck's frozen-R error at the ring, and what the ladder recovers
+        R_loop_meas_ring=float(R_meas[i_ring]),
+        R_loop_flat_ring=float(R_flat[i_ring]),
+        R_loop_meas_base=float(R_meas[i_base]),
+    )
+    return payload, None
+
+
 def _cin_matrix_payload(Lm, R_100k, net_idx, net_refs, basis, R_dc=None,
                         r_100k_freq_Hz=None, r_dc_freq_Hz=None):
     if not net_idx:
@@ -660,7 +806,8 @@ def classify_cin_warnings(p):
 
 
 def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
-                      cin_esl=0.0, cin_esr=0.0) -> dict:
+                      cin_esl=0.0, cin_esr=0.0, skin_poles=SKIN_POLES,
+                      ring_freq=SKIN_RING_FREQ_HZ) -> dict:
     f, Z = pick_plateau(zc, plateau)
     w = 2 * np.pi * f
     L = Z.imag / w
@@ -782,6 +929,17 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         warn.append(
             f"conduction freq ({f_dc:g} Hz) >= plateau ({f:g} Hz) — the ring and "
             f"conduction R collapse to one value; lower --plateau or the sweep fmin")
+    # ---- ring-band read (the band the SW ring actually decays in) ----
+    # The exported plateau R (~5 MHz) is NOT the ring R: on Fugu2 the loop R at 39 MHz is
+    # 1.7x the plateau value and 3.8x the conduction value. Read it directly, at the nearest
+    # SWEPT frequency — never extrapolated.
+    f_ring, Z_ring = pick_frequency(zc, ring_freq)
+    w_ring = 2 * np.pi * f_ring
+    R_ring = Z_ring.real
+    L_ring = Z_ring.imag / w_ring
+    Zeff_ring, *_ = _eff_commutation(Z_ring, cin_idx, zcap_at(w_ring))
+    R_loop_ring = float(Zeff_ring.real)
+    L_loop_ring = float(Zeff_ring.imag / w_ring)
 
     def rdc(label):
         i = idx.get(label)
@@ -840,6 +998,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     cin_dec = None
     cin_dec_lf = None
     cin_matrix = None
+    cin_skin = None
+    cin_skin_reason = "no cin_matrix (skin ladder is fitted for the matrix basis only)"
     if cin_net:
         net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
         net_refs = [e["ref"] for e in cin_net if e.get("label") in idx]
@@ -852,6 +1012,22 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             cin_matrix = _cin_matrix_payload(
                 L, R_100k, net_idx, net_refs, basis="identity", R_dc=R_dc,
                 r_100k_freq_Hz=f_100k, r_dc_freq_Hz=f_dc)
+            # frequency-dependent loop copper: the emitted matrix is frozen at ONE band, so
+            # fit the rise up to the ring as a series RL ladder the deck can place in the
+            # commutation leg. Fitted ON TOP OF the R_dc base (the conduction band), so the
+            # conduction budget is untouched and everything above it is added, never re-based.
+            cin_skin, cin_skin_reason = _cin_skin_payload(
+                zc, net_idx, L, R_dc, f_dc, n_poles=skin_poles, ring_freq_Hz=ring_freq)
+            if cin_skin is not None and not cin_skin["fit_ok"]:
+                warn.append(
+                    f"loop-copper skin ladder fits the swept R(f) only to "
+                    f"{cin_skin['fit']['max_rel_err']*100:.1f}% (tol {SKIN_FIT_TOL*100:.0f}%) — "
+                    f"raise --skin-poles or check the sweep density")
+            if cin_skin is None:
+                warn.append(
+                    f"no loop-copper skin ladder: {cin_skin_reason} — the deck's commutation "
+                    f"copper R stays FROZEN at the base band, which UNDER-damps the SW ring "
+                    f"(on Fugu2 the frozen R is ~70% low at 39 MHz)")
     if cin_dec:
         _Lsh = float(cin_dec["L_shared"])
         _Lsp = float(cin_dec["L_spread"])
@@ -1188,6 +1364,14 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         cin_R_shared_lf=(cin_dec_lf["R_shared"] if cin_dec_lf else None),
         cin_branch_freq_Hz=f_dc,
         cin_matrix=cin_matrix,
+        # Frequency-dependent commutation-loop copper (see _cin_skin_payload). EXACTLY one of
+        # these two is set: a run that could not fit the ladder says WHY, so a consumer can
+        # never read "no ladder" as "copper is flat with frequency" (it never is).
+        cin_skin=cin_skin,
+        cin_skin_unavailable_reason=cin_skin_reason,
+        # raw ring-band port reads, for cross-checks against the fitted ladder
+        port_R_ring=R_ring.tolist(), port_L_ring=L_ring.tolist(),
+        R_ring_freq_Hz=f_ring, R_loop_ring=R_loop_ring, L_loop_ring=L_loop_ring,
         cin_model=cin_model,
         cin_model_valid=_cin_model_valid_for_mode(cin_model),
         cin_model_diagnostics=cin_model["diagnostics"],
@@ -1215,10 +1399,11 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
 
 
 def solve(inp, ports, topo, meta, plateau=5e6, suffix="dcdc", cin_ports=None,
-          cin_esl=0.0, cin_esr=0.0):
+          cin_esl=0.0, cin_esr=0.0, skin_poles=SKIN_POLES, ring_freq=SKIN_RING_FREQ_HZ):
     zc = parse_zc(run_fasthenry(inp, suffix=suffix))
     return reduce_parasitics(zc, ports, topo, meta, plateau, cin_ports=cin_ports,
-                             cin_esl=cin_esl, cin_esr=cin_esr)
+                             cin_esl=cin_esl, cin_esr=cin_esr,
+                             skin_poles=skin_poles, ring_freq=ring_freq)
 
 
 if __name__ == "__main__":
