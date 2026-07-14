@@ -38,9 +38,10 @@ Implemented now:
 - Identity R handling is explicit: the matrix diagonal `R_100k` includes shared switch
   resistance, so the consumer subtracts `r_hs_switch+r_ls_switch` from each branch
   diagonal for the coupled Cin subckt, clamps only with a warning if numerical tolerance
-  forces it, and emits comments showing the reconstruction residual. Symmetric off-diagonal
-  R is not realized in v1; the consumer emits a `cin_matrix-r-offdiag-omitted` comment with
-  the largest omitted term.
+  forces it, and emits comments showing the reconstruction residual. The same subtraction
+  applies to the off-diagonals, which carry the shared switch R too. Symmetric off-diagonal
+  R IS realized (see Resistive Coupling below); the consumer emits a
+  `cin_matrix-r-offdiag-realized` comment naming the largest term.
 - Contract selection is driven by explicit `cin_mode`/`cin_basis`, including provenance
   headers for generated `.lib` files. It is no longer inferred from whether the network was
   assembled in-memory or loaded from a file.
@@ -262,14 +263,49 @@ For `matrix` and `matrix_with_sw_coupling` modes:
   `basis=identity`, subtract shared switch resistance from each diagonal before wiring the
   per-cap branch R, because `r_hs_switch`/`r_ls_switch` remain in the loop paths for
   attribution/conduction.
-- Resistive off-diagonal coupling: not realized in v1. It is usually much smaller than the
-  inductive coupling, but the consumer must not drop it silently; emit an omitted-term
-  diagnostic/comment with the largest symmetric off-diagonal R.
+- Resistive off-diagonal coupling: REALIZED (was deferred in v1; see "Resistive Coupling"
+  below for the measurement that forced it). Emit the largest symmetric off-diagonal R as a
+  `cin_matrix-r-offdiag-realized` comment; `realize_offdiag_r=False` restores the old
+  diagonal-only network and warns that bank R is under-stated.
 - K convergence check: if `max(K_ij) >= 0.95`, refuse now (future implementation may merge
   those ports into one region). Applies to ALL coupled-L modes (matrix,
   matrix_with_sw_coupling, and none/multiport).
 - Matrix passivity check: validate PSD/eigenvalues of the full L matrix, not only pairwise
   `K`; pairwise `abs(K)<1` is necessary but not sufficient for a realizable coupled-L bank.
+  The R matrix gets the same PSD check now that it is realized — a non-PSD R would emit an
+  ACTIVE network (mutual sources manufacturing negative loss), so it is refused.
+
+### Resistive Coupling
+
+The v1 deferral assumed the off-diagonal R was a small proximity correction. On the Fugu2
+identity matrix (`out/fugu2-perDeev-noLeads`, 9 caps) it is not — it is shared board copper:
+
+- Largest off-diagonal (C11-C12) is **2.36 mΩ = 109% of the smallest diagonal** (2.16 mΩ).
+  Off-diagonals span 0.50–2.36 mΩ and the common-mode eigenmode holds 53.5% of the trace.
+- Dropping them makes each identity-basis branch carry the shared trunk on its own diagonal,
+  so the trunk gets parallelled 9× — copper-only effective R falls 1.51 → 0.43 mΩ at fsw.
+- In the assembled network (cap ESR 25–36 mΩ dilutes it) the bank's effective series R is
+  under-stated by **6.2% at ripple and 7.6% at the ring** — ~1.19 mΩ, one-sided: it only ever
+  removes loss and raises Q.
+
+**Reduction was measured and rejected.** A shared-trunk scalar (trunk = mean off-diagonal,
+subtracted from the diagonals) recovers only ~60% of the gap at ripple while OVER-damping the
+ring by 5%; min-off-diagonal recovers 20%; a two-level tree (bulk / MLCC / C27 regions) fixes
+the ring but gives the ripple recovery back. No frequency-flat scalar suits both the
+ESR-dominated ripple split and the L-dominated ring split.
+
+**Exact realization instead.** Mutual R enters exactly as mutual L does, so it is realized as
+the resistive twin of the `K` statements: one behavioral source per branch,
+`V_i = Σ_{j≠i} R_ij·I_j` — **n sources, not n(n−1)/2**, with a 0 V sense source per branch to
+carry `I_j` (LTspice/QSPICE can sense the inductor directly; ngspice and Xyce need the sense
+source, so it is always emitted). Verified against the analytic full-matrix solve in ngspice:
+**<0.03% at 39 kHz / 390 kHz / 60 MHz**. End-to-end on fisi-900w the Cin copper bucket goes
+0.421 → 0.679 W and the Cin total 4.762 → 4.986 W (+4.7%).
+
+The Bmut power carries no `Rser`, so the consumer's I²R rollup is blind to it: `flatten_cin`
+returns the `(self, other, R_ij)` triples and the analysis books `R_ij·⟨I_i·I_j⟩` explicitly.
+A missing sense trace RAISES — a dropped mutual term would silently restore the very
+under-count this realization removes.
 
 **Gauge-fix cross-check (REQUIRED, not optional):** The explicit switch-residual port measurement fixes the gauge freedom in the additive model (`L_sw → L_sw + 2c`, `m_i → m_i - c`). Fitted `L_sw` and port-measured `L_sw` must agree within the null-perturbation floor. Disagreement ⇒ port geometry is wrong ⇒ fail the gate.
 
