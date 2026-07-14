@@ -707,6 +707,23 @@ def _merge_basis_warnings(p, legs):
 def _apply_cin_matrix_payload(full_p, payload, requested_mode, legs=()):
     p = dict(full_p)
     p["cin_matrix"] = payload
+    # The skin ladder in `full_p` was fitted against the FULL-LOOP (identity) Cin matrix — its
+    # whole fit target is "measured loop R(f) minus what THAT network already reduces to". This
+    # function replaces cin_matrix with a payload from a DIFFERENT basis (the cap_only /
+    # switch_residual split), so the ladder no longer describes the network the deck will build.
+    # It cannot ride along: both payloads label their base band "R_dc", so a consumer comparing
+    # only the band would pair them happily and place a ladder fitted on a discarded matrix.
+    # Drop it and say why — an absent ladder is loud downstream (the deck warns that its copper
+    # is frozen), whereas a wrong one is silent.
+    skin = full_p.get("cin_skin")
+    if skin and skin.get("fitted_basis") != payload.get("basis"):
+        p["cin_skin"] = None
+        p["cin_skin_unavailable_reason"] = (
+            f"the skin ladder was fitted against the "
+            f"{skin.get('fitted_basis')!r} Cin matrix, but this run emits the "
+            f"{payload.get('basis')!r} basis (the split fallback) — a ladder is only valid for "
+            f"the network it was fitted on, so it was DROPPED rather than re-labelled. "
+            f"Re-fit is not implemented for the split basis.")
     old_model = full_p.get("cin_model") or {}
     old_diag = [
         dict(d, scalar_context=True, severity="info")

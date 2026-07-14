@@ -344,6 +344,10 @@ def fit_skin_ladder(freqs, R_meas, R_flat, n_poles=SKIN_POLES):
         raise ValueError(f"skin-ladder fit needs >= 3 swept frequencies, got {freqs.size}")
     if n_poles < 1:
         raise ValueError(f"skin-ladder fit needs >= 1 pole, got {n_poles}")
+    # More poles than measured points is UNDER-DETERMINED: NNLS drives the residual toward 0
+    # while R(f) between the points stays unconstrained, so max_rel_err becomes a flattering
+    # number rather than a measure of fit. Cap the poles at the data and record what was used.
+    n_poles = min(int(n_poles), max(1, len(freqs) - 1))
     if (R_meas <= 0).any():
         raise ValueError("skin-ladder fit: non-positive measured loop R in the sweep")
     dR = R_meas - R_flat
@@ -376,7 +380,7 @@ def fit_skin_ladder(freqs, R_meas, R_flat, n_poles=SKIN_POLES):
 
 
 def _cin_skin_payload(zc, net_idx, L_plateau, R_base, f_base, n_poles=SKIN_POLES,
-                      ring_freq_Hz=SKIN_RING_FREQ_HZ):
+                      ring_freq_Hz=SKIN_RING_FREQ_HZ, fitted_basis=None, fitted_refs=None):
     """Fit the loop-copper skin ladder for the emitted Cin matrix, or explain why not.
 
     Returns (payload, reason). EXACTLY one is non-None: a run that cannot fit the ladder
@@ -392,6 +396,7 @@ def _cin_skin_payload(zc, net_idx, L_plateau, R_base, f_base, n_poles=SKIN_POLES
     """
     freqs = sorted(zc.keys())
     f_hi = freqs[-1]
+    f_lo = freqs[0]
     if f_hi < 0.7 * ring_freq_Hz:
         return None, (
             f"sweep stops at {f_hi/1e6:.3g} MHz, below the {ring_freq_Hz/1e6:.3g} MHz ring "
@@ -399,6 +404,16 @@ def _cin_skin_payload(zc, net_idx, L_plateau, R_base, f_base, n_poles=SKIN_POLES
             f"ladder is not extrapolated.")
     if len(freqs) < 3:
         return None, f"only {len(freqs)} swept frequencies — too few to fit a ladder"
+    # The pole corners are placed INSIDE the swept interior (see fit_skin_ladder). A sweep
+    # narrower than ~1 decade has no interior to place them in, and NNLS will happily return a
+    # tiny residual anyway by fitting poles whose corners sit OUTSIDE the measured band — where
+    # nothing constrains them. That is an unconstrained extrapolation wearing a good fit_ok, so
+    # refuse the whole ladder rather than ship one.
+    if f_lo * 3.0 >= f_hi / 3.0:
+        return None, (
+            f"the sweep spans only {f_lo/1e3:.3g} kHz..{f_hi/1e6:.3g} MHz ({f_hi/f_lo:.1f}x) — "
+            f"too narrow to place pole corners inside it; the fit would be an extrapolation "
+            f"with a good-looking residual. Widen --lf-freq/--hf-freq.")
     ii = list(range(len(net_idx)))
     sub = lambda M: M[np.ix_(net_idx, net_idx)]  # noqa: E731
     Lp = sub(L_plateau)
@@ -433,6 +448,13 @@ def _cin_skin_payload(zc, net_idx, L_plateau, R_base, f_base, n_poles=SKIN_POLES
     payload = dict(
         poles=poles,
         base_band="R_dc",                 # the R matrix the ladder is fitted ON TOP OF
+        # WHICH Cin matrix this ladder was fitted against. The fit target is the deck's own
+        # realized reduction, so it is only valid for THAT network: a run that later REPLACES
+        # cin_matrix with another basis (the cap_only/switch_residual split fallback) must not
+        # carry this ladder along. base_band alone cannot catch that — both bases are labelled
+        # "R_dc" — so the consumer compares the basis and the port set too.
+        fitted_basis=fitted_basis,
+        fitted_refs=list(fitted_refs) if fitted_refs else None,
         base_freq_Hz=float(f_base),
         ring_freq_Hz=float(ring_freq_Hz),
         ring_read_freq_Hz=float(f_ring),  # the nearest SWEPT frequency (what was measured)
@@ -1017,7 +1039,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             # commutation leg. Fitted ON TOP OF the R_dc base (the conduction band), so the
             # conduction budget is untouched and everything above it is added, never re-based.
             cin_skin, cin_skin_reason = _cin_skin_payload(
-                zc, net_idx, L, R_dc, f_dc, n_poles=skin_poles, ring_freq_Hz=ring_freq)
+                zc, net_idx, L, R_dc, f_dc, n_poles=skin_poles, ring_freq_Hz=ring_freq,
+                fitted_basis="identity", fitted_refs=net_refs)
             if cin_skin is not None and not cin_skin["fit_ok"]:
                 warn.append(
                     f"loop-copper skin ladder fits the swept R(f) only to "

@@ -85,6 +85,26 @@ def test_a_falling_r_of_f_is_refused():
     assert "not monotone" in reason
 
 
+def test_a_sweep_too_narrow_for_interior_corners_is_refused():
+    """The killer case: NNLS drives the residual to ~1% by placing pole corners OUTSIDE the
+    measured band, where nothing constrains them. A good-looking fit_ok on an unconstrained
+    extrapolation is exactly the false PASS this guard exists for."""
+    zc = {f: _Rdc() * (1 + i) + 1j * 2 * np.pi * f * _L()
+          for i, f in enumerate((40e6, 50e6, 84e6))}       # 2.1x span: no interior
+    payload, reason = sr._cin_skin_payload(zc, [0, 1], _L(), _Rdc(), 40e6)
+    assert payload is None
+    assert "too narrow to place pole corners" in reason
+
+
+def test_more_poles_than_data_points_is_capped():
+    """n_poles > len(freqs) is under-determined: the residual goes to ~0 while R(f) BETWEEN the
+    points is unconstrained. Cap the poles at the data rather than ship a flattering fit."""
+    freqs = FREQS[:4]
+    poles, diag = sr.fit_skin_ladder(freqs, R_MEAS[:4], R_FLAT[:4], n_poles=12)
+    assert diag["n_poles"] <= len(freqs) - 1
+    assert len(poles) <= len(freqs) - 1
+
+
 def test_fit_ok_flags_a_ladder_too_poor_to_trust():
     """One pole cannot track a 3-decade skin transition (it over-states the mid-band ~2x).
     The payload must SAY the fit is bad rather than ship it as if it were good."""
