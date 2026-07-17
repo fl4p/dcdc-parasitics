@@ -370,14 +370,16 @@ python3 extract_parasitics.py .../mppt-2420-hc.kicad_pcb \
         --sw "/DC/DC/SW_NODE" --gnd GND --pitch 3.0 2.0 -o out/
 ```
 
-> ⚠️ **This is a 4-layer board — finer pitch gets expensive fast.** Each pitch
-> halving is ~4× the pour filaments *per layer*, and FastHenry is single-threaded
-> with a super-linear solve, so `--pitch 1.0` on this board is a **10+ minute**
-> run (`2.0` finishes in seconds). Use a coarse pair for a quick convergence check;
-> only add `--pitch 1.0` when you need the converged number and can wait, and shrink
-> `--margin` to trim the meshed ROI. `--pitch 2.0` reproduces the historical
-> lead-inclusive fixture's ~8.5 nH loop value; do not use that number as a
-> copper-only package boundary.
+Runtime note: finer meshes take longer on this 4-layer example. Each pitch
+halving creates roughly 4× as many pour filaments per layer, and FastHenry's
+single-threaded solve scales super-linearly. On this board, `--pitch 2.0`
+finishes in seconds while `--pitch 1.0` can take 10+ minutes. Use a coarse pair
+for a quick convergence check; add `--pitch 1.0` when the converged value is
+worth the wait, or reduce `--margin` to trim the meshed ROI. This affects runtime
+only.
+
+The `--pitch 2.0` result reproduces the historical lead-inclusive fixture's
+~8.5 nH loop value; that number is not the copper-only package boundary.
 
 ### Outputs (`OUTDIR/`)
 - **`parasitics.lib`** — `.SUBCKT pwrstage VIN SW GND HSG LSG HSKEL LSKEL`. CSI is a
