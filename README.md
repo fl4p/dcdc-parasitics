@@ -336,20 +336,26 @@ python3 visualize_paths.py .../mppt-1210-hus.kicad_pcb \
         -o out/gate-loop-viewer.html
 ```
 
-It also accepts a limited extractor-compatible YAML subset:
+It also accepts viewer-specific YAML using its argparse destination names:
 
-```sh
-python3 visualize_paths.py --config examples/mppt-1210-hus.yaml
+```yaml
+pcb: path/to/board.kicad_pcb
+sw: /DCDC power stage/SW_NODE
+gnd: GND
+vin: /DCDC power stage/SOLAR+
+hs_ref: [Q1]
+ls_ref: [Q4]
+margin: 8.0
+out: out/gate-loop-viewer.html
 ```
 
-Older extractor-only keys such as `pitch`, `cin_parallel`, `cin_refs`,
-`emit_cin_network`, and `svg` are accepted and ignored, so configs limited to
-that shared subset can be reused. Current production extractor configs may also
-contain keys the viewer does not accept, including `cin_loop_refs`,
-`cin_network_model`, `zone_mesh`, `terminal_mode`, and `lf_freq`; pass the board
-and topology arguments directly or create a viewer-specific YAML instead of
-feeding such a config unchanged. Unknown keys fail closed. If `out` points to a
-directory, the viewer writes `gate-loop-viewer.html` inside it.
+```sh
+python3 visualize_paths.py --config viewer.yaml
+```
+
+Use only the viewer arguments shown by `visualize_paths.py --help`; unknown keys
+fail closed. If `out` points to a directory, the viewer writes
+`gate-loop-viewer.html` inside it.
 
 It uses the same `fet_discovery.py` topology logic as the extractor and re-execs
 itself under KiCad's bundled Python if `pcbnew` is not importable from the shell
