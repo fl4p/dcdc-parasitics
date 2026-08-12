@@ -50,9 +50,27 @@ port-reachable copper. `L = Im(Z)/2πf`, `R = Re(Z)` at a low-MHz plateau.
 
 ## Verification
 
-Validated on `mppt-2420-hc` (4-layer buck; SW `/DC/DC/SW_NODE`, HS `Q1`, LS `Q2`,
-Vin `/DCDC_HV+`): all three ports connected (no NaN), loop L ≈ 8.5 nH, CSI_hs ≈
-0.7 nH, CSI_ls ≈ 1.4 nH at 2 mm pitch — physically sane for a compact half-bridge.
+Validated on `mppt-2420-hc` (4-layer buck). **Corrected 2026-08-12** — the paragraph here
+previously named the wrong nets, the wrong LS device, and numbers from a different board.
+Against `examples/mppt-2420-hc.yaml` and `out/out-mppt-2420-hc/parasitics.json`:
 
-Follow-ups: golden regression on the Fugu2 board (needs `~/Documents` TCC access);
-automatic Kelvin detection; mesh-convergence sweep at finer pitch.
+| | this doc said | actual |
+|---|---|---|
+| SW net | `/DC/DC/SW_NODE` | `/DCDC power stage/SW_NODE` |
+| Vin net | `/DCDC_HV+` | `/DCDC power stage/DCDC_IN` |
+| LS ref | `Q2` | **`Q4`** |
+| loop L @ 2 mm | ≈ 8.5 nH | **7.380 nH** (−13 %) |
+| CSI_hs | ≈ 0.7 nH | 0.685 nH ✓ |
+| CSI_ls | ≈ 1.4 nH | **6.228 nH** (4.4×) |
+
+The quoted triple (8.5 / 0.7 / 1.4 nH) is a much better match for **`mppt-1210-hus`**
+(8.841 / 0.728 / 1.123 nH) — a different board, same `hs_ref: [Q1]` / `ls_ref: [Q4]`. Treat it as
+having been recorded against that one.
+
+"All three ports connected (no NaN)" holds. Note also the config's `pcb:` URL points at
+`mppt-2420-**lc**`, not `-hc`, so the output directory name and the board it fetches disagree.
+
+Follow-ups — **both already done** (2026-08-12), left here only as a record: golden regression on
+the Fugu2 board (16+ Fugu2 extractions exist plus two committed fixtures, `loss/examples/fugu2`
+and `loss/examples/fugu2-dualLS`) and the mesh-convergence sweep at finer pitch (pitch 1.0 / 0.7 /
+0.5 runs are retained, and `sweep.py` drives it). Automatic Kelvin detection remains open.
