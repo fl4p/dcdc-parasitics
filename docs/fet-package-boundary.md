@@ -51,6 +51,44 @@ coordinates, bend shape, pad placement, or board-thickness knowledge.
 `loss/lib/model_resolver.py` marks such models as `leads_internal=True` when it
 detects `Ld`/`Ls`/`Lg`-style inductors on the subcircuit pins.
 
+## Where Vgs is MEASURED, and why it is a boundary question
+
+The boundary this note defines is not only where inductance is *placed* — it also decides where a
+waveform may be *read*. Getting that wrong produced a published wrong conclusion on 2026-08-14.
+
+With a die-only model and package completion, the deck's node chain on each side is:
+
+```text
+driver --Lg--> Rg_ext --> [g_die]  (X<side><n> gate pin)
+                          [s_die] --Lscs--> sw (HS) or 0 (LS)
+```
+
+`Lscs_*` — the common-source inductance — sits BETWEEN the die source and the board node. So:
+
+| node pair | what it is | sees the common-source kick? |
+|---|---|---|
+| `V(side_g0) - V(side_s0)` | across the die's Cgs, INSIDE the package | **no** |
+| `V(side_g0) - V(sw)` / `- V(0)` | across the source lead as well, i.e. at the PADS | yes |
+
+A bench probe on the package pins measures the second. `bench/plot_gate_compare.py` defaulted to
+the first, so the deck appeared to lack a mechanism it has. Same simulation, same rung:
+**die-referenced notch 0.76 V, pad-referenced 5.36 V, bench 12.60 V.** The conclusion "the deck
+completely lacks the common-source notch" was a node-selection artefact and is withdrawn; the
+supportable claim is that it under-states it.
+
+This is the gate-side counterpart of the drain-side rule already recorded in
+[`loss/docs/coss-ltspice-behavioral-cap.md`](../../loss/docs/coss-ltspice-behavioral-cap.md):
+the LS *die* Vds rings >120 V while the external SW node peaks ~82 V, because the overshoot is
+die-internal. Same boundary, other terminal.
+
+**Rule: compare a deck waveform against a bench probe at the node the PROBE occupies.** Neither
+choice is "more correct" in general — the die pair is right for anything about the device's own
+Cgs, and wrong for anything compared against a measurement.
+
+Caveat on `pad` as implemented: the deck lumps package lead and board copper into one `Lscs_*`
+with no node between them, so a pad reference includes the board-copper share a pin probe would
+not. It over-includes where `die` under-includes; the exact pin node does not exist.
+
 ## Valid combinations
 
 Use one source of package lead inductance, not two:
