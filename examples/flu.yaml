@@ -49,6 +49,24 @@ ls_ref: [D9]
 gate_net_override:
   D9: "Net-(Q2-G)"
 
+# THE CAP MOUNT, EXTRACTED RATHER THAN GUESSED. BENCH-ring-cap-intervention hangs a 2.278 nF
+# C0G between SW and BuckGND and inverts L from the frequency shift, so the mount loop is a
+# leading term -- and §2 of that plan carried it as an ASSUMED 0.6-1.2 nH bound, "inherited from
+# the original 1206 figure". This makes it a measurement.
+#
+# Only the D9 probe lives in THIS config. Its two endpoints are the LS device's own drain and
+# source pads, which `ls_ref: [D9]` already terminates, so it adds no copper to the deck and is
+# safe alongside the production `emit_cin_network` below. The as-built Q2.3/J3.1 position CANNOT
+# go here: those pads carry no port, so probing them pulls new terminal copper, and
+# probe_ports.require_no_production_cin_network then fails the run HARD rather than let a Cin
+# network reduced from a perturbed deck reach the loss tool as production. That comparison lives
+# in flu-probes.yaml.
+#
+# If this probe turns out to pull copper after all, the run fails closed before FastHenry starts
+# (cost: the geometry build). Move it to flu-probes.yaml if so -- do not silence the guard.
+probe_ports:
+  cap_at_d9: [D9.2, D9.3]
+
 parallel_fets: per-device
 # 0, matching the config this is compared against: package leads live in the vendor _L0 model
 # and board copper uses pad-ideal closure. Note fugu2-cu.yaml warns lead_mm 0 "trips the
