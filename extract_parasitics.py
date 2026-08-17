@@ -150,6 +150,7 @@ DEFAULTS = {
     "ls_ref": None,
     "hs_gate": None,
     "ls_gate": None,
+    "gate_net_override": None,
     "hs_package": None,
     "ls_package": None,
     "hs_kelvin": False,
@@ -292,6 +293,13 @@ def run_geom(args, pitch, outdir, tag=None):
     cmd += ["--cin-extraction-basis", args.cin_extraction_basis]
     cmd += ["--cin-closure", args.cin_closure]
     cmd += ["--parallel-fets", args.parallel_fets]
+    if args.gate_net_override:
+        if isinstance(args.gate_net_override, dict):
+            pairs = [f"{k}={v}" for k, v in args.gate_net_override.items()]
+            override_str = ",".join(pairs)
+        else:
+            override_str = args.gate_net_override
+        cmd += ["--gate-net-override", override_str]
     env = dict(os.environ, PYTHONHASHSEED="0")
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
@@ -946,6 +954,12 @@ def build_parser():
     ap.add_argument("--parallel-fets", choices=("lumped", "per-device"),
                     default=argparse.SUPPRESS,
                     help="parallel switch model: lumped (legacy) or per-device gates/leads")
+    ap.add_argument("--gate-net-override", default=argparse.SUPPRESS,
+                    help="per-ref gate net reassignment for off-board gate wiring, "
+                         "e.g. 'D9=Net-(Q2-G)'. Comma-separated. The pad's net is "
+                         "reassigned in memory and a synthetic track connects it to pad "
+                         "1 of a declared sibling FET on that net. Requires explicit "
+                         "--hs-ref/--ls-ref; use per-device mode for per-ref L_gate/CSI.")
     ap.add_argument("--cin-esl", type=float, default=argparse.SUPPRESS,
                     help="per-cap ESL (nH) added to each branch -> physical current "
                          "split at f_ring; 0 = ideal-cap copper-only lower bound")
@@ -1071,6 +1085,13 @@ def _validate_config(config, path):
                     raise TypeError("expected list")
             elif key in SCALAR_TYPES:
                 out[key] = _coerce_scalar(key, value, SCALAR_TYPES[key])
+            elif key == "gate_net_override":
+                if value is None:
+                    out[key] = None
+                elif isinstance(value, dict):
+                    out[key] = {str(k): str(v) for k, v in value.items()}
+                else:
+                    raise TypeError("expected mapping of ref -> net name")
             else:
                 raise AssertionError(f"unhandled config key {key}")
         except TypeError as e:

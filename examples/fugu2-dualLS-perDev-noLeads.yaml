@@ -1,0 +1,31 @@
+# Per-device extraction for Fugu2 with 2 LS FETs: Q2 + D9 (DNP Schottky TO-220
+# position repurposed as LS MOSFET, gate hand-wired to Q2's gate).
+#
+# D9's drain (pad 2) is on SW and source (pad 3) is on BuckGND — already
+# correct for a parallel LS FET. Only the gate (pad 1) is on BuckGND on the
+# PCB. The gate_net_override reassigns D9 pad 1 to Net-(Q2-G) in memory and
+# adds a synthetic B.Cu track to Q2's gate pad so FastHenry can mesh the
+# gate wire. No PCB file patching needed.
+#
+# Run:
+#   python3 extract_parasitics.py --config examples/fugu2-dualLS-perDev-noLeads.yaml
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+hs_ref: [Q1, Q3]
+ls_ref: [Q2, D9]
+parallel_fets: per-device
+gate_net_override:
+  D9: "Net-(Q2-G)"
+lead_mm: 0
+cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
+pitch: [1]
+lf_freq: 39000
+emit_cin_network: true
+cin_network_model: matrix
+weld_tol: 0.6
+zone_mesh: grid
+margin: 8.0
+out: out/fugu2-dualLS-perDev
+svg: true

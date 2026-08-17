@@ -46,6 +46,7 @@ import sys
 import pcbnew
 
 import fet_discovery
+import gate_net_override
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NM = 1e6                       # KiCad internal units (nm) per mm
@@ -2184,6 +2185,11 @@ def main():
                     help="Plane-P closure gauge for cap_only/switch_residual comparison runs")
     ap.add_argument("--parallel-fets", choices=("lumped", "per-device"), default="lumped",
                     help="parallel switch model: lumped (legacy) or per-device gates/leads")
+    ap.add_argument("--gate-net-override", default="",
+                    help="per-ref gate net reassignment for off-board gate wiring, "
+                         "e.g. 'D9=Net-(Q2-G)'. Comma-separated. Reassigns the FET's "
+                         "pad-1 net in memory and adds a synthetic B.Cu track to pad 1 "
+                         "of a declared sibling FET; requires --hs-ref/--ls-ref.")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--weld-tol", type=float, default=0.6,
                     help="fuse same-net nodes within this many mm (fixes pad/trace and "
@@ -2239,12 +2245,23 @@ def main():
         raise SystemExit("--merge-via-radius must be > 0 mm")
 
     board = pcbnew.LoadBoard(args.pcb)
+    gate_override_tracks = {}
+    if args.gate_net_override:
+        gate_net_override.warn_if_lumped(
+            args.parallel_fets, args.gate_net_override)
+        fet_refs = list(args.hs_ref or ()) + list(args.ls_ref or ())
+        gate_override_tracks = gate_net_override.apply(
+            board, args.gate_net_override, fet_refs=fet_refs)
     try:
         topo = fet_discovery.discover(
             board, args.sw, args.gnd, vin=args.vin,
             hs_ref=args.hs_ref, ls_ref=args.ls_ref,
             hs_gate=args.hs_gate, ls_gate=args.ls_gate,
             hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
+        if gate_override_tracks:
+            topo["gate_net_override"] = {
+                ref: track["net"] for ref, track in gate_override_tracks.items()}
+            topo["gate_net_override_tracks"] = gate_override_tracks
         model = build(board, topo, pitch=args.pitch, lead_mm=args.lead_mm, margin=args.margin,
                       cu_thickness=args.cu_thickness,
                       cin_parallel=args.cin_parallel, cin_refs=args.cin_refs,
