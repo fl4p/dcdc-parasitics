@@ -47,6 +47,7 @@ import pcbnew
 
 import fet_discovery
 import gate_net_override
+import probe_ports as probe_ports_lib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NM = 1e6                       # KiCad internal units (nm) per mm
@@ -116,6 +117,12 @@ class Model:
         self.distributed_terminals = set()  # pad-land terminals already bonded to zone nodes
         self.segs = []            # (name, na, nb, w, h)
         self.equivs = []          # (na, nb)
+        self._pairs = set()       # frozenset({na, nb}) for every EMITTED seg/equiv;
+                                  # the only sound answer to "are these two nodes
+                                  # already joined directly?" — node existence is not
+                                  # (a node can pre-exist with no barrel to its
+                                  # neighbour, and a barrel can exist between nodes
+                                  # this caller did not create)
         self.ports = []           # (label, na, nb)  -> FastHenry .external (solved)
         self.aux_ports = {}       # label -> (na, nb): node pairs for downstream DC tools
                                   # (e.g. loss-density), NOT solved by FastHenry
@@ -143,6 +150,17 @@ class Model:
         if zone:
             self.zone_nodes.add(nm_)
         return nm_
+
+    def existing_node(self, net, layer, x, y, z):
+        """The already-interned node at this (net, layer, position), or None.
+
+        Lets a SECOND consumer of the same pad (a probe port declared on a pad
+        that is already a device/cap terminal) reuse that terminal instead of
+        re-running the contact cascade — which would append a duplicate set of
+        pad->pour spokes, i.e. real extra copper in parallel with the first set.
+        """
+        return self._nodes.get(
+            (net, layer, round(x / SNAP), round(y / SNAP), round(z, 3)))
 
     def stitch_zones(self, pitch):
         """Bond every non-zone node to the nearest pour node on the SAME net+layer,
@@ -223,10 +241,59 @@ class Model:
         if h is None:
             h = self.cu_thickness
         self.segs.append((f"E{self._si}", na, nb, max(w, 0.05), h))
+        self._pairs.add(frozenset((na, nb)))
 
     def equiv(self, na, nb):
         if na != nb:
             self.equivs.append((na, nb))
+            self._pairs.add(frozenset((na, nb)))
+
+    def ideal_link_component(self, seed):
+        """Nodes reachable from `seed` through IMPEDANCE-FREE links only.
+
+        Two kinds of link carry no impedance in this model:
+
+          * `.equiv` — a FastHenry ideal short. The FET die closure is one of
+            these (`.equiv drain_die source_die`).
+          * a segment shorter than SNAP, the model's OWN node-identity grid. Its
+            endpoints are coincident by this model's definition and it exists to
+            carry topology, not impedance — the `lead_mm=0` die-plane risers are
+            0.001 mm long.
+
+        A port whose two nodes are in one such component spans a synthesized
+        short: it reports ~0 without measuring any copper. Note the threshold is
+        SNAP, an existing constant that already defines "coincident" here — not a
+        new tolerance invented for this check, and not a threshold on the answer.
+        """
+        adj = {}
+        for a, b in self.equivs:
+            adj.setdefault(a, set()).add(b)
+            adj.setdefault(b, set()).add(a)
+        for _, a, b, _, _ in self.segs:
+            pa, pb = self._pos.get(a), self._pos.get(b)
+            if pa is None or pb is None:
+                continue
+            if ((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2
+                    + (pa[2] - pb[2]) ** 2) < SNAP * SNAP:
+                adj.setdefault(a, set()).add(b)
+                adj.setdefault(b, set()).add(a)
+        seen, stack = set(), [seed]
+        while stack:
+            n = stack.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            stack.extend(adj.get(n, ()))
+        return seen
+
+    def has_direct_link(self, na, nb):
+        """True if a segment or .equiv ALREADY joins these two nodes directly.
+
+        Recorded at emission time, so the early-outs in seg() (zero length, the
+        thin-short filter) are honoured: a link that was refused is correctly
+        reported as absent.
+        """
+        return frozenset((na, nb)) in self._pairs
 
     def port(self, label, na, nb):
         self.ports.append((label, na, nb))
@@ -1309,6 +1376,215 @@ def _pad_node_stack(board, model, zmap, fp, want_net):
     return None, None
 
 
+def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
+    """Node stack for ONE SPECIFIC pad, selected by PAD NUMBER, for a probe port.
+
+    Sibling of `_pad_node_stack`, which selects the first pad on a NET. Same
+    layer walk, same vertical seg-link, same `_pad_land_terminal` contact
+    cascade (so `--terminal-mode` is honoured). The difference that matters is
+    the FALLBACK: `_pad_node_stack` silently drops to a bare pad-centre node
+    when the pad cannot be bonded into the pour. That is point injection, which
+    materially changes the inductance being reported — for a derived port that
+    is a known, documented approximation; for a probe whose whole purpose is to
+    *measure* a mounting loop it would silently change what was measured.
+
+    So: at least ONE copper layer of the pad must produce a real distributed
+    terminal, or this raises. Layers that fall back are counted and reported,
+    never hidden. Under `--terminal-mode point` the pad-centre node IS the
+    run-wide terminal model, so it is accepted and recorded as such.
+
+    Returns (node, info-dict).
+    """
+    net = pad.GetNetname()
+    p = pad.GetPosition()
+    x, y = mm(p.x), mm(p.y)
+    touched = [l for l in cu if pad.IsOnLayer(l)]
+    if not touched:
+        # `_pad_node_stack` substitutes cu[0] here. For a derived port that is a
+        # documented approximation; for a probe it FABRICATES a terminal on a
+        # copper layer the pad does not touch, and then bonds it to whatever pour
+        # happens to be there — a plausible-looking number for a land that does
+        # not exist. Refuse.
+        raise probe_ports_lib.ProbeError(
+            f"probe_ports: {probe_name}: pad {endpoint} is on NO copper layer "
+            f"(layer set {list(cu)}), so it has no land to measure between. It is "
+            f"probably a paste/mask-only or NPTH pad; name a copper pad instead.")
+    point_mode = getattr(model, "terminal_mode", "padland") == "point"
+    top_node = None
+    prev = None
+    bonded, fell_back, reused, reasons = [], [], [], []
+    for lid in touched:
+        # If this pad already carries a terminal (it is also a FET/cap pad), REUSE
+        # that node. Re-running the cascade would append a second identical set of
+        # pad->pour spokes: parallel copper that halves the terminal spreading R
+        # and makes the deck differ from the same run without probe_ports.
+        n = model.existing_node(net, lid, x, y, zmap[lid])
+        # Reuse ONLY a real pad-land TERMINAL. Any other interned node at this
+        # coordinate (a pour-mesh node that happens to land on the pad centre, a
+        # track endpoint, an earlier consumer's point-mode fallback node) was never
+        # bonded to the pad land, so reusing it would quietly point-inject.
+        #
+        # NOTE this says nothing about the vertical barrel — node existence is NOT
+        # proof that a barrel exists. In `single` mode the legacy terminal is a pour
+        # node that is never registered here, so the probe would re-add a barrel that
+        # is already there; conversely, two pour nodes sitting exactly on the pad
+        # centre both "pre-exist" while nothing joins them vertically. The barrel
+        # decision below therefore asks the model directly.
+        is_reused = n is not None and n in model.distributed_terminals
+        if is_reused:
+            reused.append(lid)
+        else:
+            n_fb = len(model.terminal_fallbacks)
+            n = _pad_land_terminal(model, net, lid, x, y, zmap[lid], pad, fp=fp)
+            if n is None:
+                reason = "unknown"
+                if len(model.terminal_fallbacks) > n_fb:
+                    reason = model.terminal_fallbacks[-1].get("reason", "unknown")
+                reasons.append(f"layer {lid}: {reason}")
+                fell_back.append(lid)
+                n = model.node(net, lid, x, y, zmap[lid])
+            else:
+                bonded.append(lid)
+        # Link the THT stack iff nothing already joins these two nodes. This is the
+        # only sound test: it neither duplicates a barrel an earlier consumer placed
+        # (which would be parallel copper in the loop being measured) nor omits one
+        # that was never placed (which would leave the pad stack open).
+        if prev is not None and not model.has_direct_link(prev, n):
+            model.seg(prev, n, mm(pad.GetSizeX()) or 1.0)
+        prev = n
+        if lid == cu[0] or top_node is None:
+            top_node = n
+    if not bonded and not reused and not point_mode:
+        raise probe_ports_lib.ProbeError(
+            f"probe_ports: {probe_name}: pad {endpoint} (net {net!r}) resolved to NO "
+            f"copper contact on any of its layers ({'; '.join(reasons)}). The extractor "
+            f"would fall back to a bare pad-centre node, which point-injects the current "
+            f"and reports a loop inductance that is not the one you asked for. Lower "
+            f"--pitch so a mesh node lands inside the pad land, raise --margin so the "
+            f"pad is inside the meshed ROI, or check that {endpoint} is on an extracted "
+            f"net (SW / Vin / GND / gate).")
+    terminal = ("point_mode" if point_mode
+                else getattr(model, "terminal_mode", "padland"))
+    if reused and not bonded:
+        terminal = "reused_existing_terminal"
+    elif reused:
+        terminal += f"+reused_on_{len(reused)}_layer(s)"
+    if fell_back and not point_mode:
+        sys.stderr.write(
+            f"WARNING: probe port {probe_name} pad {endpoint}: {len(fell_back)} of "
+            f"{len(touched)} copper layer(s) fell back to a pad-centre node "
+            f"({'; '.join(reasons)}); {len(bonded) + len(reused)} layer(s) bonded "
+            f"into the pour or reused an existing terminal.\n")
+        terminal += f"+point_fallback_on_{len(fell_back)}_layer(s)"
+    return top_node, dict(net=net, terminal=terminal, layers_bonded=len(bonded),
+                          layers_reused=len(reused), layers_fallback=len(fell_back))
+
+
+def _device_closure_nodes(topo):
+    """{refdes: {node, ...}} — each FET's drain/source pad and die nodes, i.e. the
+    nodes its synthesized drain-source closure ties together.
+
+    Covers both parallel models: per-device records carry their own handles, and
+    the lumped side keeps them on the side dict under the first ref.
+    """
+    out = {}
+    for role in ("hs", "ls"):
+        d = topo.get(role)
+        if not isinstance(d, dict):
+            continue
+        devices = d.get("_devices") or []
+        if devices:
+            for dev in devices:
+                nodes = {dev.get(k) for k in
+                         ("_drn_pad_node", "_src_pad_node", "_die_src", "_die_drn")}
+                nodes.discard(None)
+                if nodes:
+                    out[dev.get("ref") or role.upper()] = nodes
+            continue
+        nodes = {d.get(k) for k in ("_drn_pad_node", "_src_pad_node", "_die_src")}
+        nodes.discard(None)
+        if nodes:
+            refs = d.get("refs") or [role.upper()]
+            out[refs[0]] = nodes
+    return out
+
+
+def build_probe_terminals(board, model, zmap, probes):
+    """Create the pad-land terminals for every declared probe port.
+
+    MUST be called BEFORE `model.stitch_zones()` / `model.weld()` — a terminal
+    created after them never bonds into the pour, so the port floats and is
+    dropped. Returns the probes list, enriched in place with node names, the
+    per-probe geometry the terminals added (for the non-perturbation report) and
+    terminal provenance. Does NOT create the ports; that happens with the rest of
+    them, after the stitch, so the label/node-pair guards see every port.
+    """
+    if not probes:
+        return probes
+    cu = _cu_stack(board)
+    footprints = {}
+    for fp in board.GetFootprints():
+        footprints.setdefault(fp.GetReference(), fp)
+    # Nodes that existed BEFORE any probe terminal was built. Perturbation must not
+    # depend on the order probes are declared in: when two probes share one
+    # previously-unterminated pad, the per-probe seg/node deltas credit the whole
+    # cost to whichever ran first, and the second would report "added nothing".
+    # Membership in this set is order-free.
+    pre_probe_nodes = set(model._nodes.values())
+    for probe in probes:
+        segs0, nodes0 = len(model.segs), len(model._nodes)
+        for side in ("a", "b"):
+            ref, num = probe[f"{side}_ref"], probe[f"{side}_pad"]
+            fp = footprints.get(ref)
+            if fp is None:
+                raise probe_ports_lib.ProbeError(
+                    f"probe_ports: {probe['name']}: refdes {ref!r} is not on this board. "
+                    f"A probe port names a real footprint pad; it is never skipped "
+                    f"silently. Check the refdes against the .kicad_pcb.")
+            pads = list(fp.Pads())
+            matching = [p for p in pads if str(p.GetNumber()) == num]
+            if not matching:
+                have = ", ".join(sorted({str(p.GetNumber()) for p in pads})) or "(none)"
+                raise probe_ports_lib.ProbeError(
+                    f"probe_ports: {probe['name']}: footprint {ref} has no pad {num!r}. "
+                    f"Pads on {ref}: {have}.")
+            if len(matching) > 1:
+                # KiCad allows several physical lands to share a pad number (split
+                # thermal tabs, a tab plus its SMD land). `REF.PAD` then does not
+                # name a place on the board, and picking the first in footprint
+                # order silently decides which land was measured — a real 10 mm
+                # difference in the loop under test.
+                where = "; ".join(
+                    f"({mm(p.GetPosition().x):.3f}, {mm(p.GetPosition().y):.3f}) mm"
+                    for p in matching)
+                raise probe_ports_lib.ProbeError(
+                    f"probe_ports: {probe['name']}: footprint {ref} has "
+                    f"{len(matching)} pads numbered {num!r}, at {where}. "
+                    f"'{ref}.{num}' is therefore ambiguous and the extractor will not "
+                    f"choose one for you — a probe must name ONE land. Use a pad "
+                    f"number that is unique on this footprint.")
+            pad = matching[0]
+            node, info = _probe_pad_node_stack(
+                model, zmap, cu, fp, pad, probe["name"], probe[side])
+            probe[f"{side}_node"] = node
+            probe[f"{side}_net"] = info["net"]
+            probe[f"{side}_terminal"] = info["terminal"]
+        if probe["a_node"] == probe["b_node"]:
+            raise probe_ports_lib.ProbeError(
+                f"probe_ports: {probe['name']}: {probe['a']} and {probe['b']} intern to "
+                f"the SAME node — they are the same net, layer and position to within "
+                f"the {SNAP} mm node grid. A port across one node measures nothing and "
+                f"makes FastHenry's Zc singular.")
+        probe["terminal_segs_added"] = len(model.segs) - segs0
+        probe["terminal_nodes_added"] = len(model._nodes) - nodes0
+        # Order-free: true if EITHER endpoint sits on a node that no non-probe
+        # consumer had created, no matter which probe paid for building it.
+        probe["endpoint_new_in_probe_phase"] = bool(
+            probe["a_node"] not in pre_probe_nodes
+            or probe["b_node"] not in pre_probe_nodes)
+    return probes
+
+
 def _port_ref(ref):
     return re.sub(r"[^A-Za-z0-9_]+", "_", ref)
 
@@ -1707,7 +1983,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
           parallel_fets="lumped", zone_mesh="grid", terminal_mode="padland",
           cin_extraction_basis="full_loop", cin_closure="cell_bridge",
           merge_vias=False, merge_via_radius=1.0,
-          allow_missing_gate_ports=False):
+          allow_missing_gate_ports=False, probe_ports=None):
     zmap = layer_z_map(board)
     model = Model(cu_thickness=cu_thickness, terminal_mode=terminal_mode)
     model.pitch = pitch
@@ -1727,6 +2003,18 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
                          "switch_residual")
     if cin_closure not in ("cell_bridge", "per_fet"):
         raise ValueError("--cin-closure must be one of: cell_bridge, per_fet")
+    probes = probe_ports_lib.parse_spec(probe_ports)
+    if probes and cin_extraction_basis == "switch_residual":
+        # Guard 8. validate_switch_residual_ports() raises on ANY extra solved
+        # port, on purpose: that basis is a single-port gauge whose whole meaning
+        # is "only the residual port is solved". Whitelisting P_probe_* there
+        # would quietly change what the gauge gauges, so refuse the combination
+        # here instead of letting it fail later with a confusing message.
+        raise ValueError(
+            "probe_ports cannot be combined with --cin-extraction-basis "
+            "switch_residual: that basis is a single-port residual gauge and "
+            "validate_switch_residual_ports() rejects every extra solved port. "
+            "Run the probes on the full_loop (or cap_only) basis.")
 
     # issue #6: index same-net filled pours so add_tracks can skip tracks routed
     # inside their own pour (redundant with the mesh add_zones builds below).
@@ -1800,6 +2088,11 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
             cref and cin_extraction_basis != "cap_only") else []
         cin_network_ports(board, model, zmap, topo, hf_labels, anchors,
                           refs=cin_network_refs)
+
+    # User-declared probe-port terminals (REF.PAD <-> REF.PAD). Created HERE, with
+    # every other pad-node creation, because the stitch/weld below is what bonds a
+    # terminal into the pour — a terminal made after them floats and gets dropped.
+    build_probe_terminals(board, model, zmap, probes)
 
     # bond every track/via/pad node into the pour mesh on its net+layer, then weld
     # near-coincident endpoints interning missed (pad-centre vs trace-end, touching
@@ -1916,11 +2209,53 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
                 model.aux_ports["P_out_ls"] = (ls_nodes[0], best)
             topo["out_ref"] = out_ref
 
+    # ---- user-declared probe ports ----
+    # Appended LAST so they gain rows/cols at the end of port_L/port_R and every
+    # existing consumer (all name-keyed) is unaffected. The two guards run over the
+    # COMPLETE port list, which is why they live here and not next to the terminals.
+    for probe in probes:
+        model.port(probe["label"], probe["a_node"], probe["b_node"])
+    if probes:
+        probe_ports_lib.require_unique_labels(model.ports)
+        probe_ports_lib.require_distinct_node_pairs(model.ports)
+        # ...and that the probe spans COPPER, not a closure the extractor
+        # synthesized. Neither of the two guards above can see this: the nodes are
+        # genuinely distinct, they are merely shorted through the device model.
+        #
+        # The STRUCTURAL guard is gated on the device actually being closed. Under
+        # the cap_only bases the FET is NOT shorted drain-source, so a port across
+        # its tabs measures a real board loop and refusing it would be over-strict
+        # — and its message ("the closure the extractor synthesizes") would be
+        # false. The EVIDENCE-based guard below needs no such gate: it reads the
+        # links the model actually emitted, so it simply does not fire when there
+        # is no short.
+        if fet_closure == "full_loop":
+            probe_ports_lib.require_not_across_device_closure(
+                probes, _device_closure_nodes(topo))
+        probe_ports_lib.require_not_shorted(model, probes)
+
     # drop any port disconnected from the commutation loop (e.g. a distant bulk cap
     # whose pad never bonds into the pour at this pitch) — one floating port NaNs the
     # entire FastHenry solve. Keep the topo/cin_net manifests consistent.
     seed_port = "P_sw_residual" if residual_only else "P_pwr"
     dropped = model.drop_floating_ports(seed_port)
+    if probes:
+        # A dropped derived port is a warning; a dropped PROBE is a hard failure —
+        # it would leave the label out of `ports` and a consumer would read the
+        # absent entry as None, i.e. as a measurement that was never made.
+        probe_ports_lib.require_not_dropped(probes, dropped, model.ports)
+        probe_ports_lib.annotate_perturbation(model, probes)
+        topo["probe_ports"] = probe_ports_lib.manifest(probes)
+        pulled = [p["name"] for p in probes if p["pulled_new_copper"]]
+        topo["probe_ports_perturbed"] = bool(pulled)
+        probe_ports_lib.require_no_production_cin_network(
+            probes, emit_cin_network, cin_network_model)
+        if pulled:
+            sys.stderr.write(
+                f"WARNING: probe port(s) {', '.join(pulled)} pulled copper into the "
+                f"deck that no other port reaches, so this run's L_loop is NOT "
+                f"bit-comparable with the same config without probe_ports; see "
+                f"topo.probe_ports[].terminal_segs_added.\n")
     if dropped:
         ds = set(dropped)
         hf_full = list(getattr(model, "cin_ports", []))   # pre-drop HF labels, 1:1 with cin_used
@@ -2190,6 +2525,13 @@ def main():
                          "e.g. 'D9=Net-(Q2-G)'. Comma-separated. Reassigns the FET's "
                          "pad-1 net in memory and adds a synthetic B.Cu track to pad 1 "
                          "of a declared sibling FET; requires --hs-ref/--ls-ref.")
+    ap.add_argument("--probe-ports", default="",
+                    help="user-declared two-terminal ports by REF.PAD, e.g. "
+                         "'cap_at_d9=D9.2:D9.3,cap_q2_j3=J3.1:Q2.3'. Comma-separated "
+                         "name=REF.PAD:REF.PAD. Emitted as P_probe_<name>, appended to "
+                         "the port list. Every failure (unknown refdes/pad, no copper "
+                         "contact, label or node-pair collision, dropped as floating) "
+                         "is a hard error, never a silent skip.")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--weld-tol", type=float, default=0.6,
                     help="fuse same-net nodes within this many mm (fixes pad/trace and "
@@ -2277,7 +2619,8 @@ def main():
                       terminal_mode=args.terminal_mode,
                       merge_vias=args.merge_vias,
                       merge_via_radius=args.merge_via_radius,
-                      allow_missing_gate_ports=args.allow_missing_gate_ports)
+                      allow_missing_gate_ports=args.allow_missing_gate_ports,
+                      probe_ports=args.probe_ports)
     except ValueError as e:
         raise SystemExit(str(e))
     dropped = topo.get("cin_dropped_ports")
@@ -2340,6 +2683,7 @@ def main():
                 via_merge=getattr(model, "via_merge", None),
                 zone_mesh=args.zone_mesh,
                 terminal_mode=args.terminal_mode,
+                probe_ports=topo.get("probe_ports", []),
                 zone_mesh_notes=getattr(model, "zone_mesh_notes", []),
                 terminal_regions=getattr(model, "terminal_regions", []),
                 terminal_fallbacks=getattr(model, "terminal_fallbacks", []))

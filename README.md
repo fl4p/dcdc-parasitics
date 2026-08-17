@@ -48,6 +48,7 @@ the producer can separate cap-side and switch-side copper without mixing gauges.
 | `P_bulk` | nearest **bulk electrolytic** (Vin ↔ GND) | LF conduction-loop R |
 | `P_hs` | Vin(bulk) → SW, via HS leads | HS conduction R |
 | `P_ls` | SW → GND(bulk), via LS leads | LS conduction R |
+| `P_probe_<name>` | any declared `REF.PAD` ↔ `REF.PAD` (opt-in, see `probe_ports`) | mount-loop L/R of that position |
 
 In the full-loop basis, both FET channels are shorted at the die plane
 (`.equiv drain_die source_die`)
@@ -311,6 +312,58 @@ paralleled switches: each physical FET keeps its own die/source/gate branch and
 gets its own gate + switch-side ports (`P_ghs_Q1`, `P_hs_Q1`, ...). The default
 is `--parallel-fets lumped`, which preserves the historical lumped parallel-FET
 model and existing downstream behavior.
+
+### `probe_ports` — measuring a position the derived ports do not cover
+
+Every port above is *derived* from the discovered topology, so a component
+mounted anywhere else on those nets — an added capacitor between SW and GND at
+some particular pad pair, a snubber land — has no port and its **mount-loop
+inductance can only be guessed**. `probe_ports` declares extra two-terminal
+ports by `REF.PAD`, so that loop is extracted instead:
+
+```yaml
+probe_ports:
+  cap_at_d9:    [D9.2, D9.3]     # the LS device tabs
+  cap_q2_j3:    [J3.1, Q2.3]     # an as-built detour
+  snubber_land: [R11.1, C8.2]    # the designed R11/C8 position
+```
+
+On the CLI: `--probe-ports 'cap_at_d9=D9.2:D9.3,cap_q2_j3=J3.1:Q2.3'`.
+
+Each becomes `P_probe_<name>`, **appended** to `ports` (so `port_L` / `port_R` /
+`port_R_dc` gain a row and column and nothing name-keyed shifts), plus a derived
+block in `parasitics.json`:
+
+```json
+"probe_ports": {
+  "cap_at_d9": {"label": "P_probe_cap_at_d9", "a": "D9.2", "b": "D9.3",
+                "L": 1.9e-9, "R": 3.1e-4, "R_dc": 2.6e-4,
+                "L_ring": 1.8e-9, "R_ring": 9.7e-4,
+                "M_to_loop": 4.1e-10, "M_to_loop_port": "P_pwr",
+                "pulled_new_copper": false}
+}
+```
+
+Everything that can go wrong is a **hard error, never a silent skip** — unlike
+`cin_loop_refs`, where a bogus refdes is simply dropped: unknown refdes, unknown
+pad number, a pad that resolves to no copper contact (which would point-inject
+and report a different inductance than the one asked for), a label or node-pair
+collision (two `.external` on one node pair make FastHenry's `Zc` singular), and
+a probe dropped as floating.
+
+The one thing that cannot be made impossible is **measured, not assumed**:
+`prune()` keeps only copper reachable from a port, so a probe reaching a
+previously-unported region adds copper to the deck and can shift `L_loop`. Each
+probe therefore carries `pulled_new_copper` (with `retained_nodes_added`), and
+the run warns when any probe is flagged. A probe on already-ported copper reuses
+that pad's existing terminal and adds nothing. **Verify by A/B**: run the same
+config with `probe_ports` removed and diff `L_loop`, `L_loop_single`,
+`L_gate_hs`, `L_gate_ls` and `cin_branches`.
+
+`probe_ports` is refused on `cin_extraction_basis: switch_residual` — that basis
+is a single-port residual gauge that rejects every extra solved port. In a
+matrix-Cin run the internal residual leg runs without the probes (announced in
+the log); the reported probe results come from the `full_loop` leg.
 
 Example — Fugu2 (2-layer buck, paralleled HS, explicit HF cap bank):
 

@@ -1,0 +1,103 @@
+# flu / Fugu2 -- probe ports for the added-capacitor MOUNT LOOP.
+#
+# WHY THIS FILE EXISTS. verifications/ring-ident fitted a 2.278 nF C0G from Q2 pad 3
+# (BuckGND) to J3 (SW). Inverting the observed ring shift left a degenerate (Ls, Rs)
+# family whose surviving branch was a mount loop of ~18-21 nH -- a hypothesis with NO
+# independent check, because parasitics.json had no port anywhere near the capacitor.
+# `probe_ports` closes that gap: each entry below is a real FastHenry port across the two
+# pads the capacitor would actually bridge, so the mount-loop L is EXTRACTED, not inferred.
+#
+# RESULT: THE ~20 nH HYPOTHESIS WAS TESTED AND REJECTED. Do not read the numbers below as
+# something to confirm. Full pipeline (geometry + FastHenry) on ee/hw/Fugu2 @ 8424e85,
+# running THIS FILE as shipped:
+#
+#     cap_q2_j3     L = 1.2055 nH  L_ring = 1.1292 nH    predicted ~18-21 nH  -> FALSIFIED
+#     snubber_land  L = 1.7004 nH  L_ring = 2.0517 nH
+#     cap_at_d9     NOT MEASURABLE -- see below
+#
+# This config's own falsification criterion ("if cap_q2_j3 comes back at ~1 nH the ~20 nH
+# explanation is WRONG") is met, so the detour-loop explanation of the 18.9 % coupling is
+# out. Independently, PLAN-added-c.md now records that the bench comparison behind that
+# 18.9 % figure was CROSS-SESSION (stock 2026-08-16 20:23 UTC vs fitted 2026-08-17 07:19
+# UTC) against a +3.5 % non-averaging between-session systematic, so the -4.42 % shift
+# never separated the intervention from drift. The measurement it was meant to explain is
+# itself not established.
+#
+# cap_at_d9 IS REFUSED, AND THAT IS THE CORRECT ANSWER. With `lead_mm: 0` the die-plane
+# closure `.equiv drain_die source_die` lands directly on D9's pads, so a port across
+# D9.2/D9.3 spans a synthesized short: FastHenry returned 1.702e-15 H (0.0017 nH) against
+# 3.575e-09 H for D9's own device port. That is not a small mount loop, it is the absence
+# of one -- there is no board copper between those tabs to measure, and the real mount L at
+# that position is the capacitor's own ESL. The extractor now refuses it instead of
+# reporting the near-zero, so it is NOT declared below -- this file runs as shipped.
+#
+# BEFORE TRUSTING L_loop FROM THIS RUN: check probe_ports.<name>.pulled_new_copper in the
+# output. `Model.prune()` keeps only copper reachable from a port, so a probe that reaches
+# a previously-unported region ADDS copper to the deck and can shift L_loop. The extractor
+# measures this per probe and warns; it never assumes the probes were harmless. Run the
+# same config with `probe_ports` removed and diff L_loop / L_loop_single / L_gate_hs /
+# L_gate_ls / cin_branches -- a probe on already-ported copper must be bit-identical.
+#
+# WHY ls_ref IS [Q2, D9] AND NOT [D9] ALONE. flu's LS FET is fitted in the D9 land with
+# only its gate hand-wired to Q2.1, so `ls_ref: [D9]` is the physically faithful
+# declaration -- and it does not run today, for TWO independent reasons:
+#   1. gate_net_override.py:72 computes sibling_refs = declared_fet_refs - overridden_refs.
+#      With D9 both the only LS ref and the overridden one, no declared sibling has a pad 1
+#      on Net-(Q2-G), so it exits at :74.
+#   2. Dropping the override does not help either: D9's pads are BuckGND/SW/BuckGND, so
+#      fet_discovery classifies gate = BuckGND = source and refuses the FET as gate-source
+#      shorted. `allow_missing_gate_ports: true` does NOT reach this -- it downgrades a
+#      MISSING gate port, not an invalid FET topology.
+# So this file uses the dual-LS declaration that is known to run (see
+# fugu2-dualLS-perDev-noLeads.yaml and docs/review-gate-net-override.md). The probe ports
+# below are local pad-to-pad loops; the extra Q2 lead/die copper shifts the commutation
+# loop, not the mount loops. Letting a single-D9 override anchor on a non-populated
+# footprint's pad is the proper fix and is out of scope here.
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+
+hs_ref: [Q1, Q3]
+ls_ref: [Q2, D9]
+gate_net_override:
+  D9: "Net-(Q2-G)"
+
+# THE POINT OF THIS FILE. name -> [REF.PAD, REF.PAD].
+# This file RUNS AS SHIPPED -- verified end to end through the geometry step.
+probe_ports:
+  # the AS-BUILT detour: 1.206 nH, which is what falsified the ~18-21 nH prediction
+  cap_q2_j3:    [J3.1, Q2.3]
+  # the designed R11/C8 snubber position: 1.700 nH
+  snubber_land: [R11.1, C8.2]
+  # DELIBERATELY NOT DECLARED -- keep it that way, and read the header:
+  #   cap_at_d9:  [D9.2, D9.3]
+  # With lead_mm: 0 this spans D9's own die-plane closure, not board copper. The
+  # extractor REFUSES it (`require_not_shorted`), because the alternative is the
+  # 1.702e-15 H non-measurement it used to report. Uncommenting it makes this
+  # config fail by design; it is kept here as the worked example of the guard.
+
+parallel_fets: per-device
+lead_mm: 0
+cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
+# emit_cin_network is DELIBERATELY OFF here, unlike every other Fugu2 config.
+# An independent review built this exact geometry against the real board and
+# measured that two of the three probes above add terminal copper to the deck:
+# cap_q2_j3 +47 segments, snubber_land +7; only cap_at_d9 adds nothing (it lands
+# on pads that already carry device terminals). cin_branches / cin_matrix would
+# then be reduced from that perturbed deck and consumed downstream as a
+# PRODUCTION input-cap model, which the loss tool has no way to know about. The
+# extractor now refuses that combination outright, so this is not merely advice.
+#
+# CONSEQUENCE: this run is a DIAGNOSTIC extraction. Do NOT point a loss deck at
+# its output. Read probe_ports.<name>.L from it and nothing else; take the loss
+# deck's parasitics from an unprobed run of fugu2-dualLS-perDev-noLeads.yaml.
+cin_network_model: scalar_trunk
+pitch: [1]
+lf_freq: 39000
+emit_cin_network: false
+weld_tol: 0.6
+zone_mesh: grid
+margin: 8.0
+out: out/flu-D9-probe
+svg: true

@@ -48,6 +48,8 @@ cin_loop_refs: [C18, C17, C9]
 cin_network_refs: [C18, C17, C9, C27]
 emit_cin_network: true
 parallel_fets: per-device
+gate_net_override:
+  D9: Net-(Q2-G)
 weld_tol: 0.7
 terminal_mode: finite
 margin: 6.5
@@ -70,6 +72,7 @@ allow_missing_gate_ports: true
     assert args.cin_network_refs == ["C18", "C17", "C9", "C27"]
     assert args.emit_cin_network is True
     assert args.parallel_fets == "per-device"
+    assert args.gate_net_override == {"D9": "Net-(Q2-G)"}
     assert args.weld_tol == 0.7
     assert args.terminal_mode == "finite"
     assert args.margin == 6.5
@@ -79,6 +82,18 @@ allow_missing_gate_ports: true
     assert args.cin_closure == "per_fet"
     assert args.allow_scalar_cin is True
     assert args.allow_missing_gate_ports is True
+
+
+def test_gate_net_override_yaml_requires_a_mapping():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+gate_net_override: [D9, Net-(Q2-G)]
+""")
+    e = _expect_exit(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "gate_net_override: expected mapping" in str(e)
 
 
 def test_cli_overrides_yaml_scalars_lists_and_booleans():
@@ -917,6 +932,262 @@ def test_inject_packages_noop_when_absent_or_missing_side():
     extract_parasitics._inject_packages(args, side)
     assert side["topo"]["hs"]["package"] == "DFN5x6", side
     assert "ls" not in side["topo"], side
+
+
+# --------------------------------------------------------------------------- #
+# probe_ports (see lib/probe_ports.py and test_probe_ports.py)
+# --------------------------------------------------------------------------- #
+def _exit_msg(fn):
+    """SystemExit plus whatever argparse/_validate_config wrote to stderr.
+
+    `ap.error()` exits with code 2 and puts the reason on stderr, so asserting on
+    `e.code` alone cannot tell "the guard I meant fired" from "something else did".
+    """
+    buf = StringIO()
+    try:
+        with redirect_stderr(buf):
+            fn()
+    except SystemExit as e:
+        return e, buf.getvalue() + str(e)
+    raise AssertionError("expected SystemExit")
+
+
+def test_probe_ports_yaml_mapping_is_accepted():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  cap_at_d9: [D9.2, D9.3]
+  cap_q2_j3: [J3.1, Q2.3]
+""")
+    args = extract_parasitics.parse_args(["--config", cfg])
+    assert args.probe_ports == {"cap_at_d9": ["D9.2", "D9.3"],
+                                "cap_q2_j3": ["J3.1", "Q2.3"]}
+
+
+def test_probe_ports_yaml_requires_a_mapping():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports: [D9.2, D9.3]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "probe_ports: expected mapping of name -> [REF.PAD, REF.PAD]" in msg
+
+
+def test_probe_ports_yaml_requires_exactly_two_terminals():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  cap_at_d9: [D9.2, D9.3, D9.1]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "exactly TWO terminals" in msg
+
+
+def test_probe_ports_yaml_endpoint_syntax_is_validated_post_merge():
+    # Shape is fine (mapping of name -> 2 strings); only the full parse in
+    # parse_args catches that "D9" is not REF.PAD. YAML bypasses argparse, so
+    # without the post-merge check this would reach the geometry subprocess.
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  cap_at_d9: [D9, D9.3]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "not 'REF.PAD'" in msg
+
+
+def test_probe_ports_yaml_rejects_a_self_pair():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  cap_at_d9: [D9.2, D9.2]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "both terminals are D9.2" in msg
+
+
+def test_probe_ports_cli_string_is_validated_the_same_way():
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args([
+        "/b.kicad_pcb", "--sw", "SW", "--gnd", "GND", "-o", "o",
+        "--probe-ports", "cap_at_d9=D9.2"]))
+    assert "expected name=REF.PAD:REF.PAD" in msg
+
+
+def test_probe_ports_cli_overrides_yaml():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  from_yaml: [D9.2, D9.3]
+""")
+    args = extract_parasitics.parse_args([
+        "--config", cfg, "--probe-ports", "from_cli=J3.1:Q2.3"])
+    assert args.probe_ports == "from_cli=J3.1:Q2.3"
+
+
+def test_probe_ports_default_is_absent():
+    args = extract_parasitics.parse_args(
+        ["/b.kicad_pcb", "--sw", "SW", "--gnd", "GND", "-o", "o"])
+    assert args.probe_ports is None
+
+
+def test_probe_ports_refused_on_the_switch_residual_basis():
+    # GUARD 8, double-validated: kicad_geom refuses it too, but a config-level
+    # refusal is what keeps a multi-minute run from starting.
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+cin_extraction_basis: switch_residual
+probe_ports:
+  cap_at_d9: [D9.2, D9.3]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "single-port residual gauge" in msg
+    # control: the same probes on the default full_loop basis are accepted
+    cfg_ok = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  cap_at_d9: [D9.2, D9.3]
+""")
+    args = extract_parasitics.parse_args(["--config", cfg_ok])
+    assert args.cin_extraction_basis == "full_loop"
+
+
+def test_duplicate_yaml_keys_are_refused_not_silently_last_wins():
+    # yaml.safe_load keeps only the LAST duplicate key, which for probe_ports
+    # discards a whole declared measurement before parse_spec's duplicate-name
+    # guard can see it.
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  cap: [D9.2, D9.3]
+  cap: [J3.1, Q2.3]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "duplicate key 'cap'" in msg
+    # and at the top level too
+    cfg2 = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+margin: 8.0
+margin: 4.0
+""")
+    _, msg2 = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg2]))
+    assert "duplicate key 'margin'" in msg2
+
+
+def test_probe_names_must_be_strings_so_yaml_ints_cannot_collide():
+    # `1:` is an int and `"1":` is a string; str()-coercing both collapses two
+    # declared probes onto one.
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+probe_ports:
+  1: [D9.2, D9.3]
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "not a string" in msg and "quote it" in msg
+
+
+def test_run_geom_forwards_probe_ports_as_the_wire_form():
+    base = dict(pcb="b.kicad_pcb", sw="SW", gnd="GND", cin_parallel=1, lead_mm=0.1,
+                nwinc=1, nhinc=1, cu_temp=20.0, cu_thickness=0.035, lf_freq=1e5,
+                hf_freq=1e8, ndec=3, weld_tol=0.6, zone_mesh="grid",
+                terminal_mode="padland", margin=8.0, vin=None, hs_gate=None,
+                ls_gate=None, hs_ref=None, ls_ref=None, cin_refs=None,
+                cin_loop_refs=None, cin_network_refs=None, hs_kelvin=False,
+                ls_kelvin=False, include_bulk_cin=False, emit_cin_network=False,
+                cin_network_model="scalar_trunk", cin_extraction_basis="full_loop",
+                cin_closure="cell_bridge", parallel_fets="lumped",
+                gate_net_override=None, allow_missing_gate_ports=False,
+                merge_vias=False, merge_via_radius=1.0)
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, env=None):
+        captured["cmd"] = cmd
+        inp = cmd[cmd.index("-o") + 1]
+        import json
+        with open(inp + ".ports.json", "w") as fh:
+            json.dump({"ports": ["P_pwr"], "topo": {}}, fh)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    d = tempfile.mkdtemp()
+    orig_run, orig_req = extract_parasitics.subprocess.run, extract_parasitics.require_gate_ports
+    extract_parasitics.subprocess.run = fake_run
+    extract_parasitics.require_gate_ports = lambda side, pitch, **kw: None
+    try:
+        extract_parasitics.run_geom(SimpleNamespace(probe_ports=None, **base), 1.0, d)
+        assert "--probe-ports" not in captured["cmd"]
+        extract_parasitics.run_geom(SimpleNamespace(
+            probe_ports={"cap_at_d9": ["D9.2", "D9.3"]}, **base), 1.0, d)
+        i = captured["cmd"].index("--probe-ports")
+        assert captured["cmd"][i + 1] == "cap_at_d9=D9.2:D9.3"
+        # a malformed spec must fail BEFORE the subprocess, not inside it
+        try:
+            extract_parasitics.run_geom(SimpleNamespace(
+                probe_ports={"bad": ["D9", "D9.3"]}, **base), 1.0, d)
+        except Exception as e:  # noqa: BLE001
+            assert "not 'REF.PAD'" in str(e)
+        else:
+            raise AssertionError("expected the malformed spec to be rejected")
+    finally:
+        extract_parasitics.subprocess.run = orig_run
+        extract_parasitics.require_gate_ports = orig_req
+
+
+def test_switch_residual_gauge_leg_runs_without_probe_ports():
+    # The internal residual leg of a matrix Cin run is a single-port gauge, so the
+    # probes are stripped for THAT leg only — and it is announced, not silent.
+    seen = {}
+
+    def fake_run_geom(run_args, pitch, outdir, tag=None):
+        seen[tag] = getattr(run_args, "probe_ports", "MISSING")
+        return "x.inp", {"ports": ["P_pwr"], "topo": {}, "mesh": {}}
+
+    def fake_solve(inp, ports, topo, meta, **kw):
+        return {"ports": ports}
+
+    args = SimpleNamespace(
+        pcb="b.kicad_pcb", plateau=5e6, cin_esl=0.0, cin_esr=0.0,
+        skin_poles=3, ring_freq=3.9e7, config=None,
+        hs_package=None, ls_package=None,
+        probe_ports={"cap_at_d9": ["D9.2", "D9.3"]})
+    for basis in ("full_loop", "cap_only", "switch_residual"):
+        extract_parasitics._run_reduce_basis(
+            args, 1.0, "/tmp", "b.kicad_pcb", "sha", "csha", None, basis, basis,
+            run_geom_fn=fake_run_geom, solve_fn=fake_solve)
+    assert seen["full_loop"] == {"cap_at_d9": ["D9.2", "D9.3"]}
+    assert seen["cap_only"] == {"cap_at_d9": ["D9.2", "D9.3"]}
+    assert seen["switch_residual"] is None
 
 
 def main():

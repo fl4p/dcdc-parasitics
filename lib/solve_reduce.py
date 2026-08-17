@@ -808,12 +808,13 @@ def classify_cin_warnings(p):
     """
     base = list(p.get("reduce_warn_base") or [])
     scalar = list(p.get("reduce_scalar_warn") or [])
+    info_base = list(p.get("reduce_info_base") or [])   # model-independent advisories
     cm = p.get("cin_model") or {}
     matrix_in_use = (cm.get("mode") in ("matrix", "matrix_with_sw_coupling")
                      and cm.get("matrix_valid") is True)
     if scalar and matrix_in_use:
         p["reduce_warn"] = base
-        p["reduce_info"] = [
+        p["reduce_info"] = info_base + [
             f"scalar shared-trunk Cin reduction was REJECTED and is not what this run emits "
             f"(cin_model.mode={cm.get('mode')}, basis={cm.get('basis')!r}, matrix_valid=true). "
             f"The {len(scalar)} message(s) below are the evidence for that rejection, not "
@@ -823,7 +824,7 @@ def classify_cin_warnings(p):
         ] + scalar
     else:
         p["reduce_warn"] = base + scalar
-        p["reduce_info"] = []
+        p["reduce_info"] = info_base
     return p
 
 
@@ -912,6 +913,9 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     # only ever demoted on positive evidence (mode==matrix AND matrix_valid is True) —
     # an unevaluated/None validity keeps them at WARNING.
     scalar_warn = []
+    # Advisory context that is INFO regardless of the Cin model (kept separate so
+    # classify_cin_warnings, which REBUILDS reduce_info from scratch, cannot drop it).
+    info_base = []
     if cond > 1e6:
         warn.append(f"Zc ill-conditioned (cond={cond:.1e}) — parallel reduction "
                     f"unreliable; check cap ports / near-coincident caps")
@@ -1249,6 +1253,67 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             return fallback
         return abs(float(L[g, side]))
 
+    # ---- user-declared probe ports (see lib/probe_ports.py) ----
+    # Convenience view of rows/cols the extractor appended to `ports`, so a caller
+    # asking "what is the mount-loop L at this position" needs no matrix arithmetic.
+    # Nothing here invents a value: a declared probe whose label is missing from
+    # `ports` is a hard error, because the extractor's own guard already refuses to
+    # emit that case — seeing it here means the sidecar does not describe this solve.
+    def _probe_eff_mutual(i):
+        """Effective mutual between a probe port and the REDUCED commutation loop.
+
+        `L[probe, cin_idx[0]]` is only the mutual to the FIRST Cin port. With a
+        multi-cap bank the commutation current is split across all of them by `y`,
+        so that single row can be badly wrong: two caps carrying equal current with
+        probe mutuals of 1 nH and 5 nH have an effective mutual of 3 nH, not 1 nH.
+        Use the same weighted reduction the gate CSI already uses.
+        """
+        m = Z[i, cin_idx]
+        return float((complex(np.dot(m, y) / denom)).imag / w)
+
+    def _probe_block():
+        meta_probes = (topo or {}).get("probe_ports") if isinstance(topo, dict) else None
+        if not meta_probes:
+            return None, []
+        loop_i = cin_idx[0]
+        out, warns = {}, []
+        for pm in meta_probes:
+            lbl = pm.get("label")
+            i = idx.get(lbl)
+            if i is None:
+                raise ValueError(
+                    f"probe port {lbl!r} is declared in topo.probe_ports but absent from "
+                    f"the solved port list {ports} — the ports sidecar does not describe "
+                    f"this solve; re-run the extraction rather than reporting a null")
+            pulled = pm.get("pulled_new_copper")
+            if pulled is None:
+                warns.append(
+                    f"probe port {lbl}: the extractor recorded no pulled_new_copper "
+                    f"verdict, so whether it perturbed the deck's copper is UNKNOWN — "
+                    f"do not read L_loop from this run as unperturbed")
+            out[pm.get("name") or lbl] = dict(
+                label=lbl, a=pm.get("a"), b=pm.get("b"),
+                L=float(L[i, i]), R=float(R[i, i]),
+                R_dc=float(R_dc[i, i]),
+                L_ring=float(L_ring[i, i]), R_ring=float(R_ring[i, i]),
+                # M_to_loop is the mutual to the REDUCED commutation loop (all Cin
+                # ports, weighted by their current split). M_to_first_cin is the raw
+                # matrix row it used to be — kept because it is the only one that is
+                # a direct matrix read, and the two differ whenever n_cin > 1.
+                M_to_loop=_probe_eff_mutual(i),
+                M_to_loop_basis=[ports[j] for j in cin_idx],
+                M_to_first_cin=float(L[i, loop_i]),
+                M_to_loop_port=ports[loop_i],
+                freq_Hz=f, R_dc_freq_Hz=f_dc, ring_freq_Hz=f_ring,
+                pulled_new_copper=pulled,
+                retained_nodes_added=pm.get("retained_nodes_added"),
+                a_terminal=pm.get("a_terminal"), b_terminal=pm.get("b_terminal"),
+            )
+        return out, warns
+
+    probe_block, probe_warns = _probe_block()
+    warn.extend(probe_warns)
+
     def LL(a, b):
         return float(L[a, b]) if (a is not None and b is not None) else 0.0
 
@@ -1300,10 +1365,6 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     L_gate_ls = representative(ls_devices, "L_gate", LL(il, il))
     R_gate_ls = representative(ls_devices, "R_gate", RR(il))
     m_gate = LL(ih, il)
-    if len(hs_devices) > 1 or len(ls_devices) > 1:
-        warn.append(
-            "per-device parallel-FET ports present: side-level L_gate/csi scalars are "
-            "max-per-device compatibility values; use parallel_devices for per-ref data")
 
     # A missing gate port (e.g. --allow-missing-gate-ports on a board whose gate
     # routing the KiCad importer dropped) leaves ih/il None, which the helpers
@@ -1339,6 +1400,39 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     ls_dropped = _dropped_device_refs("ls")
     hs_gate_available = _side_gate_available("hs", ih)
     ls_gate_available = _side_gate_available("ls", il)
+
+    # ---- parallel-FET side scalars: INFO when the per-ref replacement is really there ----
+    # With >1 device on a side, the side-level L_gate/csi scalars are max()-per-device
+    # (`representative()` above). Only the .SUBCKT in parasitics.lib bakes that reduction into
+    # a number -- and it is not cleanly conservative: max() overstates the lumped CSI, which
+    # emit.py then SUBTRACTS from L_loop, understating the loop stub. So the caveat is real and
+    # stays with those numbers, in the .lib header.
+    #
+    # But it is not a defect for the consumer that matters: the loss deck reads parallel_devices
+    # (loss/lib/deck.py:229) and emits per-device Lscs/Lg, never touching the side scalars. So
+    # demote to INFO -- but ONLY on positive evidence that the per-ref data it points at is
+    # actually emitted AND complete. If a device's ports were dropped, or a row is missing its
+    # csi/L_gate, then parallel_devices CANNOT replace the scalars and the max() reduction is
+    # all a consumer has: that stays a WARNING, and says why.
+    if len(hs_devices) > 1 or len(ls_devices) > 1:
+        msg = ("per-device parallel-FET ports present: side-level L_gate/csi scalars are "
+               "max-per-device compatibility values; use parallel_devices for per-ref data")
+        dropped = list(hs_dropped or []) + list(ls_dropped or [])
+        rows_complete = all(
+            d.get("csi") is not None and d.get("L_gate") is not None
+            for d in (hs_devices + ls_devices))
+        if is_per_device and not dropped and rows_complete:
+            info_base.append(
+                msg + " — the per-ref rows are complete, so this caveats only the .SUBCKT in "
+                "parasitics.lib (a hand-DPT artifact); the loss deck consumes parallel_devices "
+                "and never reads the side scalars")
+        else:
+            warn.append(
+                msg + " — but the per-ref rows are NOT usable here ("
+                + (f"ports dropped for {', '.join(dropped)}" if dropped
+                   else "parallel_devices not emitted" if not is_per_device
+                   else "a device row is missing csi/L_gate")
+                + "), so the max-per-device scalars are all a consumer has")
     if not hs_gate_available:
         csi_hs = csi_hs_loop = L_gate_hs = R_gate_hs = None
     if not ls_gate_available:
@@ -1359,6 +1453,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         # cap_only/switch_residual combine). Keep both so that decision stays re-runnable.
         reduce_warn_base=warn,
         reduce_scalar_warn=scalar_warn,
+        reduce_info_base=info_base,
         reduce_warn=None, reduce_info=None,   # set by classify_cin_warnings() below
         L_eff_sweep=sweep, n_cin=len(cin_idx),
         L_gate_hs=L_gate_hs,
@@ -1409,6 +1504,14 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         csi_hs_loop=csi_hs_loop,
         csi_ls_loop=csi_ls_loop,
         m_gate=m_gate,
+        probe_ports=probe_block,
+        # Machine-readable top-level flag so a consumer can refuse this payload
+        # without walking the per-probe block. None = no probes declared.
+        probe_ports_perturbed=(
+            None if not probe_block
+            else (None if any(v["pulled_new_copper"] is None
+                              for v in probe_block.values())
+                  else any(v["pulled_new_copper"] for v in probe_block.values()))),
         port_L=L.tolist(), port_R=R.tolist(), port_R_dc=R_dc.tolist(),
         port_R_100k=R_100k.tolist(), ports=ports, cin_ports=cin_ports,
         topo=topo, meta=meta,

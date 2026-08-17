@@ -810,8 +810,17 @@ def _coerce_scalar(name, value, typ):
     raise AssertionError(f"unhandled scalar type for {name}")
 
 
+# Structured extraction-only keys this viewer does not consume. It advertises
+# that an extraction config can be handed to it unchanged, but its type tables
+# model only scalars and homogeneous lists, so a mapping-valued key would be
+# rejected as "unknown" — breaking the advertised behaviour for any config that
+# declares one. Accept and drop them.
+IGNORED_STRUCTURED_KEYS = {"gate_net_override", "probe_ports"}
+
+
 def _validate_config(config, path):
-    allowed = set(REQUIRED_ARGS) | set(DEFAULTS) | set(LIST_TYPES) | set(SCALAR_TYPES) | BOOL_ARGS
+    allowed = (set(REQUIRED_ARGS) | set(DEFAULTS) | set(LIST_TYPES)
+               | set(SCALAR_TYPES) | BOOL_ARGS | IGNORED_STRUCTURED_KEYS)
     unknown = sorted(set(config) - allowed)
     if unknown:
         raise SystemExit(f"{path}: unknown config key(s): {', '.join(unknown)}")
@@ -819,7 +828,9 @@ def _validate_config(config, path):
     out = {}
     for key, value in config.items():
         try:
-            if key in BOOL_ARGS:
+            if key in IGNORED_STRUCTURED_KEYS:
+                continue                       # extraction-only; the viewer has no use for it
+            elif key in BOOL_ARGS:
                 if not isinstance(value, bool):
                     raise TypeError("expected boolean")
                 out[key] = value

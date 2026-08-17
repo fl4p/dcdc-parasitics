@@ -39,6 +39,7 @@ sys.path.insert(0, LIB)  # library modules live in lib/; root holds only this CL
 import numpy as np  # noqa: E402  (for the LinAlgError type on a degenerate port matrix)
 import emit  # noqa: E402
 import pcb_source  # noqa: E402
+import probe_ports as probe_ports_lib  # noqa: E402
 import solve_reduce  # noqa: E402
 
 KICAD_PY = os.environ.get(
@@ -151,6 +152,7 @@ DEFAULTS = {
     "hs_gate": None,
     "ls_gate": None,
     "gate_net_override": None,
+    "probe_ports": None,
     "hs_package": None,
     "ls_package": None,
     "hs_kelvin": False,
@@ -300,6 +302,11 @@ def run_geom(args, pitch, outdir, tag=None):
         else:
             override_str = args.gate_net_override
         cmd += ["--gate-net-override", override_str]
+    if getattr(args, "probe_ports", None):
+        # Same dict->wire-string crossing gate_net_override uses. to_arg() re-parses,
+        # so a spec that is malformed here fails BEFORE the subprocess is launched
+        # rather than inside it (args.probe_ports is a dict from YAML, a str from CLI).
+        cmd += ["--probe-ports", probe_ports_lib.to_arg(args.probe_ports)]
     env = dict(os.environ, PYTHONHASHSEED="0")
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
@@ -452,6 +459,15 @@ def _run_reduce_basis(args, pitch, workdir, pcb_input, pcb_sha256, config_sha256
                       altium_meta, basis, suffix, run_geom_fn=run_geom,
                       solve_fn=solve_reduce.solve, label_basis=False):
     basis_args = _clone_args(args, cin_extraction_basis=basis)
+    if basis == "switch_residual" and getattr(args, "probe_ports", None):
+        # The residual gauge solves exactly ONE port by construction; an extra
+        # solved port is rejected there (and rightly so). This leg is an internal
+        # calibration run for the matrix Cin combine, not the reported payload —
+        # the probe results come from the full_loop leg — so run it without the
+        # probes and SAY SO, rather than aborting a matrix extraction.
+        basis_args = _clone_args(basis_args, probe_ports=None)
+        _info("switch_residual gauge leg runs WITHOUT probe_ports (single-port "
+              "basis); probe results come from the full_loop leg")
     inp, side = run_geom_fn(basis_args, pitch, workdir, tag=basis)
     # Before solve_fn: FastHenry is the multi-minute step, so a complexity readout
     # is only actionable if it lands ahead of it. Tag the basis only when more than one
@@ -699,7 +715,7 @@ def _merge_basis_warnings(p, legs):
     three times says nothing new. Dedup is on the message text, so a warning that differs
     numerically between bases (the interesting case) still survives.
     """
-    for key in ("reduce_warn_base", "reduce_scalar_warn"):
+    for key in ("reduce_warn_base", "reduce_scalar_warn", "reduce_info_base"):
         merged = list(p.get(key) or [])
         seen = set(merged)
         for basis, leg in legs:
@@ -960,6 +976,14 @@ def build_parser():
                          "reassigned in memory and a synthetic track connects it to pad "
                          "1 of a declared sibling FET on that net. Requires explicit "
                          "--hs-ref/--ls-ref; use per-device mode for per-ref L_gate/CSI.")
+    ap.add_argument("--probe-ports", default=argparse.SUPPRESS,
+                    help="extra two-terminal ports declared by REF.PAD, e.g. "
+                         "'cap_at_d9=D9.2:D9.3,cap_q2_j3=J3.1:Q2.3'. Each becomes "
+                         "P_probe_<name> appended to the port list, plus a derived "
+                         "probe_ports block in parasitics.json (L, R, R_dc, ring-band "
+                         "L/R, mutual to the commutation port, and whether the probe "
+                         "pulled previously-unported copper into the deck). In YAML use "
+                         "the mapping form: probe_ports: {cap_at_d9: [D9.2, D9.3]}.")
     ap.add_argument("--cin-esl", type=float, default=argparse.SUPPRESS,
                     help="per-cap ESL (nH) added to each branch -> physical current "
                          "split at f_ring; 0 = ideal-cap copper-only lower bound")
@@ -1032,9 +1056,37 @@ def _load_config(path):
     except ImportError:
         raise SystemExit("extract_parasitics: PyYAML required for --config; "
                          "install with `pip install pyyaml`")
+    # yaml.safe_load accepts DUPLICATE mapping keys and silently keeps the last
+    # one. For a settings file that quietly discards a setting the user wrote;
+    # for `probe_ports` it discards a whole declared measurement BEFORE the
+    # duplicate-name guard can ever see it. Refuse duplicates at any level.
+    # Derives from SafeLoader, so no `!!python/...` tag can construct arbitrary
+    # objects; the ONLY behaviour changed is that duplicate keys now raise.
+    class _NoDuplicateKeys(yaml.SafeLoader):
+        pass
+
+    def _mapping(loader, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            try:
+                dup = key in seen
+            except TypeError:                      # unhashable key; SafeLoader errors below
+                dup = False
+            if dup:
+                raise SystemExit(
+                    f"{path}: duplicate key {key!r} in the YAML config. YAML keeps "
+                    f"only the last one, which silently discards the earlier "
+                    f"declaration; give each entry a distinct name.")
+            seen.add(key)
+        return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+    _NoDuplicateKeys.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        lambda loader, node: _mapping(loader, node))
     try:
         with open(path) as fh:
-            data = yaml.safe_load(fh)
+            data = yaml.load(fh, Loader=_NoDuplicateKeys)
     except (OSError, yaml.YAMLError) as e:
         raise SystemExit(f"{path}: failed to load YAML config: {e}")
     if not isinstance(data, dict):
@@ -1092,6 +1144,43 @@ def _validate_config(config, path):
                     out[key] = {str(k): str(v) for k, v in value.items()}
                 else:
                     raise TypeError("expected mapping of ref -> net name")
+            elif key == "probe_ports":
+                # LIST_TYPES only models homogeneous scalar lists, so this
+                # structured key gets the same hardcoded branch gate_net_override
+                # has. Shape is checked here; the FULL semantic validation
+                # (name charset, REF.PAD syntax, self-pair, duplicates) runs in
+                # parse_args, which is the only place BOTH the YAML and CLI paths
+                # meet — see the double-validation note there.
+                if value is None:
+                    out[key] = None
+                elif isinstance(value, dict):
+                    coerced = {}
+                    for k, v in value.items():
+                        # NOT str(k): YAML `1:` is an int and `"1":` is a string,
+                        # and str() would collapse them onto one probe — losing a
+                        # declared measurement, which is the failure this whole
+                        # feature is built to refuse.
+                        if not isinstance(k, str):
+                            raise TypeError(
+                                f"probe name {k!r} is {type(k).__name__}, not a "
+                                f"string; quote it in the YAML")
+                        if isinstance(v, str) or not isinstance(v, (list, tuple)):
+                            raise TypeError(
+                                f"{k}: expected a two-element list "
+                                f"[REF.PAD, REF.PAD], got {v!r}")
+                        if len(v) != 2:
+                            raise TypeError(
+                                f"{k}: a probe port has exactly TWO terminals, "
+                                f"got {len(v)}")
+                        if not all(isinstance(x, str) for x in v):
+                            raise TypeError(
+                                f"{k}: endpoints must be 'REF.PAD' strings, got {v!r} "
+                                f"(quote them if YAML parsed one as a number)")
+                        coerced[k] = [x for x in v]
+                    out[key] = coerced
+                else:
+                    raise TypeError(
+                        "expected mapping of name -> [REF.PAD, REF.PAD]")
             else:
                 raise AssertionError(f"unhandled config key {key}")
         except TypeError as e:
@@ -1149,6 +1238,23 @@ def parse_args(argv=None):
         ap.error("--zone-mesh must be one of: grid, polygon")
     if merged["terminal_mode"] not in ("padland", "single", "finite", "point"):
         ap.error("--terminal-mode must be one of: padland, single, finite, point")
+    # probe_ports: YAML bypasses argparse entirely and the CLI form is a bare
+    # string, so the ONLY place both paths meet is here. Parse (not just
+    # shape-check) so a bad REF.PAD, a self-pair, a duplicate name or an
+    # unusable label is rejected before a multi-minute extraction starts.
+    if merged.get("probe_ports"):
+        try:
+            probes = probe_ports_lib.parse_spec(merged["probe_ports"])
+        except probe_ports_lib.ProbeError as e:
+            ap.error(str(e))
+        if not probes:
+            ap.error("probe_ports: declared but empty; remove the key or name a probe")
+        if merged["cin_extraction_basis"] == "switch_residual":
+            ap.error(
+                "probe_ports cannot be combined with cin_extraction_basis "
+                "switch_residual: that basis is a single-port residual gauge and "
+                "the extractor rejects every extra solved port. Use full_loop "
+                "(or cap_only).")
     if merged.get("cin_refs") and merged.get("cin_loop_refs"):
         ap.error("--cin-refs is an alias for --cin-loop-refs; pass only one")
     if merged.get("cin_refs"):
