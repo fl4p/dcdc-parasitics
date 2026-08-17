@@ -1,0 +1,145 @@
+# flu -- the AS-BUILT extraction: single LS FET at D9, not at Q2.
+#
+# !! THIS FILE DOES NOT RUN TODAY. It is the physically faithful DECLARATION of flu, kept so the
+# target is written down, but `ls_ref: [D9]` is blocked by two independent things (found by the
+# peer session that landed gate_net_override; reproduced in the source):
+#
+#   1. gate_net_override's sibling search excludes overridden refs
+#      (`sibling_refs = declared_fet_refs - overridden_refs`) and then needs a sibling carrying
+#      pad 1 on the override net. With D9 the only LS ref AND the overridden one, no declared
+#      sibling has a pad 1 on Net-(Q2-G), so it cannot anchor.
+#   2. Dropping the override does not help: D9's pads are BuckGND/SW/BuckGND, so fet_discovery
+#      classifies gate = BuckGND = source and refuses the FET as gate-source shorted.
+#      `allow_missing_gate_ports: true` does NOT reach this -- it downgrades a MISSING gate
+#      port, not an invalid FET topology.
+#
+# The proper fix is to let a single-D9 override anchor on a NON-POPULATED footprint's pad
+# (Q2.1), which is where the real gate wire lands. Until then use
+# examples/flu-D9-probe.yaml, which declares `ls_ref: [Q2, D9]` -- known to run, at the cost of
+# carrying Q2's lead/die copper that is not on the board. That shifts the COMMUTATION loop; it
+# does not shift the local pad-to-pad probe loops, which is why the probe numbers from it stand.
+#
+# WHY THIS FILE EXISTS. loss/examples/flu.yaml consumed `examples/fugu2`, whose config
+# (fugu2-perDev-noLeads.yaml) declares `ls_ref: [Q2]`, on the reasoning "single LS FET => the
+# Q2-only extraction". The inference is fine; the premise is false. On flu the LS MOSFET is
+# fitted at D9 -- source D9.3, drain D9.2 -- with only its GATE hand-wired to Q2.1 (Fab,
+# 2026-08-17). The board bears this out (ee/hw/Fugu2 @ 8424e85):
+#
+#     D9  ST40100C      TO-220-3   pad1 BuckGND   pad2 SW   pad3 BuckGND
+#     Q2  IPP022N12NM6  TO-220-3   pad1 gate      pad2 SW   pad3 BuckGND
+#
+# i.e. the FET sits in the SCHOTTKY's land, which is also why the gate needs a wire at all --
+# D9 pad 1 is BuckGND, because a diode land has no gate pin. Q2 is EMPTY on this board.
+#
+# EVERY other Fugu2 config here uses ls_ref [Q2]. The only one that mentions D9,
+# fugu2-dualLS-perDev-noLeads.yaml, pairs it WITH Q2 for the two-FET board that faulted on
+# 2026-08-13. Nothing described flu until this file.
+#
+# PHYSICAL PRECONDITION, and it is not modelled -- CHECK IT ON THE BOARD.
+# `gate_net_override` moves D9 pad 1 onto the gate net in memory. That is only faithful if the
+# FET's gate pin is ELECTRICALLY ISOLATED from the BuckGND copper that the D9 pad-1 land is
+# part of. If the pin still sits in a plated hole tied to BuckGND, the real board has its gate
+# shorted to ground and would not switch at all -- so the fact that flu switches is evidence the
+# isolation exists, but the extraction assumes a geometry (gate pad removed from the ground
+# pour) that nobody has confirmed against the physical board. If the land was cut or the pin
+# lifted, the BuckGND copper here differs from what the .kicad_pcb says and the LS source
+# return is correspondingly wrong.
+#
+# DELIBERATELY IDENTICAL to fugu2-perDev-noLeads.yaml in every other field -- same board, same
+# per-device boundary, same lead_mm, pitch, mesh, weld_tol, margin and Cin set. The point of
+# this file is to isolate ONE variable, the LS device position, so that L_loop from here minus
+# L_loop from that config is the cost of the footprint error and nothing else. Run BOTH against
+# the current board before comparing: the committed snapshot in loss/examples/fugu2/ is pinned
+# to pcb_sha256 0b21d52 = board commit 9ac7e69 (2026-07-16), while canonical is now 8424e85
+# ("Fixed DRC errors", 2026-07-17). Comparing this extraction against that snapshot would
+# confound the footprint change with a board revision whose diff touches 252 lines of
+# SW/BuckGND/Solar.
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+
+hs_ref: [Q1, Q3]
+# THE ONE VARIABLE. flu's single LS device, in the D9 land.
+ls_ref: [D9]
+# D9 pad 1 is BuckGND on the PCB (diode land); the as-built board hand-wires the FET gate to
+# Q2.1. Reassign it in memory so the extractor sees a three-terminal FET.
+#
+# `@Q2.1` NAMES THE PAD THE WIRE ACTUALLY LANDS ON, and it is what makes `ls_ref: [D9]`
+# runnable. Without it the endpoint search only considers DECLARED, non-overridden sibling
+# FETs -- and with D9 the sole LS ref AND the overridden one, no declared sibling carries pad 1
+# on Net-(Q2-G), so the override could not anchor at all. The workaround was `ls_ref: [Q2, D9]`,
+# which buys a runnable config by adding a second LS device that is NOT ON THE BOARD, dragging
+# Q2's lead and die copper into the commutation loop. The anchor removes that trade.
+#
+# Q2.1 is already on Net-(Q2-G), which is required: the anchor is the far end of a wire that
+# exists physically, not a place to graft the net onto. An anchor on another net, on a missing
+# pad, or on a second overridden ref is a hard error.
+gate_net_override:
+  D9: "Net-(Q2-G)@Q2.1"
+
+# NO probe_ports HERE, AND cap_at_d9 IS NOT A MEASURABLE POSITION. I added
+# `probe_ports: {cap_at_d9: [D9.2, D9.3]}` to this file in 43c69d6 to replace §2's ASSUMED
+# 0.6-1.2 nH mount-ESL bound with an extracted number. That was wrong and is removed.
+#
+# With `lead_mm: 0` the die-plane closure `.equiv drain_die source_die` lands directly on D9's
+# pads, so a port across D9.2/D9.3 spans a SYNTHESIZED SHORT, not board copper: FastHenry
+# returns 1.702e-15 H against 3.575e-09 H for D9's own device port. probe_ports refuses it
+# (lib/probe_ports.py:338-360) rather than report the near-zero, which is the correct behaviour
+# -- there is no board copper between those tabs to measure, and the real mount inductance at
+# that position is the CAPACITOR'S OWN ESL. So §2's bound stays a bound; probe_ports cannot
+# retire it. Measured by the peer session end-to-end, see examples/flu-D9-probe.yaml.
+#
+# The as-built Q2.3/J3.1 position could not live here either: those pads carry no port, so
+# probing them pulls new terminal copper, and probe_ports.require_no_production_cin_network then
+# hard-fails a run that also emits the Cin network. Probes are a diagnostic -- run them in
+# examples/flu-D9-probe.yaml, which is built for exactly that and has already produced
+# cap_q2_j3 = 1.2055 nH and snubber_land = 1.7004 nH.
+
+# WHERE THE SCOPE ACTUALLY MEASURES (Fab, 2026-08-17). On flu the probes land on the EMPTY Q2
+# footprint -- C1 tip Q2.2 (SW) / ground Q2.3 (BuckGND), C2 tip Q2.1 / ground Q2.3 -- while the
+# LS FET is at D9. So the measured "switch node" is SW-to-BuckGND copper AT Q2, not the device
+# terminals, and every quantity fitted from that waveform (loop L from f(V), Coss(V), the added-C
+# inversion) carries the copper in between. These ports measure exactly that copper.
+#
+# THIS ONLY WORKS AT ls_ref [D9]. Under flu-D9-probe.yaml's `ls_ref: [Q2, D9]` the extractor
+# treats Q2 as populated and synthesizes a die-plane short across its tabs, so any probe touching
+# Q2.2/Q2.3 is refused as spanning that short. The refusal is right for that config and wrong for
+# this board -- Q2 is EMPTY -- which means flu-D9-probe.yaml silently cannot measure the position
+# the scope actually probes. That is worth knowing independently of the numbers below.
+#
+# WHAT THIS FILE DOES NOT MEASURE, and cannot: the loop C1 senses ACROSS (Q2.2 to Q2.3). Those
+# pads are on different nets with no copper joining them -- they close only through the circuit --
+# so a two-terminal port there is not well posed, and the reduction returned R_ring = -2.9 mOhm.
+# The sense-path question is instead answered by the two SAME-NET legs, which are the copper a
+# probe moved to D9 would REMOVE from the sensed loop.
+probe_ports:
+  # probe_c1 [Q2.2, Q2.3] REMOVED -- it is not a well-posed probe port. Those pads are on
+  # DIFFERENT nets (SW / BuckGND) with no copper joining them; they close only through the
+  # circuit. The reduction returned R_ring = -2.9 mOhm against a 25.3 mOhm scale and
+  # _validate_probe_numerics refused it: passive copper cannot dissipate negative power.
+  # The sense-path question is answered by the two SAME-NET legs below, which are joined by
+  # traceable board copper and are what a probe at D9 would remove from the loop.
+  sense_sw:  [Q2.2, D9.2]     # SW copper, probe tip -> LS drain
+  sense_gnd: [Q2.3, D9.3]     # BuckGND copper, probe ground -> LS source
+  cap_q2_j3:    [J3.1, Q2.3]  # the added capacitor's mount, for comparison in one run
+  # snubber_land [R11.1, C8.2] DROPPED: R11.1 has no mesh node inside its land at
+  # pitch 1.0, so its terminal bonds by PROXIMITY -- fabricated spokes that ARE the
+  # quantity for a mount-loop measurement. Not needed for the sense question.
+
+parallel_fets: per-device
+# 0, matching the config this is compared against: package leads live in the vendor _L0 model
+# and board copper uses pad-ideal closure. Note fugu2-cu.yaml warns lead_mm 0 "trips the
+# zero-length-filament SVD guard" and uses 0.1 -- that config is NOT per-device, and the
+# per-device boundary is what makes ideal closure admissible here (see db26d75).
+lead_mm: 0
+cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
+cin_network_model: scalar_trunk
+pitch: [1]
+lf_freq: 39000
+emit_cin_network: false
+weld_tol: 0.6
+zone_mesh: grid
+margin: 8.0
+out: out/flu-sense
+svg: true
