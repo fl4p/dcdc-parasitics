@@ -343,7 +343,8 @@ def test_run_geom_appends_flags_only_when_enabled():
                 hs_kelvin=False, ls_kelvin=False, include_bulk_cin=False,
                 emit_cin_network=False, cin_network_model="scalar_trunk",
                 cin_extraction_basis="full_loop", cin_closure="cell_bridge",
-                parallel_fets="lumped", allow_missing_gate_ports=False)
+                parallel_fets="lumped", gate_net_override=None,
+                allow_missing_gate_ports=False)
     captured = {}
 
     def fake_run(cmd, capture_output, text, env=None):
@@ -370,6 +371,12 @@ def test_run_geom_appends_flags_only_when_enabled():
         ep.run_geom(SimpleNamespace(merge_vias=False, merge_via_radius=1.5, **base),
                     1.0, d)
         assert "--merge-vias" not in captured["cmd"]
+        ep.run_geom(SimpleNamespace(
+            merge_vias=False, merge_via_radius=1.5,
+            **dict(base, gate_net_override={"D9": "Net-(Q2-G)"})),
+            1.0, d)
+        i = captured["cmd"].index("--gate-net-override")
+        assert captured["cmd"][i + 1] == "D9=Net-(Q2-G)"
     finally:
         ep.subprocess.run = orig_run
         ep.require_gate_ports = orig_req
