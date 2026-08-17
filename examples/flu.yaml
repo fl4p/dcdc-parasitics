@@ -63,10 +63,20 @@ hs_ref: [Q1, Q3]
 # THE ONE VARIABLE. flu's single LS device, in the D9 land.
 ls_ref: [D9]
 # D9 pad 1 is BuckGND on the PCB (diode land); the as-built board hand-wires the FET gate to
-# Q2.1. Reassign it in memory so the extractor sees a three-terminal FET. Same override
-# fugu2-dualLS-perDev-noLeads.yaml already uses for the same physical wire.
+# Q2.1. Reassign it in memory so the extractor sees a three-terminal FET.
+#
+# `@Q2.1` NAMES THE PAD THE WIRE ACTUALLY LANDS ON, and it is what makes `ls_ref: [D9]`
+# runnable. Without it the endpoint search only considers DECLARED, non-overridden sibling
+# FETs -- and with D9 the sole LS ref AND the overridden one, no declared sibling carries pad 1
+# on Net-(Q2-G), so the override could not anchor at all. The workaround was `ls_ref: [Q2, D9]`,
+# which buys a runnable config by adding a second LS device that is NOT ON THE BOARD, dragging
+# Q2's lead and die copper into the commutation loop. The anchor removes that trade.
+#
+# Q2.1 is already on Net-(Q2-G), which is required: the anchor is the far end of a wire that
+# exists physically, not a place to graft the net onto. An anchor on another net, on a missing
+# pad, or on a second overridden ref is a hard error.
 gate_net_override:
-  D9: "Net-(Q2-G)"
+  D9: "Net-(Q2-G)@Q2.1"
 
 # NO probe_ports HERE, AND cap_at_d9 IS NOT A MEASURABLE POSITION. I added
 # `probe_ports: {cap_at_d9: [D9.2, D9.3]}` to this file in 43c69d6 to replace §2's ASSUMED

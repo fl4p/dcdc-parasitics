@@ -129,6 +129,7 @@ def test_override_connects_to_declared_sibling_gate_not_nearer_resistor(monkeypa
         "D9": {
             "net": "Net-(Q2-G)",
             "gate_pad": "1",
+            "anchor_mode": "sibling_search",
             "target_ref": "Q2",
             "target_pad": "1",
             "track_layer": "B.Cu",
@@ -159,3 +160,85 @@ def test_lumped_override_warning_is_explicit(capsys):
 
     gate_net_override.warn_if_lumped("per-device", "D9=GATE")
     assert capsys.readouterr().err == ""
+
+
+def _flu_board():
+    """flu as built: the LS FET in the D9 land, gate wired to Q2.1, Q2 NOT populated."""
+    gate = _Net("Net-(Q2-G)")
+    gnd = _Net("BuckGND")
+    other = _Net("Net-(Q1-G)")
+    d9_gate = _Pad("1", gnd, 0, 0)
+    q2_gate = _Pad("1", gate, 0, 10.4)      # non-populated footprint's gate pad
+    q1_gate = _Pad("1", other, 0, 3.0)      # a declared sibling, but on ANOTHER net
+    board = _Board([
+        _Footprint("D9", [d9_gate]),
+        _Footprint("Q2", [q2_gate]),
+        _Footprint("Q1", [q1_gate]),
+    ], [gate, gnd, other])
+    return board, gate, d9_gate, q2_gate
+
+
+def test_single_d9_without_anchor_is_refused(monkeypatch):
+    """The blocker this feature exists to remove, reproduced first.
+
+    With ls_ref [D9] the only declared LS ref is also the overridden one, and the HS siblings
+    sit on their own gate nets -- so no declared sibling carries pad 1 on Net-(Q2-G).
+    """
+    board, _, _, _ = _flu_board()
+    monkeypatch.setattr(gate_net_override.pcbnew, "PCB_TRACK", _Track, raising=False)
+    with pytest.raises(SystemExit) as e:
+        gate_net_override.apply(board, "D9=Net-(Q2-G)", fet_refs=["D9", "Q1"])
+    # and the message must point at the way out, or the next person re-derives it
+    assert "anchor_ref.anchor_pad" in str(e.value)
+
+
+def test_explicit_anchor_reaches_a_non_populated_footprint(monkeypatch):
+    board, gate, d9_gate, q2_gate = _flu_board()
+    monkeypatch.setattr(gate_net_override.pcbnew, "PCB_TRACK", _Track, raising=False)
+
+    realized = gate_net_override.apply(
+        board, "D9=Net-(Q2-G)@Q2.1", fet_refs=["D9", "Q1"])
+
+    assert d9_gate.GetNetname() == "Net-(Q2-G)"
+    track = board.added[0]
+    assert track.end is q2_gate.GetPosition()
+    assert track.net is gate
+    assert realized["D9"]["target_ref"] == "Q2"
+    assert realized["D9"]["anchor_mode"] == "explicit"
+    assert realized["D9"]["track_length_mm"] == pytest.approx(10.4)
+
+
+def test_anchor_on_the_wrong_net_is_refused(monkeypatch):
+    """The anchor is the far end of a wire that EXISTS; it is not a graft point."""
+    board, _, _, _ = _flu_board()
+    monkeypatch.setattr(gate_net_override.pcbnew, "PCB_TRACK", _Track, raising=False)
+    with pytest.raises(SystemExit) as e:
+        gate_net_override.apply(board, "D9=Net-(Q2-G)@Q1.1", fet_refs=["D9", "Q1"])
+    assert "not the override net" in str(e.value)
+
+
+def test_anchor_pointing_at_a_missing_footprint_or_pad_is_refused(monkeypatch):
+    board, _, _, _ = _flu_board()
+    monkeypatch.setattr(gate_net_override.pcbnew, "PCB_TRACK", _Track, raising=False)
+    with pytest.raises(SystemExit) as e:
+        gate_net_override.apply(board, "D9=Net-(Q2-G)@Q77.1", fet_refs=["D9", "Q1"])
+    assert "not found" in str(e.value)
+    with pytest.raises(SystemExit) as e:
+        gate_net_override.apply(board, "D9=Net-(Q2-G)@Q2.9", fet_refs=["D9", "Q1"])
+    assert "has no pad" in str(e.value)
+
+
+def test_malformed_anchor_is_refused():
+    for bad in ("D9=Net-(Q2-G)@", "D9=Net-(Q2-G)@Q2", "D9=Net-(Q2-G)@Q2.1.2", "D9=@Q2.1"):
+        with pytest.raises(SystemExit):
+            gate_net_override._parse(bad)
+
+
+def test_anchor_may_not_chain_onto_another_overridden_ref(monkeypatch):
+    """Two synthetic wires in series would make the modelled length order-dependent."""
+    board, _, _, _ = _flu_board()
+    monkeypatch.setattr(gate_net_override.pcbnew, "PCB_TRACK", _Track, raising=False)
+    with pytest.raises(SystemExit) as e:
+        gate_net_override.apply(
+            board, "D9=Net-(Q2-G)@Q2.1,Q2=Net-(Q2-G)", fet_refs=["D9", "Q1", "Q2"])
+    assert "overridden ref" in str(e.value)
