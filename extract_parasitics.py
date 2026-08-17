@@ -153,6 +153,7 @@ DEFAULTS = {
     "ls_gate": None,
     "gate_net_override": None,
     "probe_ports": None,
+    "probe_allow_proximity_bond": False,
     "hs_package": None,
     "ls_package": None,
     "hs_kelvin": False,
@@ -248,6 +249,7 @@ BOOL_ARGS = {
     "allow_scalar_cin",
     "allow_invalid_scalar_cin",
     "allow_missing_gate_ports",
+    "probe_allow_proximity_bond",
     "svg",
     "viewer",
 }
@@ -302,6 +304,8 @@ def run_geom(args, pitch, outdir, tag=None):
         else:
             override_str = args.gate_net_override
         cmd += ["--gate-net-override", override_str]
+    if getattr(args, "probe_allow_proximity_bond", False):
+        cmd.append("--probe-allow-proximity-bond")
     if getattr(args, "probe_ports", None):
         # Same dict->wire-string crossing gate_net_override uses. to_arg() re-parses,
         # so a spec that is malformed here fails BEFORE the subprocess is launched
@@ -984,6 +988,13 @@ def build_parser():
                          "L/R, mutual to the commutation port, and whether the probe "
                          "pulled previously-unported copper into the deck). In YAML use "
                          "the mapping form: probe_ports: {cap_at_d9: [D9.2, D9.3]}.")
+    ap.add_argument("--probe-allow-proximity-bond", action=argparse.BooleanOptionalAction,
+                    default=argparse.SUPPRESS,
+                    help="allow a probe terminal to bond by PROXIMITY when no mesh "
+                         "node overlaps the pad land. Default refuses: those spokes "
+                         "are fabricated and, for a mount-loop measurement, ARE the "
+                         "quantity. Prefer lowering --pitch. Recorded per probe as "
+                         "bond=proximity when enabled.")
     ap.add_argument("--cin-esl", type=float, default=argparse.SUPPRESS,
                     help="per-cap ESL (nH) added to each branch -> physical current "
                          "split at f_ring; 0 = ideal-cap copper-only lower bound")

@@ -115,6 +115,10 @@ class Model:
         self.zone_nodes = set()   # names created as pour-mesh nodes
         self.keep_nodes = set()   # unported conductor components intentionally retained
         self.distributed_terminals = set()  # pad-land terminals already bonded to zone nodes
+        self.terminal_owner = {}  # node -> {ref, pad, proximity, contacts}: WHICH pad
+                                  # built this terminal and how it bonded. The node key
+                                  # is only (net, layer, snapped xy), so identity has to
+                                  # be carried separately.
         self.segs = []            # (name, na, nb, w, h)
         self.equivs = []          # (na, nb)
         self._pairs = set()       # frozenset({na, nb}) for every EMITTED seg/equiv;
@@ -1205,6 +1209,22 @@ def _same_net_zone_count(model, net, lid):
                if model.meta.get(zn) == (net, lid))
 
 
+def _pad_number(pad):
+    """Pad number as a string, or None if the object cannot supply one.
+
+    Mirrors _pad_ref's tolerance: _pad_land_terminal is called with lightweight
+    pad stubs in tests and with whatever pcbnew hands back in production, and
+    terminal-owner bookkeeping must not be able to break the extraction itself.
+    Callers that NEED identity (probe reuse) treat None as "unknown", never as a
+    match.
+    """
+    try:
+        n = pad.GetNumber()
+    except Exception:
+        return None
+    return None if n is None else str(n)
+
+
 def _pad_ref(fp):
     try:
         return fp.GetReference()
@@ -1318,6 +1338,15 @@ def _pad_land_terminal(model, net, lid, x, y, z, pad, fp=None):
         return n
     term = model.node(net, lid, x, y, z)
     model.distributed_terminals.add(term)
+    # WHICH pad owns this terminal, and HOW it bonded. The node key is only
+    # (net, layer, snapped xy), so a different same-net pad within one SNAP cell
+    # interns to the SAME node — reuse keyed on the node alone would hand a large
+    # pad the contact region built for a small one. Probes bind reuse to this
+    # identity; `proximity` records that the contacts were fabricated near the pad
+    # rather than found overlapping it.
+    model.terminal_owner[term] = dict(
+        ref=_pad_ref(fp), pad=_pad_number(pad),
+        proximity=bool(proximity), contacts=len(contacts))
     if mode == "finite":
         width = _finite_contact_width(model, contacts, pad)
         for zn in contacts:
@@ -1376,7 +1405,8 @@ def _pad_node_stack(board, model, zmap, fp, want_net):
     return None, None
 
 
-def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
+def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint,
+                          allow_proximity=False):
     """Node stack for ONE SPECIFIC pad, selected by PAD NUMBER, for a probe port.
 
     Sibling of `_pad_node_stack`, which selects the first pad on a NET. Same
@@ -1396,6 +1426,8 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
     Returns (node, info-dict).
     """
     net = pad.GetNetname()
+    ref = _pad_ref(fp)
+    num = _pad_number(pad)
     p = pad.GetPosition()
     x, y = mm(p.x), mm(p.y)
     touched = [l for l in cu if pad.IsOnLayer(l)]
@@ -1413,6 +1445,8 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
     top_node = None
     prev = None
     bonded, fell_back, reused, reasons = [], [], [], []
+    own_proximity = False          # THIS probe fabricated proximity spokes
+    inherited_proximity = False    # it reused a terminal that had been built that way
     for lid in touched:
         # If this pad already carries a terminal (it is also a FET/cap pad), REUSE
         # that node. Re-running the cascade would append a second identical set of
@@ -1430,9 +1464,28 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
         # is already there; conversely, two pour nodes sitting exactly on the pad
         # centre both "pre-exist" while nothing joins them vertically. The barrel
         # decision below therefore asks the model directly.
-        is_reused = n is not None and n in model.distributed_terminals
+        owner = model.terminal_owner.get(n) if n is not None else None
+        is_reused = (n is not None and n in model.distributed_terminals
+                     and owner is not None
+                     and owner.get("ref") == ref and owner.get("pad") == num)
+        if (n is not None and n in model.distributed_terminals and not is_reused):
+            # A terminal is here, but a DIFFERENT pad built it. The node key is
+            # only (net, layer, snapped xy), so two same-net pads inside one SNAP
+            # cell collide: reusing it would hand this pad the contact region of
+            # that one — measured as a larger pad silently inheriting a smaller
+            # pad's single-node contact patch, which materially changes spreading
+            # impedance while reporting a clean reuse.
+            other = f"{owner.get('ref')}.{owner.get('pad')}" if owner else "another pad"
+            raise probe_ports_lib.ProbeError(
+                f"probe_ports: {probe_name}: pad {endpoint} lands on the terminal "
+                f"already built for {other} — two different pads on net {net!r} "
+                f"share one {SNAP} mm node cell on layer {lid}. Their contact "
+                f"regions are not interchangeable, so this probe cannot be resolved "
+                f"to a definite land. Move the probe to an unambiguous pad.")
         if is_reused:
             reused.append(lid)
+            if owner.get("proximity"):
+                inherited_proximity = True
         else:
             n_fb = len(model.terminal_fallbacks)
             n = _pad_land_terminal(model, net, lid, x, y, zmap[lid], pad, fp=fp)
@@ -1445,6 +1498,8 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
                 n = model.node(net, lid, x, y, zmap[lid])
             else:
                 bonded.append(lid)
+                if (model.terminal_owner.get(n) or {}).get("proximity"):
+                    own_proximity = True
         # Link the THT stack iff nothing already joins these two nodes. This is the
         # only sound test: it neither duplicates a barrel an earlier consumer placed
         # (which would be parallel copper in the loop being measured) nor omits one
@@ -1463,6 +1518,24 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
             f"--pitch so a mesh node lands inside the pad land, raise --margin so the "
             f"pad is inside the meshed ROI, or check that {endpoint} is on an extracted "
             f"net (SW / Vin / GND / gate).")
+    if own_proximity and not allow_proximity:
+        # NO mesh node overlapped the pad land, so `_pad_land_terminal` bonded to
+        # the nearest RING of same-net pour nodes within
+        # (pad half-diagonal + 1.5*pitch) and returned a perfectly ordinary
+        # "padland" terminal. Those spokes are fabricated, up to ~2 mm long, and
+        # they set the very local loop inductance a probe exists to measure — a
+        # position-sensitive number resting on a position the mesh never resolved.
+        # Refuse by default; --probe-allow-proximity-bond opts in.
+        raise probe_ports_lib.ProbeError(
+            f"probe_ports: {probe_name}: pad {endpoint} has NO mesh node inside its "
+            f"land at pitch {getattr(model, 'pitch', None)} mm, so the terminal was "
+            f"bonded by PROXIMITY — spokes fabricated to nearby pour nodes rather "
+            f"than copper proven to overlap the pad. For a derived port that is an "
+            f"accepted approximation; for a mount-loop measurement those spokes ARE "
+            f"the quantity, so the result would be an artefact of the mesh. Lower "
+            f"--pitch until a node lands inside the pad, or pass "
+            f"--probe-allow-proximity-bond to accept the approximation explicitly "
+            f"(it is then recorded per probe as bond=proximity).")
     terminal = ("point_mode" if point_mode
                 else getattr(model, "terminal_mode", "padland"))
     if reused and not bonded:
@@ -1476,8 +1549,23 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint):
             f"({'; '.join(reasons)}); {len(bonded) + len(reused)} layer(s) bonded "
             f"into the pour or reused an existing terminal.\n")
         terminal += f"+point_fallback_on_{len(fell_back)}_layer(s)"
+    if inherited_proximity:
+        # NOT refused: the approximation belongs to the device/cap extraction that
+        # built this terminal, and it underlies that port and L_loop too. Refusing
+        # here would reject a probe for a decision the tool's own validated default
+        # made everywhere else. Surface it so the reader can weigh it.
+        sys.stderr.write(
+            f"WARNING: probe port {probe_name} pad {endpoint} reuses a terminal that "
+            f"was itself bonded by proximity (built by another port); its mount-loop "
+            f"L inherits that approximation.\n")
+    bond = ("proximity" if own_proximity
+            else "proximity_inherited" if inherited_proximity
+            else "point_mode" if point_mode
+            else "overlap")
     return top_node, dict(net=net, terminal=terminal, layers_bonded=len(bonded),
-                          layers_reused=len(reused), layers_fallback=len(fell_back))
+                          layers_reused=len(reused), layers_fallback=len(fell_back),
+                          bond=bond, proximity=bool(own_proximity),
+                          proximity_inherited=bool(inherited_proximity))
 
 
 def _device_closure_nodes(topo):
@@ -1509,7 +1597,7 @@ def _device_closure_nodes(topo):
     return out
 
 
-def build_probe_terminals(board, model, zmap, probes):
+def build_probe_terminals(board, model, zmap, probes, allow_proximity=False):
     """Create the pad-land terminals for every declared probe port.
 
     MUST be called BEFORE `model.stitch_zones()` / `model.weld()` — a terminal
@@ -1565,10 +1653,14 @@ def build_probe_terminals(board, model, zmap, probes):
                     f"number that is unique on this footprint.")
             pad = matching[0]
             node, info = _probe_pad_node_stack(
-                model, zmap, cu, fp, pad, probe["name"], probe[side])
+                model, zmap, cu, fp, pad, probe["name"], probe[side],
+                allow_proximity=allow_proximity)
             probe[f"{side}_node"] = node
             probe[f"{side}_net"] = info["net"]
             probe[f"{side}_terminal"] = info["terminal"]
+            probe[f"{side}_bond"] = info["bond"]
+            probe[f"{side}_proximity"] = info["proximity"]
+            probe[f"{side}_proximity_inherited"] = info["proximity_inherited"]
         if probe["a_node"] == probe["b_node"]:
             raise probe_ports_lib.ProbeError(
                 f"probe_ports: {probe['name']}: {probe['a']} and {probe['b']} intern to "
@@ -1983,7 +2075,8 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
           parallel_fets="lumped", zone_mesh="grid", terminal_mode="padland",
           cin_extraction_basis="full_loop", cin_closure="cell_bridge",
           merge_vias=False, merge_via_radius=1.0,
-          allow_missing_gate_ports=False, probe_ports=None):
+          allow_missing_gate_ports=False, probe_ports=None,
+          probe_allow_proximity_bond=False):
     zmap = layer_z_map(board)
     model = Model(cu_thickness=cu_thickness, terminal_mode=terminal_mode)
     model.pitch = pitch
@@ -2092,7 +2185,8 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     # User-declared probe-port terminals (REF.PAD <-> REF.PAD). Created HERE, with
     # every other pad-node creation, because the stitch/weld below is what bonds a
     # terminal into the pour — a terminal made after them floats and gets dropped.
-    build_probe_terminals(board, model, zmap, probes)
+    build_probe_terminals(board, model, zmap, probes,
+                          allow_proximity=probe_allow_proximity_bond)
 
     # bond every track/via/pad node into the pour mesh on its net+layer, then weld
     # near-coincident endpoints interning missed (pad-centre vs trace-end, touching
@@ -2532,6 +2626,12 @@ def main():
                          "the port list. Every failure (unknown refdes/pad, no copper "
                          "contact, label or node-pair collision, dropped as floating) "
                          "is a hard error, never a silent skip.")
+    ap.add_argument("--probe-allow-proximity-bond", action="store_true",
+                    help="allow a probe terminal to bond by PROXIMITY (fabricated "
+                         "spokes to nearby pour nodes) when no mesh node overlaps the "
+                         "pad land. Default refuses: for a mount-loop measurement "
+                         "those spokes are the quantity being measured. Recorded as "
+                         "bond=proximity per probe when enabled.")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--weld-tol", type=float, default=0.6,
                     help="fuse same-net nodes within this many mm (fixes pad/trace and "
@@ -2620,7 +2720,8 @@ def main():
                       merge_vias=args.merge_vias,
                       merge_via_radius=args.merge_via_radius,
                       allow_missing_gate_ports=args.allow_missing_gate_ports,
-                      probe_ports=args.probe_ports)
+                      probe_ports=args.probe_ports,
+                      probe_allow_proximity_bond=args.probe_allow_proximity_bond)
     except ValueError as e:
         raise SystemExit(str(e))
     dropped = topo.get("cin_dropped_ports")

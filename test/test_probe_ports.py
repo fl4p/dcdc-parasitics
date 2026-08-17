@@ -302,7 +302,11 @@ def test_partly_fallen_back_pad_does_not_get_a_duplicate_barrel():
     assert "point_fallback" in first[0]["a_terminal"]     # B.Cu had no pour
 
     second = probe_ports.parse_spec({"p": ["D9.2", "D9.3"]})
-    kicad_geom.build_probe_terminals(board, model, ZMAP, second)
+    # allow_proximity: on B.Cu (no pour) the FIRST pass left a bare pad-centre
+    # node, and _pad_via_top_contacts then offers it to the second pass as a
+    # same-layer "via top" — a proximity bond the new F4 guard refuses by default.
+    # That interaction is real but orthogonal; this test is about the BARREL.
+    kicad_geom.build_probe_terminals(board, model, ZMAP, second, allow_proximity=True)
     assert len(model.segs) == segs_after_first, "duplicate THT barrel added"
     assert second[0]["terminal_segs_added"] == 0
 
@@ -415,9 +419,114 @@ def test_perturbation_attribution_is_order_independent():
 
 
 def test_two_endpoints_that_intern_to_one_node_are_refused():
+    # Two same-net pads inside one SNAP cell. The terminal-identity guard (F3b)
+    # now catches this FIRST and with a more precise message; either way it is a
+    # refusal, never a port across one node.
     board = _Board([_Footprint("D9", [_Pad("2", "SW", 10.0, 10.0),
                                       _Pad("9", "SW", 10.0, 10.0)])])
     model = _model_with_pour(_pour_grid("SW", F_CU, 10.0, 10.0))
+    probes = probe_ports.parse_spec({"p": ["D9.2", "D9.9"]})
+    with pytest.raises(probe_ports.ProbeError, match="lands on the terminal already built for D9.2"):
+        kicad_geom.build_probe_terminals(board, model, ZMAP, probes)
+
+
+def test_F3b_reuse_is_bound_to_the_pad_that_built_the_terminal():
+    # CODEX-2 FINDING 3b: the node key is only (net, layer, snapped xy), so a
+    # DIFFERENT same-net pad within one SNAP cell interned to the same node and
+    # was handed the first pad's contact region. Reproduced with a small pad and
+    # a LARGER pad at the same spot: the large one reported
+    # `reused_existing_terminal`, added zero contacts, and inherited the small
+    # pad's single-node patch — a material change to spreading impedance.
+    small = _Pad("2", "SW", 10.0, 10.0, size_mm=0.3)
+    large = _Pad("7", "SW", 10.0, 10.0, size_mm=3.0)
+    gnd = _Pad("3", "GND", 14.0, 10.0)
+    board = _Board([_Footprint("D9", [small, large, gnd])])
+    pour = _pour_grid("SW", F_CU, 10.0, 10.0)
+    pour.update(_pour_grid("GND", F_CU, 14.0, 10.0))
+    model = _model_with_pour(pour)
+    kicad_geom.build_probe_terminals(
+        board, model, ZMAP, probe_ports.parse_spec({"first": ["D9.2", "D9.3"]}))
+    owner = model.terminal_owner[
+        model.existing_node("SW", F_CU, 10.0, 10.0, ZMAP[F_CU])]
+    assert owner["ref"] == "D9" and owner["pad"] == "2"
+
+    other = probe_ports.parse_spec({"p": ["D9.7", "D9.3"]})
+    with pytest.raises(probe_ports.ProbeError) as e:
+        kicad_geom.build_probe_terminals(board, model, ZMAP, other)
+    assert "lands on the terminal already built for D9.2" in str(e.value)
+
+
+def test_F3b_control_the_same_pad_still_reuses():
+    board = _Board([_Footprint("D9", [_Pad("2", "SW", 10.0, 10.0),
+                                      _Pad("3", "GND", 14.0, 10.0)])])
+    pour = _pour_grid("SW", F_CU, 10.0, 10.0)
+    pour.update(_pour_grid("GND", F_CU, 14.0, 10.0))
+    model = _model_with_pour(pour)
+    kicad_geom.build_probe_terminals(
+        board, model, ZMAP, probe_ports.parse_spec({"first": ["D9.2", "D9.3"]}))
+    segs = len(model.segs)
+    again = probe_ports.parse_spec({"p": ["D9.2", "D9.3"]})
+    kicad_geom.build_probe_terminals(board, model, ZMAP, again)
+    assert again[0]["a_terminal"] == "reused_existing_terminal"
+    assert len(model.segs) == segs
+
+
+def _proximity_board():
+    """A pad with NO overlapping mesh node and a same-net pour node 1 mm away."""
+    pad = _Pad("1", "SW", 10.0, 10.0, size_mm=0.1)
+    board = _Board([_Footprint("R11", [pad]),
+                    _Footprint("C8", [_Pad("2", "GND", 14.0, 10.0)])])
+    model = kicad_geom.Model()
+    model.pitch = 1.0
+    model.node("SW", F_CU, 11.0, 10.0, ZMAP[F_CU], zone=True)   # 1 mm away
+    for x, y in _pour_grid("GND", F_CU, 14.0, 10.0)[("GND", F_CU)]:
+        model.node("GND", F_CU, x, y, ZMAP[F_CU], zone=True)
+    return board, model
+
+
+def test_F4_proximity_only_bond_is_refused_by_default():
+    # CODEX-2 FINDING 4: no mesh node overlaps the pad, so _pad_land_terminal
+    # fabricates spokes to nearby pour nodes and returns an ordinary "padland"
+    # terminal. For a mount-loop measurement those spokes ARE the quantity.
+    board, model = _proximity_board()
+    probes = probe_ports.parse_spec({"snubber_land": ["R11.1", "C8.2"]})
+    with pytest.raises(probe_ports.ProbeError) as e:
+        kicad_geom.build_probe_terminals(board, model, ZMAP, probes)
+    msg = str(e.value)
+    assert "bonded by PROXIMITY" in msg
+    assert "--probe-allow-proximity-bond" in msg and "--pitch" in msg
+
+
+def test_F4_proximity_bond_is_allowed_explicitly_and_recorded():
+    board, model = _proximity_board()
+    probes = probe_ports.parse_spec({"snubber_land": ["R11.1", "C8.2"]})
+    kicad_geom.build_probe_terminals(board, model, ZMAP, probes,
+                                     allow_proximity=True)
+    assert probes[0]["a_bond"] == "proximity"
+    assert probes[0]["a_proximity"] is True
+    assert probes[0]["b_bond"] == "overlap"        # C8 really overlaps its pour
+    assert "a_bond" in probe_ports.manifest(probes)[0]
+
+
+def test_F4_real_overlap_is_not_flagged_as_proximity():
+    board = _Board([_Footprint("D9", [_Pad("2", "SW", 10.0, 10.0),
+                                      _Pad("3", "GND", 14.0, 10.0)])])
+    pour = _pour_grid("SW", F_CU, 10.0, 10.0)
+    pour.update(_pour_grid("GND", F_CU, 14.0, 10.0))
+    model = _model_with_pour(pour)
+    probes = probe_ports.parse_spec({"p": ["D9.2", "D9.3"]})
+    kicad_geom.build_probe_terminals(board, model, ZMAP, probes)
+    assert probes[0]["a_bond"] == "overlap" and probes[0]["b_bond"] == "overlap"
+    assert probes[0]["a_proximity"] is False
+
+
+def test_intern_to_one_node_guard_still_covers_point_mode():
+    # In point mode nothing is registered in distributed_terminals, so the
+    # identity guard cannot fire — the original a_node==b_node refusal is what
+    # keeps a port-across-one-node from being emitted. Keep it exercised.
+    board = _Board([_Footprint("D9", [_Pad("2", "SW", 10.0, 10.0),
+                                      _Pad("9", "SW", 10.0, 10.0)])])
+    model = _model_with_pour(_pour_grid("SW", F_CU, 10.0, 10.0), terminal_mode="point")
     probes = probe_ports.parse_spec({"p": ["D9.2", "D9.9"]})
     with pytest.raises(probe_ports.ProbeError, match="intern to the SAME node"):
         kicad_geom.build_probe_terminals(board, model, ZMAP, probes)
@@ -752,6 +861,22 @@ def test_every_guard_is_invoked_from_build():
     assert src.index("probe_ports_lib.require_unique_labels(") \
         < src.index("model.drop_floating_ports("), \
         "probe ports are added after drop_floating_ports — guard 6 cannot see them"
+    # The refusals that live inside the terminal walk rather than in probe_ports.
+    stack = inspect.getsource(kicad_geom._probe_pad_node_stack)
+    # (the message is split across f-string lines, so match a contiguous fragment)
+    assert "lands on the terminal " in stack and "already built for " in stack, \
+        "terminal-identity refusal (F3b) is not on the production path"
+    assert 'owner.get("ref") == ref and owner.get("pad") == num' in stack, \
+        "reuse is not bound to the pad identity that built the terminal"
+    assert "if own_proximity and not allow_proximity:" in stack, \
+        "proximity refusal (F4) is not on the production path"
+    assert "allow_proximity=allow_proximity" in \
+        inspect.getsource(kicad_geom.build_probe_terminals), \
+        "the proximity policy never reaches the terminal walk"
+    # ...and the numeric validation, which lives downstream in the reducer.
+    red = inspect.getsource(solve_reduce.reduce_parasitics)
+    assert "_validate_probe_numerics(i, lbl)" in red, \
+        "probe numeric validation (F1) is not called from reduce_parasitics"
 
 
 def test_production_cin_network_is_refused_on_a_perturbed_deck():
@@ -864,6 +989,49 @@ def test_probe_ports_perturbed_is_a_top_level_flag():
     unk = _reduce([[9e-9, 0.0], [0.0, 2e-9]],
                   ["P_pwr", "P_probe_cap_at_d9"], topo)
     assert unk["probe_ports_perturbed"] is None
+
+
+def test_F1_nan_only_in_the_probe_row_is_refused_not_emitted():
+    # CODEX-2 FINDING 1: a valid P_pwr row with NaN ONLY in the probe row used to
+    # emit L/R/R_dc/L_ring/R_ring/M_to_loop all as nan, with no warning.
+    Lm = [[9e-9, 0.0], [0.0, float("nan")]]
+    with pytest.raises(ValueError, match="non-finite"):
+        _reduce(Lm, ["P_pwr", "P_probe_cap_at_d9"], _topo())
+
+
+def test_F1_non_positive_self_inductance_is_refused():
+    for bad in (0.0, -2e-9):
+        with pytest.raises(ValueError, match="not positive"):
+            _reduce([[9e-9, 0.0], [0.0, bad]],
+                    ["P_pwr", "P_probe_cap_at_d9"], _topo())
+
+
+def test_F1_materially_negative_self_resistance_is_refused():
+    # R comes from Z.real; build Z directly so R can be made negative.
+    Z = np.array([[1j * _W * 9e-9, 0.0],
+                  [0.0, -5e-3 + 1j * _W * 2e-9]], dtype=complex)
+    with pytest.raises(ValueError, match="materially negative"):
+        solve_reduce.reduce_parasitics({5e6: Z},
+                                       ["P_pwr", "P_probe_cap_at_d9"], _topo(), {},
+                                       plateau=5e6, cin_ports=["P_pwr"])
+
+
+def test_F1_non_reciprocal_probe_submatrix_is_refused():
+    Lm = [[9e-9, 3e-9], [8e-9, 2e-9]]          # L[0,1] != L[1,0], grossly
+    with pytest.raises(ValueError, match="not reciprocal"):
+        _reduce(Lm, ["P_pwr", "P_probe_cap_at_d9"], _topo())
+
+
+def test_F1_thresholds_do_not_false_fire_on_realistic_values():
+    # CONTROL, and the reason the thresholds are what they are: the real Fugu2
+    # solve has scaled reciprocity 9.6e-4 and cond(Cin+probe)=49, while the NAIVE
+    # relative reciprocity metric reads 1.386 and cond(full)=2.6e6 on that same
+    # valid board. A guard using either of those would refuse every real run.
+    Lm = [[8.56e-9, 2.79e-12, 7.25e-10],
+          [2.79e-12, 8.40e-9, 2.01e-10],
+          [7.25e-10, 2.01e-10, 1.2055e-9]]
+    p = _reduce(Lm, ["P_pwr", "P_pwr1", "P_probe_cap_at_d9"], _topo())
+    assert p["probe_ports"]["cap_at_d9"]["L"] == pytest.approx(1.2055e-9)
 
 
 def test_no_probe_ports_declared_leaves_the_block_absent():

@@ -211,6 +211,56 @@ deleting their production call sites would have left them green
 (`test_every_guard_is_invoked_from_build`, which also pins that terminals are built
 before `stitch_zones` and ports added before `drop_floating_ports`).
 
+## Second independent Codex review — 3 further findings, all closed
+
+A second review, run in parallel by the coordinator, found three defects the
+first did not. Its verdict: *"I would not use the extracted value for publication
+until findings 1–4 are closed."* All three are the same shape — **a plausible
+number where there should be a refusal** — and all three were confirmed against
+HEAD before being fixed.
+
+| # | Sev | Finding | Fix |
+|---|-----|---------|-----|
+| F1 | High | `solve_reduce` converted every probe entry with bare `float()` and validated nothing. A matrix with a valid `P_pwr` row and NaN **only** in the probe row emitted `L`, `R`, `R_dc`, `L_ring`, `R_ring` and `M_to_loop` all as `nan` with no warning; finite negative self-L/self-R passed too. The existing conditioning check covers only the Cin submatrix, never probe rows | `_validate_probe_numerics()`: refuses non-finite values (diagonal *and* the whole coupling row), non-positive self-L, materially negative self-R, non-reciprocal and ill-conditioned probe submatrices |
+| F3b | High | Terminal reuse was keyed on the node alone — `(net, layer, snapped xy)` — not on pad identity. A **larger** pad at the same position reported `reused_existing_terminal`, added zero contacts and inherited a **smaller** pad's single-node contact region, materially changing spreading impedance while reporting a clean reuse | `Model.terminal_owner` records which pad built each terminal; reuse requires a `(ref, pad)` match, and a foreign terminal in the same SNAP cell is refused |
+| F4 | Med | When no mesh node overlapped the pad, `_pad_land_terminal` fell through to `_pad_proximity_contacts` and the probe path accepted it as an ordinary `padland` terminal. A 0.1 mm pad with no overlapping copper bonded to a node 1 mm away and reported success; nothing in the probe entry said proximity had been used | Refused **by default** for probes, with `--probe-allow-proximity-bond` as an explicit opt-in; `bond` (`overlap` / `proximity` / `proximity_inherited` / `point_mode`) now reaches the probe entry and `parasitics.json` |
+
+### The thresholds are measured, not guessed — and the obvious ones were wrong
+
+F1 asked for reciprocity and conditioning checks. Implementing them naively would
+have **refused every valid extraction**. Measured on the good Fugu2 solve:
+
+| metric | naive form | on a VALID board | scaled/scoped form | on the same board |
+|---|---|---|---|---|
+| reciprocity | `|a−b| / max(|a|,|b|)` | **1.386** (fails) | `|a−b| / sqrt(|L_ii·L_jj|)` | **9.6e-4** (passes, 10× margin at a 1e-2 gate) |
+| conditioning | `cond(full port matrix)` | **2.6e6** (fails a 1e6 gate) | `cond(Cin+probe submatrix)` | **49** (passes, 4+ orders of margin) |
+
+The naive reciprocity metric blows up because near-zero off-diagonals dominate it
+— the worst pair on the real board is `P_pwr`/`P_pwr1` at 2.79e-12 vs −1.08e-12,
+both effectively zero. `test_F1_thresholds_do_not_false_fire_on_realistic_values`
+pins this with the real numbers, so a future tightening cannot silently start
+rejecting good boards.
+
+### A judgement call worth flagging
+
+F4 refuses a probe that **itself** fabricated proximity spokes, but only *warns*
+when a probe **reuses** a terminal that some other port had already built that
+way (`bond: proximity_inherited`). Refusing the inherited case would reject a
+probe because of a decision the device/cap extraction made — the same
+approximation that underlies that device's own port and `L_loop`, everywhere, by
+validated default. Surfaced, not silent; refusing it would have been inconsistent
+rather than safer.
+
+**A claim of mine that the instrumentation falsified.** Before `bond` existed I
+read the raw `terminal_regions` rows positionally and concluded that
+`cap_q2_j3`'s Q2.3 end reused a proximity-bonded terminal. The instrumented run
+says otherwise: `cap_q2_j3` is **`overlap` / `overlap`** at both ends. My
+positional reading of which Q2 pad owned which row was simply wrong. The
+falsification therefore rests on two genuine overlap bonds, not on an inherited
+approximation — a stronger result than I claimed, and a reminder that the reason
+to emit provenance is that reasoning about it is unreliable. `snubber_land`'s
+R11.1 end is the only real proximity case on this board.
+
 ## Real-board verification (this is no longer a paper feature)
 
 KiCad's Python is available here, so the geometry step was run for real against
@@ -259,6 +309,19 @@ Plan step 4 is done. Full pipeline (geometry + FastHenry) on
 | `cap_q2_j3` | ~18–21 nH | **L = 1.2055 nH**, `L_ring` = 1.1292 nH | **FALSIFIED** |
 | `snubber_land` | between the two | **L = 1.7004 nH**, `L_ring` = 2.0517 nH | — |
 | `cap_at_d9` | ~1–3 nH | **not measurable** — spans D9's own closure (guard 10) | refused |
+
+**Re-run after F1/F3b/F4: every number is bit-identical.** Same config, same deck
+(2774 nodes / 6618 segs / 18 ports), FastHenry re-solved:
+
+| quantity | pre-fix | post-fix |
+|---|---|---|
+| `L_loop` | 1.222925 nH | **identical** |
+| `cap_q2_j3` L / L_ring / M_to_loop | 1.205550 / 1.129237 / 0.208549 nH | **identical** |
+| `snubber_land` L / L_ring / M_to_loop | 1.700354 / 2.051691 / 0.126487 nH | **identical** |
+
+So **the falsification did not rest on any of the three defects** — they were
+latent hazards on this board, not active contaminants. `bond` now records
+`overlap`/`overlap` for `cap_q2_j3` and `proximity`/`overlap` for `snubber_land`.
 
 Re-run **after** guard 10 and all seven Codex fixes, with the shipped
 `examples/flu-D9-probe.yaml` (exit 0, 18 ports, `L_loop` 1.2229 nH). It reproduces

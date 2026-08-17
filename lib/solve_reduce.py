@@ -1271,6 +1271,69 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         m = Z[i, cin_idx]
         return float((complex(np.dot(m, y) / denom)).imag / w)
 
+    def _validate_probe_numerics(i, lbl):
+        """Refuse to publish a probe row that is not a physical measurement.
+
+        `float()` happily carries NaN/inf straight into the JSON, and the existing
+        condition check covers only the Cin submatrix — never probe rows. A solve
+        that produced NaN for a probe (or a negative self-R, or a non-positive
+        self-L) has not measured that position, and must not report a number.
+
+        Thresholds are set from the real Fugu2 solve, not guessed:
+          * reciprocity is scaled by sqrt(|Lii*Ljj|), the natural scale of a
+            mutual. The naive |a-b|/max(|a|,|b|) reads 1.386 on a VALID board
+            because near-zero off-diagonals blow it up (P_pwr/P_pwr1 are ~1e-12);
+            scaled, the same matrix reads 9.6e-4, so 1e-2 leaves 10x margin.
+          * conditioning is taken on the Cin+probe submatrix (real: 49), NOT the
+            full port matrix — that reads 2.6e6 on a perfectly good board and a
+            1e6 gate on it would refuse every real run.
+        """
+        bad = []
+        vals = dict(L=L[i, i], R=R[i, i], R_dc=R_dc[i, i],
+                    L_ring=L_ring[i, i], R_ring=R_ring[i, i])
+        for name, v in vals.items():
+            if not np.isfinite(v):
+                bad.append(f"{name}={v}")
+        if not np.all(np.isfinite(L[i, :])) or not np.all(np.isfinite(R[i, :])):
+            bad.append("non-finite entries in the probe's coupling row")
+        if bad:
+            raise ValueError(
+                f"probe port {lbl}: the solve produced non-finite values "
+                f"({', '.join(bad)}). This is not a measurement of that position and "
+                f"will not be emitted as one. A NaN in a single port row usually means "
+                f"a singular or badly scaled Zc — check for duplicate .external node "
+                f"pairs, a floating terminal, or a degenerate mesh at this pitch.")
+        if not (vals["L"] > 0):
+            raise ValueError(
+                f"probe port {lbl}: self-inductance is {vals['L']:.6g} H, which is not "
+                f"positive. A passive loop of copper cannot have non-positive self-L; "
+                f"the port is degenerate (spanning a short, or numerically collapsed).")
+        # "materially" negative: scaled to the largest diagonal R in the solve, so
+        # this tracks the run's own numerical noise floor instead of a fixed epsilon.
+        r_scale = float(np.max(np.abs(np.diag(R)))) or 1.0
+        for name in ("R", "R_dc", "R_ring"):
+            if vals[name] < -1e-9 * r_scale:
+                raise ValueError(
+                    f"probe port {lbl}: {name} = {vals[name]:.6g} ohm is materially "
+                    f"negative (scale {r_scale:.3g} ohm). Passive copper cannot "
+                    f"dissipate negative power; the port matrix is not physical here.")
+        sub = sorted(set(list(cin_idx) + [i]))
+        Ls = L[np.ix_(sub, sub)]
+        dd = np.sqrt(np.abs(np.outer(np.diag(Ls), np.diag(Ls))))
+        recip = float(np.max(np.abs(Ls - Ls.T) / np.maximum(dd, 1e-30)))
+        if recip > 1e-2:
+            raise ValueError(
+                f"probe port {lbl}: the Cin+probe inductance submatrix is not "
+                f"reciprocal (max scaled asymmetry {recip:.3g} > 1e-2). A passive "
+                f"structure must give L[a,b]==L[b,a]; this solve did not, so the "
+                f"mutual terms — and M_to_loop with them — are unreliable.")
+        cond = float(np.linalg.cond(Ls))
+        if not np.isfinite(cond) or cond > 1e6:
+            raise ValueError(
+                f"probe port {lbl}: the Cin+probe inductance submatrix is "
+                f"ill-conditioned (cond={cond:.3g} > 1e6), so the probe's reduction "
+                f"against the commutation loop is numerically meaningless.")
+
     def _probe_block():
         meta_probes = (topo or {}).get("probe_ports") if isinstance(topo, dict) else None
         if not meta_probes:
@@ -1285,6 +1348,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                     f"probe port {lbl!r} is declared in topo.probe_ports but absent from "
                     f"the solved port list {ports} — the ports sidecar does not describe "
                     f"this solve; re-run the extraction rather than reporting a null")
+            _validate_probe_numerics(i, lbl)
             pulled = pm.get("pulled_new_copper")
             if pulled is None:
                 warns.append(
@@ -1308,6 +1372,11 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                 pulled_new_copper=pulled,
                 retained_nodes_added=pm.get("retained_nodes_added"),
                 a_terminal=pm.get("a_terminal"), b_terminal=pm.get("b_terminal"),
+                # How each end actually met copper: "overlap" (mesh node proven
+                # inside the pad land), "proximity" (spokes fabricated to nearby
+                # pour nodes — refused unless explicitly allowed),
+                # "proximity_inherited", or "point_mode".
+                a_bond=pm.get("a_bond"), b_bond=pm.get("b_bond"),
             )
         return out, warns
 

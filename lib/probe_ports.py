@@ -391,6 +391,8 @@ def manifest(probes):
     """JSON-safe provenance for the sidecar / parasitics.json topo."""
     keys = ("name", "label", "a", "b", "a_ref", "a_pad", "b_ref", "b_pad",
             "a_net", "b_net", "a_terminal", "b_terminal",
+            "a_bond", "b_bond", "a_proximity", "b_proximity",
+            "a_proximity_inherited", "b_proximity_inherited",
             "terminal_segs_added", "terminal_nodes_added",
             "endpoint_new_in_probe_phase", "retained_nodes_added",
             "pulled_new_copper", "perturbation_basis")

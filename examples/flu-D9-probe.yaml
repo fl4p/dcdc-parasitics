@@ -93,6 +93,18 @@ cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
 # its output. Read probe_ports.<name>.L from it and nothing else; take the loss
 # deck's parasitics from an unprobed run of fugu2-dualLS-perDev-noLeads.yaml.
 cin_network_model: scalar_trunk
+# REQUIRED for snubber_land on THIS board at pitch 1.0, and it is a caveat on that
+# number, not a formality. R11 pad 1 has NO mesh node inside its land at this
+# pitch, so its terminal is bonded by PROXIMITY: spokes fabricated to pour nodes
+# up to ~(pad half-diagonal + 1.5*pitch) away. For a mount-loop measurement those
+# spokes are part of the quantity, so snubber_land's 1.70 nH is partly an artefact
+# of the mesh. The extractor refuses this by default; accepting it here is
+# deliberate, and every probe records `bond` (overlap / proximity /
+# proximity_inherited) in parasitics.json so the distinction survives into the
+# output. cap_q2_j3 is bond=overlap at BOTH ends (measured, not assumed) -- the
+# FALSIFICATION does not rest on the approximation. To remove the caveat on
+# snubber_land, drop --pitch to ~0.5 mm (slower, and it re-meshes the whole board).
+probe_allow_proximity_bond: true
 pitch: [1]
 lf_freq: 39000
 emit_cin_network: false
