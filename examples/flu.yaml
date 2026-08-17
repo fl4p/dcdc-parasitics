@@ -1,0 +1,67 @@
+# flu -- the AS-BUILT extraction: single LS FET at D9, not at Q2.
+#
+# WHY THIS FILE EXISTS. loss/examples/flu.yaml consumed `examples/fugu2`, whose config
+# (fugu2-perDev-noLeads.yaml) declares `ls_ref: [Q2]`, on the reasoning "single LS FET => the
+# Q2-only extraction". The inference is fine; the premise is false. On flu the LS MOSFET is
+# fitted at D9 -- source D9.3, drain D9.2 -- with only its GATE hand-wired to Q2.1 (Fab,
+# 2026-08-17). The board bears this out (ee/hw/Fugu2 @ 8424e85):
+#
+#     D9  ST40100C      TO-220-3   pad1 BuckGND   pad2 SW   pad3 BuckGND
+#     Q2  IPP022N12NM6  TO-220-3   pad1 gate      pad2 SW   pad3 BuckGND
+#
+# i.e. the FET sits in the SCHOTTKY's land, which is also why the gate needs a wire at all --
+# D9 pad 1 is BuckGND, because a diode land has no gate pin. Q2 is EMPTY on this board.
+#
+# EVERY other Fugu2 config here uses ls_ref [Q2]. The only one that mentions D9,
+# fugu2-dualLS-perDev-noLeads.yaml, pairs it WITH Q2 for the two-FET board that faulted on
+# 2026-08-13. Nothing described flu until this file.
+#
+# PHYSICAL PRECONDITION, and it is not modelled -- CHECK IT ON THE BOARD.
+# `gate_net_override` moves D9 pad 1 onto the gate net in memory. That is only faithful if the
+# FET's gate pin is ELECTRICALLY ISOLATED from the BuckGND copper that the D9 pad-1 land is
+# part of. If the pin still sits in a plated hole tied to BuckGND, the real board has its gate
+# shorted to ground and would not switch at all -- so the fact that flu switches is evidence the
+# isolation exists, but the extraction assumes a geometry (gate pad removed from the ground
+# pour) that nobody has confirmed against the physical board. If the land was cut or the pin
+# lifted, the BuckGND copper here differs from what the .kicad_pcb says and the LS source
+# return is correspondingly wrong.
+#
+# DELIBERATELY IDENTICAL to fugu2-perDev-noLeads.yaml in every other field -- same board, same
+# per-device boundary, same lead_mm, pitch, mesh, weld_tol, margin and Cin set. The point of
+# this file is to isolate ONE variable, the LS device position, so that L_loop from here minus
+# L_loop from that config is the cost of the footprint error and nothing else. Run BOTH against
+# the current board before comparing: the committed snapshot in loss/examples/fugu2/ is pinned
+# to pcb_sha256 0b21d52 = board commit 9ac7e69 (2026-07-16), while canonical is now 8424e85
+# ("Fixed DRC errors", 2026-07-17). Comparing this extraction against that snapshot would
+# confound the footprint change with a board revision whose diff touches 252 lines of
+# SW/BuckGND/Solar.
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+
+hs_ref: [Q1, Q3]
+# THE ONE VARIABLE. flu's single LS device, in the D9 land.
+ls_ref: [D9]
+# D9 pad 1 is BuckGND on the PCB (diode land); the as-built board hand-wires the FET gate to
+# Q2.1. Reassign it in memory so the extractor sees a three-terminal FET. Same override
+# fugu2-dualLS-perDev-noLeads.yaml already uses for the same physical wire.
+gate_net_override:
+  D9: "Net-(Q2-G)"
+
+parallel_fets: per-device
+# 0, matching the config this is compared against: package leads live in the vendor _L0 model
+# and board copper uses pad-ideal closure. Note fugu2-cu.yaml warns lead_mm 0 "trips the
+# zero-length-filament SVD guard" and uses 0.1 -- that config is NOT per-device, and the
+# per-device boundary is what makes ideal closure admissible here (see db26d75).
+lead_mm: 0
+cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
+cin_network_model: matrix
+pitch: [1]
+lf_freq: 39000
+emit_cin_network: true
+weld_tol: 0.6
+zone_mesh: grid
+margin: 8.0
+out: out/flu
+svg: true
