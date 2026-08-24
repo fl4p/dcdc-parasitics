@@ -50,6 +50,139 @@ the producer can separate cap-side and switch-side copper without mixing gauges.
 | `P_ls` | SW → GND(bulk), via LS leads | LS conduction R |
 | `P_probe_<name>` | any declared `REF.PAD` ↔ `REF.PAD` (opt-in, see `probe_ports`) | mount-loop L/R of that position |
 
+### Electrostatic foundation (Palace)
+
+Palace is the primary maintained electrostatic solver. The
+`palace-electrostatic-pcb-gates-v1` path uses conformal tetrahedral volume
+meshes, finite closed conductor terminals, explicit air/dielectric material
+volumes, and a declared outer Dirichlet boundary that approximates
+electrostatic infinity. That boundary is never treated as PE, chassis, a PCB
+net, or SPICE node `0`; an outer-domain expansion ladder is mandatory.
+
+`lib/palace_mesh.py` writes the qualified Gmsh fixtures. Real PCB geometry uses
+`lib/palace_plc_mesh.py`: MeshPy nodes one global planar conductor/material
+arrangement, that exact arrangement is reused at every geometry z-plane, and
+triangular prisms receive a deterministic conformal tetrahedral split. It
+rejects open/non-manifold shells, incomplete terminal/material coverage, and
+nonpositive tetrahedral Jacobians, then emits first-order Gmsh 2.2 directly.
+`lib/palace_build.py` binds the pinned source patch, CMake caches,
+linked libraries, launcher, wrapper, and binary. `lib/palace.py` binds those
+manifests to Palace JSON configs, runs the solver, gates an independently
+ordered 17-digit terminal reaction-charge Maxwell matrix against Palace's
+energy matrix, and preserves exact streams, resolved config, runtime metadata,
+and execution identity. The qualification build also hard-checks explicit
+`||b-Ax||/||b||` after every terminal solve. Mesh,
+polynomial-order, and finite-domain ladders over the frozen air, enclosed-FR4,
+and PCB-like fixtures must pass before any Fugu run. See
+`docs/palace-electrostatic-qualification-plan.md`.
+
+The complete 24-rung fixture ladder has passed. `extract_palace_mesh.py` runs
+the two-interpreter KiCad adapter, preserves every named net and flashed no-net
+item separately, retains NPTH holes as voids rather than terminals, and binds
+PCB, dump, stackup/material policy, geometry controls, mesher, and output bytes:
+
+```sh
+PYTHONPATH=out/palace-qualification/venv/lib/python3.14/site-packages \
+  python3 extract_palace_mesh.py board.kicad_pcb \
+  --material 'Top Solder Mask=3.3' \
+  --material 'Bottom Solder Mask=3.3' \
+  -o out/palace-pcb-geometry
+```
+
+Material overrides are explicit assumptions, not validated values. A physical
+Fugu model still requires source-bound P2 evidence, convergence ladders,
+independent review, actual material identification or bounded sensitivity, and
+native process containment acceptance.
+
+### Diagnostic legacy (FasterCap)
+
+`lib/fastercap.py` provides the independent 3-D electrostatic path: it closes
+conforming 2-D triangle meshes into finite-thickness conductor surfaces, emits
+closed interfaces between dielectric regions, writes self-contained FasterCap
+panel files, and runs the headless solver through `$FASTERCAP`. Each deck has a
+hashed sidecar manifest with stable solver labels. The runner returns a Maxwell
+matrix only after exact label identity, normal termination, final automatic-norm,
+per-RHS GMRES, live process-tree resource, raw reciprocity/passivity, strict
+post-average passivity, and exact branch-reconstruction gates pass. Complete
+matrices from failed or partial runs remain diagnostic-only. Manual fixed-`-m`/
+fixed-`-t` probes use a separate API and never expose a qualified matrix. The
+backend-neutral `lib/maxwell.py` validates matrix symmetry/passivity, converts
+`Q = C_M V` into pairwise plus reference capacitors, reconstructs the original
+matrix for an exact contract check, and emits a passive SPICE subcircuit. The
+runner enforces a separate per-coupling reciprocity tolerance before returning
+the symmetric average; FasterCap's `-a` tolerance controls refinement
+convergence and is not reused as a reciprocity bound. Every invocation preserves
+byte-exact content-addressed stdout/stderr and writes either a
+`rejected_diagnostic` manifest or a `numerically_converged_diagnostic` manifest
+under gate policy `fastercap-pcb-gates-v1`. Diagnostic convergence is not a
+physical-model qualification.
+
+This foundation is deliberately not wired into `extract_parasitics.py` yet.
+`extract_capacitance.py` provides the first two-interpreter KiCad adapter: a
+stdlib-only KiCad Python step dumps exact filled-zone contours in millimetres,
+then system Python uses Shapely 2.1 constrained triangulation to close grouped
+copper surfaces and converts every panel coordinate to FasterCap SI metres. For
+example:
+
+```sh
+python3 extract_capacitance.py board.kicad_pcb \
+  --group SWITCH=SW --group RETURN=PGND,GND \
+  -o out/electrostatic-geometry
+
+# Explicit opt-in reduced diagnostic representation
+python3 extract_capacitance.py board.kicad_pcb \
+  --group SWITCH=SW --group RETURN=PGND,GND \
+  --representation effective-thickness \
+  --effective-thickness-um 34 --anchor midplane \
+  -o out/electrostatic-geometry-reduced
+```
+
+Generated names encode source, representation, material scope, and lifecycle,
+for example `filled_zones_physical_air_only_diagnostic.lst` and
+`filled_zones_effective_34um_midplane_air_only_diagnostic.lst`. Geometry metadata
+uses a canonical content hash in its filename. Its fail-closed loader verifies
+the filename/content ID plus the referenced deck, deck manifest, and reduction
+provenance hashes. The deck manifest binds the same reduction provenance and its
+hash; solver run manifests then bind the deck manifest plus all solver settings
+and streams.
+
+Both decks are geometry-development diagnostics, **not physical PCB capacitance
+models**. They exclude tracks, pads, vias, and copper graphics and do not yet emit
+the parsed stackup's dielectric interfaces. The only fixture-qualified reduction
+is watertight closed 35 µm to 34 µm copper, midplane anchored, for overlapping
+1 mm square parallel plates in air with a 100 µm source face gap and an explicit
+pinned synthetic-fixture context. The reusable API marks any PCB/Fugu2 or
+full-stackup use `outside_fixture_envelope`, fixes
+`physical_validation_authorized=false`, and caps its lifecycle at
+`numerically_converged_diagnostic`.
+
+The content-addressed geometry manifest records limitations, PCB and contour-dump
+hashes, KiCad version/interpreter, dump record count, areas, repair counts,
+simplification error, minimum boundary segment, triangle/panel counts, source and
+effective thicknesses, anchor, gap/displacement errors, qualification scope, and
+artifact class. Use `--geometry-tolerance` (mm, default 0.001) as an explicit
+panel-convergence knob; geometry that exceeds the area-error gate is rejected.
+
+Start solver validation with the synthetic fixture:
+
+```sh
+python3 examples/fastercap_parallel_plate.py -o out/fastercap-parallel-plate
+FASTERCAP=/path/to/FasterCap \
+  python3 examples/fastercap_parallel_plate.py --run \
+  -o out/fastercap-parallel-plate
+```
+
+The first command only emits inspectable geometry. The second writes
+`capacitance.lib` only when every `fastercap-pcb-gates-v1` solver and matrix gate
+passes. Unpatched FasterCap 6.0.7 macOS builds may emit
+`Error: cannot retrieve the information about the free memory quantity`; the
+fail-closed runner preserves a `rejected_diagnostic` manifest and returns no
+matrix for those builds. The local macOS build uses Mach VM statistics for this
+resource check and passes the real parallel-plate smoke test. See
+`docs/fastercap-slice1-diagnosis.md`. A solver build that terminates without
+diagnostics additionally reports plate-to-plate capacitance against the ideal
+estimate; fringing means the ratio is not exactly one.
+
 In the full-loop basis, both FET channels are shorted at the die plane
 (`.equiv drain_die source_die`)
 and each gate is closed to its source there, so `P_pwr` traces the full
@@ -481,20 +614,32 @@ python, the solve/reduce/emit under system python. `visualize_paths.py` is the
 standalone HTML path-viewer exporter.
 
 ```
-extract_parasitics.py   # CLI entry point (orchestrates the two interpreters)
+extract_parasitics.py   # FastHenry CLI (orchestrates the two interpreters)
+extract_capacitance.py  # KiCad filled zones -> FasterCap diagnostic deck
+extract_palace_mesh.py  # complete KiCad PCB -> source-bound Palace PLC mesh
 visualize_paths.py      # -> standalone HTML PCB path viewer
 lib/
   kicad_geom.py         # pcbnew -> multiport FastHenry .inp (KiCad python)
+  kicad_fastercap_dump.py # stdlib + pcbnew -> exact contour JSON
+  kicad_fastercap.py    # contour JSON -> constrained SI-unit conductor surfaces
+  kicad_palace_dump.py  # stdlib + pcbnew -> complete copper/drill/census JSON
+  kicad_palace.py       # complete dump + stackup -> closed volume primitives
   fet_discovery.py      # auto-ID FETs / Vin / gate nets / Cin / gate network
   solve_reduce.py       # run fasthenry, parse Zc.mat -> named parasitics
+  fastercap.py          # diagnostic surface-BEM path
+  palace_mesh.py        # closed fixture geometry -> conformal Gmsh volume mesh
+  palace_plc_mesh.py    # PCB volumes -> exact extruded PLC tetrahedral mesh
+  palace.py             # Palace config/run/raw Maxwell qualification
+  palace_build.py       # Palace source/build/runtime provenance
+  maxwell.py            # validate/convert Maxwell C -> branches/SPICE
   emit.py               # -> parasitics.lib / .json / report.md
   emit_svg.py           # -> schematic.svg
 test/                   # pure-layer tests (pytest; numpy/scipy where needed)
 docs/                   # rendered example(s)
 ```
 
-Each `lib/` module also has a small `__main__` for standalone/debug use (e.g.
-`python3 lib/emit_svg.py parasitics.json > schematic.svg`).
+Several `lib/` modules also have a small `__main__` for standalone/debug use
+(e.g. `python3 lib/emit_svg.py parasitics.json > schematic.svg`).
 
 ## Requirements & config
 
@@ -504,6 +649,14 @@ Each `lib/` module also has a small `__main__` for standalone/debug use (e.g.
   Build the FastFieldSolvers fork; on a modern clang toolchain use e.g.
   `CFLAGS='-O -DFOUR -m64 -std=gnu89 -fcommon -Wno-implicit-function-declaration
   -Wno-implicit-int -Wno-return-type -Wno-deprecated-non-prototype' make`.
+- **Palace** — primary electrostatic solver, pinned and built separately from
+  `awslabs/palace`; set `$PALACE` or pass `--executable`, and pass the required
+  content-addressed build attestation with `--build-manifest`, to the Palace
+  fixture study. The qualification build and policy are documented in
+  `docs/palace-electrostatic-qualification-plan.md`.
+- **FasterCap** — optional diagnostic legacy; set `$FASTERCAP` or pass
+  `--executable` to its parallel-plate example. Tested with FasterCap 6.0.7.
+  The core FastHenry extraction does not require either electrostatic solver.
 - Python 3 dependencies from `requirements.txt`:
 
   ```sh
@@ -511,8 +664,12 @@ Each `lib/` module also has a small `__main__` for standalone/debug use (e.g.
   ```
 
   This installs NumPy and PyYAML for extraction/config parsing, SciPy for the
-  matrix skin-ladder fit and density solver, and Matplotlib for the default mesh
-  viewer and heatmaps. The core extraction survives a viewer-render failure, but
+  matrix skin-ladder fit and density solver, Shapely 2.1 for system-Python
+  polygon conditioning, MeshPy for constrained PCB PLC topology, Gmsh for
+  fixture meshing and mesh-content validation, and Matplotlib
+  for the default mesh viewer and heatmaps. The KiCad dump step does not import
+  these packages.
+  The core extraction survives a viewer-render failure, but
   `mesh/mesh.html` will be skipped when Matplotlib is unavailable.
 
 ## Paralleled switches
