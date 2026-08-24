@@ -1,0 +1,160 @@
+{
+  "content_sha256": "34cb1f1fe5b785e639e31cef23d00516988d9346e20893c0482671c69f8f6b18",
+  "identity": {
+    "binaries": [
+      {
+        "bytes": 4947,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/bin/palace",
+        "sha256": "ad43ec030f51435f32150a5c72cb324ca03083d2ffc2f91405bbf41c6bc2240f"
+      },
+      {
+        "bytes": 22234208,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/bin/palace-arm64.bin",
+        "sha256": "1bef63615fc4279f4fc09fa9bcd6b70ee9220f6d0c7c13cd8087c355eb54c9e2"
+      }
+    ],
+    "build_directory": "/Users/fab/dev/vendor/palace-build-qualification-make",
+    "cmake_caches": [
+      {
+        "bytes": 35958,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/CMakeCache.txt",
+        "sha256": "c4e00f9eb0a8a43477cd1ea0591324e68e107e41cdf06e1b071e2ed2b5b07b71"
+      },
+      {
+        "bytes": 32537,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/arpack-ng-build/CMakeCache.txt",
+        "sha256": "9600852db965f2b2e8cfa7cdb7ea4ae00c86e0cd84eb8c9b0dd8040ec8143cc3"
+      },
+      {
+        "bytes": 19851,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/eigen-build/CMakeCache.txt",
+        "sha256": "6f6ecfe7979a76d5296377e275c330809574e42e9b73b276b2de4a65eaccd09d"
+      },
+      {
+        "bytes": 18473,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/fmt-build/CMakeCache.txt",
+        "sha256": "e77551cbc3edaefc780d00f7b834f472b56fa4780ab9b800c1e8041eff59b887"
+      },
+      {
+        "bytes": 32977,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/hypre-build/CMakeCache.txt",
+        "sha256": "d8fe01a93a6af36bdf63ec791b51023055b6e565f2c539d6b976bbec792f0202"
+      },
+      {
+        "bytes": 20629,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/json-build/CMakeCache.txt",
+        "sha256": "1645bdc096a787b17422a45de36ec2d461aed289bc5c8a4f194fd68246f36424"
+      },
+      {
+        "bytes": 18474,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/json-schema-validator-build/CMakeCache.txt",
+        "sha256": "fbd3d0c0b75830d73e34d328be783db4a7d2db8d71945e3c4f895689391a721a"
+      },
+      {
+        "bytes": 14743,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/metis-build/CMakeCache.txt",
+        "sha256": "d819dcb3153c3081704dcb223ece991d583561ac47673b5ba226125d4394f4a4"
+      },
+      {
+        "bytes": 36369,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/mfem-build/CMakeCache.txt",
+        "sha256": "1354aa75ab2851b06d075d3062711ff555cec59a1d193a93efd2b1cc65a0489a"
+      },
+      {
+        "bytes": 14343,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/parmetis-build/CMakeCache.txt",
+        "sha256": "2d9f22456a5659778949c4aded5f22649d14041b3b41e7fc0539931a7b46fed1"
+      },
+      {
+        "bytes": 24493,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/scn-build/CMakeCache.txt",
+        "sha256": "b1aa06dc5696c4968641e0e2a0d09de2e4a28f7cb6927a9347f783546fc92dae"
+      },
+      {
+        "bytes": 5302,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/scn-build/_deps/fast_float-subbuild/CMakeCache.txt",
+        "sha256": "dbf90ffe09ab85d26fc29896728bc790ff8c9adcb4e4d97c63be64d8b5011913"
+      },
+      {
+        "bytes": 28000,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/extern/superlu_dist-build/CMakeCache.txt",
+        "sha256": "ac6841bb38b34f518413d9c607f6205740e68ccb1294ee051d746f00878f6d9e"
+      },
+      {
+        "bytes": 53514,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/palace-build/CMakeCache.txt",
+        "sha256": "54317a18dbc32a4df24b9d642426ee57f868e346128d9ae52e268060f2b94e15"
+      },
+      {
+        "bytes": 5238,
+        "path": "/Users/fab/dev/vendor/palace-build-qualification-make/palace-build/_deps/catch2-subbuild/CMakeCache.txt",
+        "sha256": "4e8836f2d7fe781a19ec19763b8462106fac1c1c87c47ca82a958a11fe88df1f"
+      }
+    ],
+    "format": "dcdc-palace-build-v2",
+    "linked_libraries": {
+      "reported": [
+        "/opt/homebrew/opt/open-mpi/lib/libmpi_usempif08.40.dylib",
+        "/opt/homebrew/opt/open-mpi/lib/libmpi_usempi_ignore_tkr.40.dylib",
+        "/opt/homebrew/opt/open-mpi/lib/libmpi_mpifh.40.dylib",
+        "@rpath/libceed.dylib",
+        "/usr/lib/libz.1.dylib",
+        "/opt/homebrew/opt/open-mpi/lib/libmpi.40.dylib",
+        "/opt/homebrew/opt/openblas/lib/libopenblas.0.dylib",
+        "/usr/lib/libSystem.B.dylib",
+        "/opt/homebrew/opt/gcc/lib/gcc/current/libgfortran.5.dylib",
+        "/opt/homebrew/opt/gcc/lib/gcc/current/libquadmath.0.dylib",
+        "/usr/lib/libc++.1.dylib"
+      ],
+      "resolved": {
+        "/opt/homebrew/opt/gcc/lib/gcc/current/libgfortran.5.dylib": {
+          "path": "/opt/homebrew/Cellar/gcc/16.1.0/lib/gcc/current/libgfortran.5.dylib",
+          "sha256": "e4ae47cf8d97206158b5371f5cfbb79545dfa01738719002ac0897aea996b90e"
+        },
+        "/opt/homebrew/opt/gcc/lib/gcc/current/libquadmath.0.dylib": {
+          "path": "/opt/homebrew/Cellar/gcc/16.1.0/lib/gcc/current/libquadmath.0.dylib",
+          "sha256": "954ab18f4fe3d6c90310284ab7f0ed81696fbd6102d728f5d1a157cdfc4ab82a"
+        },
+        "/opt/homebrew/opt/open-mpi/lib/libmpi.40.dylib": {
+          "path": "/opt/homebrew/Cellar/open-mpi/5.0.9_1/lib/libmpi.40.dylib",
+          "sha256": "47dc41eb65b70d08948820355f8d7a59c4274e7301d95b51e82f81c5fdea07d4"
+        },
+        "/opt/homebrew/opt/open-mpi/lib/libmpi_mpifh.40.dylib": {
+          "path": "/opt/homebrew/Cellar/open-mpi/5.0.9_1/lib/libmpi_mpifh.40.dylib",
+          "sha256": "cb3898ab3af186a0cdc70f3a3cb0004a14afc83b1d53ccbac9d8b2d0898f580b"
+        },
+        "/opt/homebrew/opt/open-mpi/lib/libmpi_usempi_ignore_tkr.40.dylib": {
+          "path": "/opt/homebrew/Cellar/open-mpi/5.0.9_1/lib/libmpi_usempi_ignore_tkr.40.dylib",
+          "sha256": "0e0aaa5ec8fd1aaee9cd815170461ef010dce0ebc1774159d9813e188470084e"
+        },
+        "/opt/homebrew/opt/open-mpi/lib/libmpi_usempif08.40.dylib": {
+          "path": "/opt/homebrew/Cellar/open-mpi/5.0.9_1/lib/libmpi_usempif08.40.dylib",
+          "sha256": "8f4e027e2bea12e61537edfb164b28edc938c6e480bc1310480f99154e932250"
+        },
+        "/opt/homebrew/opt/openblas/lib/libopenblas.0.dylib": {
+          "path": "/opt/homebrew/Cellar/openblas/0.3.34/lib/libopenblasp-r0.3.34.dylib",
+          "sha256": "237ce202b668d9cb9cdff5523031d8b4073d14cb8493309927fb402cd7867ac2"
+        },
+        "@rpath/libceed.dylib": {
+          "path": "/Users/fab/dev/vendor/palace-build-qualification-make/lib/libceed.dylib",
+          "sha256": "be14411e9b357f953536b11b32befbfa94b1616331c17b226cb9e0ee2ae9e83a"
+        }
+      },
+      "rpaths": [
+        "/Users/fab/dev/vendor/palace-build-qualification-make/lib",
+        "/Users/fab/dev/vendor/palace-build-qualification-make/lib64"
+      ]
+    },
+    "machine": "arm64",
+    "mpi_launcher": {
+      "bytes": 227072,
+      "path": "/opt/homebrew/Cellar/open-mpi/5.0.9_1/bin/mpirun",
+      "sha256": "c6505f9774a983ad72232217254707ea37c763848f34f5e2a33fb7713837637c"
+    },
+    "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
+    "source_identity": {
+      "content_sha256": "9a50e1ad35a4b6b644afdff791f312c75b8d58ff7bc01cc5669fe7faa16be94b",
+      "path": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/docs/artifacts/palace-e4-source-v5/palace-source-identity.9a50e1ad35a4b6b644afdff791f312c75b8d58ff7bc01cc5669fe7faa16be94b.json"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "content_sha256": "9a50e1ad35a4b6b644afdff791f312c75b8d58ff7bc01cc5669fe7faa16be94b",
+  "identity": {
+    "authority": null,
+    "declared_untracked": [],
+    "exclude_policy": {
+      "global": {
+        "artifact": {
+          "bytes": 31,
+          "path": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/docs/artifacts/palace-e4-source-v5/palace-source-global-exclude.1a377e8e10315d1e8b44caf5bfe181da8320a024e4f3316b1cf1d91f9db274b3.bin",
+          "sha256": "1a377e8e10315d1e8b44caf5bfe181da8320a024e4f3316b1cf1d91f9db274b3"
+        },
+        "source_path": "/Users/fab/.config/git/ignore",
+        "state": "present"
+      },
+      "repository": {
+        "artifact": {
+          "bytes": 255,
+          "path": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/docs/artifacts/palace-e4-source-v5/palace-source-repository-exclude.411cb2102d01c757fbb5c19701585944c6261bdbf2d63a4185a83ce289fe3c7d.bin",
+          "sha256": "411cb2102d01c757fbb5c19701585944c6261bdbf2d63a4185a83ce289fe3c7d"
+        },
+        "source_path": "/Users/fab/dev/vendor/palace/.git/info/exclude",
+        "state": "present"
+      }
+    },
+    "format": "palace-source-identity-v1",
+    "source_commit": "0ca2de941c42d1565187b16a8a25a9ccc9b267fe",
+    "source_directory": "/Users/fab/dev/vendor/palace",
+    "submodule_status": {
+      "bytes": 0,
+      "path": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/docs/artifacts/palace-e4-source-v5/palace-source-submodules.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "tracked_files": {},
+    "tracked_patch": {
+      "bytes": 0,
+      "path": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/docs/artifacts/palace-e4-source-v5/palace-source-patch.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "untracked_files": {}
+  }
+}
