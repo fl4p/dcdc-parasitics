@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 
 import palace  # noqa: E402
 import palace_attempt  # noqa: E402
+import palace_snapshot_request  # noqa: E402
 from palace_attempt import (  # noqa: E402
     validate_palace_attempt_manifest,
     validate_palace_execution_witness,
@@ -381,6 +382,33 @@ def _patch_process_run(monkeypatch, tmp_path, raw, standard, *, warning="",
     )
     monkeypatch.setattr(palace, "run_monitored_process", fake_run)
     return build_manifest
+
+
+def test_snapshot_request_writer_accepts_real_workload_shape(tmp_path, monkeypatch):
+    _, manifest_path = _write_config(tmp_path)
+    executable = tmp_path / "palace"
+    executable.write_bytes(b"binary")
+    build_manifest = _patch_process_run(
+        monkeypatch, tmp_path,
+        np.array([[3e-12, -2e-12], [-2e-12, 4e-12]]),
+        np.array([[3e-12, -2e-12], [-2e-12, 4e-12]]),
+    )
+    monkeypatch.setattr(
+        palace_snapshot_request, "validate_palace_build_manifest",
+        palace.validate_palace_build_manifest,
+    )
+    path, request = (
+        palace_snapshot_request.write_palace_execution_snapshot_request(
+            manifest_path, executable=executable,
+            build_manifest_path=build_manifest, snapshot_id="d" * 64,
+        )
+    )
+    assert path.is_file()
+    assert request["format"] == "palace-execution-snapshot-request-v1"
+    assert request["materializer_sha256"] == file_sha256(
+        Path(palace.__file__).with_name("palace_snapshot_materializer.py")
+    )
+    assert "implementation" not in request
 
 
 @pytest.mark.parametrize(

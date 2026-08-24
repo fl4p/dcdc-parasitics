@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fail-closed Palace electrostatic configuration, execution, and result parsing."""
+from __future__ import annotations
 from dataclasses import asdict, dataclass
 import csv
 import io
@@ -30,8 +31,8 @@ if __package__:
         implementation_identity,
         palace_config_payload as _palace_config_payload,
         palace_progress_events as _palace_progress_events,
-        prepare_execution_snapshot, projection_from_completed_runs,
-        publish_snapshot_output, trusted_resource_policy,
+        prepare_execution_snapshot as _prepare_execution_snapshot, projection_from_completed_runs,
+        publish_snapshot_output, resolve_execution_snapshot, trusted_resource_policy,
         validate_bound_resource_decision, validate_prelaunch_resource_authority,
         validate_completed_palace_progress as _validate_completed_palace_progress,
         validate_execution_snapshot, validate_execution_snapshot_privilege_boundary,
@@ -65,8 +66,8 @@ else:
         implementation_identity,
         palace_config_payload as _palace_config_payload,
         palace_progress_events as _palace_progress_events,
-        prepare_execution_snapshot, projection_from_completed_runs,
-        publish_snapshot_output, trusted_resource_policy,
+        prepare_execution_snapshot as _prepare_execution_snapshot, projection_from_completed_runs,
+        publish_snapshot_output, resolve_execution_snapshot, trusted_resource_policy,
         validate_bound_resource_decision, validate_prelaunch_resource_authority,
         validate_completed_palace_progress as _validate_completed_palace_progress,
         validate_execution_snapshot, validate_execution_snapshot_privilege_boundary,
@@ -82,7 +83,7 @@ else:
         exclusive_publish_bytes, exclusive_publish_json, file_sha256, strict_json_file,
     )
 
-
+prepare_execution_snapshot = _prepare_execution_snapshot
 GATE_POLICY = "palace-electrostatic-pcb-gates-v2"
 CONFIG_MANIFEST_FORMAT = "dcdc-palace-config-v3"
 LEGACY_CONFIG_MANIFEST_FORMAT = "dcdc-palace-config-v2"
@@ -1193,6 +1194,7 @@ def validate_palace_run_manifest(path, *, _document=None):
 
 def run_palace(config_manifest_path, *, executable, build_manifest_path, processes=1,
                resource_class=None, resource_decision_path=None,
+               execution_snapshot_path=None,
                campaign_ledger=None, attempt_id=None):
     manifest = load_palace_config_manifest(config_manifest_path)
     inputs = _execution_workload_inputs(
@@ -1256,10 +1258,8 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     workload_path = manifest.config_path.with_name(
         f"{manifest.config_path.name}.workload.{workload['content_sha256']}.json"
     )
-    execution_snapshot = prepare_execution_snapshot(
-        manifest,
-        workload,
-        executable=executable,
+    execution_snapshot = resolve_execution_snapshot(
+        execution_snapshot_path, manifest, workload, executable=executable,
         binaries=tuple(Path(path) for path in binaries),
         mpi_launcher=mpi_launcher,
     )

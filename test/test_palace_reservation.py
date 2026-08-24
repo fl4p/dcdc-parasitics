@@ -100,10 +100,18 @@ def fixture(tmp_path):
             "snapshot": str(path),
             "snapshot_sha256": file_sha256(path),
         })
+    snapshot_root = tmp_path / f"snapshot.{('d' * 64)}"
     snapshot_payload = {
-        "format": "palace-execution-snapshot-v1",
-        "root": str(tmp_path),
+        "format": "palace-execution-snapshot-v2",
+        "snapshot_id": "d" * 64,
+        "materializer_sha256": "e" * 64,
+        "client_uid": 501,
+        "client_gid": 20,
+        "root": str(snapshot_root),
+        "output": str(snapshot_root / "postpro"),
         "workload_sha256": workload["content_sha256"],
+        "request_sha256": "f" * 64,
+        "request_file_sha256": "1" * 64,
         "inputs": records,
     }
     snapshot = {
@@ -113,13 +121,26 @@ def fixture(tmp_path):
     return inputs, workload, decision, policy, snapshot
 
 
+def test_attempt_reservation_rejects_historical_snapshot_v1(tmp_path):
+    _, workload, decision, policy, snapshot = fixture(tmp_path)
+    payload = {
+        "format": "palace-execution-snapshot-v1",
+        "root": str(tmp_path),
+        "workload_sha256": workload["content_sha256"],
+        "inputs": snapshot["inputs"],
+    }
+    historical = {**payload, "content_sha256": canonical_sha256(payload)}
+    with pytest.raises(ValueError, match="privileged snapshot schema mismatch"):
+        derive_attempt_reservation(
+            decision, historical, expected_workload=workload,
+            trusted_policy=policy,
+        )
+
+
 def test_attempt_reservation_derives_complete_finite_accounting(
         tmp_path, monkeypatch):
     inputs, workload, decision, policy, snapshot = fixture(tmp_path)
-    monkeypatch.setattr(
-        palace_reservation, "validate_execution_snapshot_privilege_boundary",
-        lambda value: True,
-    )
+    monkeypatch.setattr(palace_reservation, "validate_privileged_execution_snapshot_authority", lambda value, workload: value)
     result = derive_attempt_reservation(
         decision, snapshot, expected_workload=workload,
         trusted_policy=policy,
@@ -147,10 +168,7 @@ def test_attempt_reservation_derives_complete_finite_accounting(
 def test_attempt_reservation_rejects_tampered_snapshot_input(
         tmp_path, monkeypatch):
     inputs, workload, decision, policy, snapshot = fixture(tmp_path)
-    monkeypatch.setattr(
-        palace_reservation, "validate_execution_snapshot_privilege_boundary",
-        lambda value: True,
-    )
+    monkeypatch.setattr(palace_reservation, "validate_privileged_execution_snapshot_authority", lambda value, workload: value)
     inputs["mesh.msh"].write_bytes(b"tampered")
     with pytest.raises(ValueError, match="hash mismatch"):
         derive_attempt_reservation(
@@ -162,10 +180,7 @@ def test_attempt_reservation_rejects_tampered_snapshot_input(
 def test_attempt_reservation_rejects_unauthorized_rebuilt_projection(
         tmp_path, monkeypatch):
     _, workload, decision, policy, snapshot = fixture(tmp_path)
-    monkeypatch.setattr(
-        palace_reservation, "validate_execution_snapshot_privilege_boundary",
-        lambda value: True,
-    )
+    monkeypatch.setattr(palace_reservation, "validate_privileged_execution_snapshot_authority", lambda value, workload: value)
     changed = dict(decision)
     changed["projection"] = {
         **decision["projection"],
@@ -184,10 +199,7 @@ def test_attempt_reservation_rejects_unauthorized_rebuilt_projection(
 def test_attempt_reservation_rejects_self_rehashed_policy_substitution(
         tmp_path, monkeypatch):
     _, workload, decision, policy, snapshot = fixture(tmp_path)
-    monkeypatch.setattr(
-        palace_reservation, "validate_execution_snapshot_privilege_boundary",
-        lambda value: True,
-    )
+    monkeypatch.setattr(palace_reservation, "validate_privileged_execution_snapshot_authority", lambda value, workload: value)
     changed = dict(decision)
     changed["selected_profile_id"] = "forged"
     unsigned = dict(changed)

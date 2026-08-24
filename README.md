@@ -76,6 +76,15 @@ polynomial-order, and finite-domain ladders over the frozen air, enclosed-FR4,
 and PCB-like fixtures must pass before any Fugu run. See
 `docs/palace-electrostatic-qualification-plan.md`.
 
+Production launches use a separately owned execution boundary. Generate the
+content-addressed request with `prepare_palace_snapshot.py`, run an exact
+root-owned copy of `lib/palace_snapshot_materializer.py` against a root-owned
+authority directory, then pass its `snapshot.json` to `run_palace()` as
+`execution_snapshot_path`. The materializer hash is bound through the workload,
+request, attestation, reservation, and run validation. New campaign
+reservations accept only privileged v2 snapshots; same-UID local snapshots and
+historical v1 records cannot authorize a new launch.
+
 The complete 24-rung fixture ladder has passed. `extract_palace_mesh.py` runs
 the two-interpreter KiCad adapter, preserves every named net and flashed no-net
 item separately, retains NPTH holes as voids rather than terminals, and binds
