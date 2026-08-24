@@ -1,0 +1,2165 @@
+{
+  "candidates": [
+    {
+      "anchor": "midplane",
+      "documented_semantics": "closed finite-thickness reference",
+      "effective_thickness_m": 3.5e-05,
+      "name": "physical_35um",
+      "representation": "physical_thickness",
+      "simplify_tolerance_m": 0.0
+    },
+    {
+      "anchor": "midplane",
+      "documented_semantics": "controlled closed effective thickness",
+      "effective_thickness_m": 3.4e-05,
+      "name": "effective_34um",
+      "representation": "effective_thickness",
+      "simplify_tolerance_m": 0.0
+    },
+    {
+      "anchor": "midplane",
+      "documented_semantics": "controlled closed effective thickness",
+      "effective_thickness_m": 1e-06,
+      "name": "effective_1um",
+      "representation": "effective_thickness",
+      "simplify_tolerance_m": 0.0
+    },
+    {
+      "anchor": "midplane",
+      "documented_semantics": "topology-preserving boundary simplification",
+      "effective_thickness_m": 3.5e-05,
+      "name": "simplify_1um",
+      "representation": "boundary_simplification",
+      "simplify_tolerance_m": 1e-06
+    }
+  ],
+  "content_sha256": "804e462ee81109b99c1f189fa56b71677712bcbb5b08588f682815b1bf06a09a",
+  "fixed_gates": {
+    "area_relative": 0.0001,
+    "clearance_change_cap_m": 1e-06,
+    "geometry_grid_m": 1e-09,
+    "ladder_absolute_f": 1e-15,
+    "ladder_relative": 0.02,
+    "minimum_segment_fraction_of_tolerance": 0.5,
+    "reduction_absolute_f": 2e-15,
+    "reduction_relative": 0.01
+  },
+  "fixtures": [
+    {
+      "name": "parallel_plate_air",
+      "relative_permittivity": 1.0,
+      "scope": "overlapping parallel rectangular plates in air; 1 mm square; 100 um physical face gap",
+      "source_thickness_m": 3.5e-05
+    },
+    {
+      "name": "pcb_like_coplanar_air",
+      "relative_permittivity": 1.0,
+      "scope": "coplanar L-shape and rectangle in air; 400 um lateral clearance; redundant collinear boundary segmentation at 0.5-1 mm spacing",
+      "source_thickness_m": 3.5e-05
+    },
+    {
+      "name": "parallel_plate_enclosed_fr4",
+      "relative_permittivity": 4.2,
+      "scope": "10 mm parallel plates wholly inside a convex epsilon_r=4.2 region with the nearest air interface 982.5 um from physical copper",
+      "source_thickness_m": 3.5e-05
+    }
+  ],
+  "format": "dcdc-fastercap-reduction-study-v1",
+  "gate_policy": "fastercap-pcb-gates-v1",
+  "ladder_relative_errors": [
+    0.00125,
+    0.0009,
+    0.000625
+  ],
+  "lifecycle_scope": "fixture_qualification_only",
+  "qualification_limit": "No result authorizes a PCB physical model or Fugu2 use; Slice 5 must requalify over its complete geometry/material/topology envelope.",
+  "results": {
+    "parallel_plate_air": {
+      "effective_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00013399999999999998,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 3.399999999999996e-05,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 1.7e-05,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [
+            "candidate clearance change exceeds min(1 um, 1% source gap)"
+          ],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": false
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "candidate clearance change exceeds min(1 um, 1% source gap)"
+        ],
+        "runs": [],
+        "verdict": "rejected"
+      },
+      "effective_34um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00010099999999999999,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 9.9999999999997e-07,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 4.999999999999986e-07,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              3.662960000000001e-15,
+              3.1729e-15
+            ],
+            [
+              3.1729e-15,
+              3.663e-15
+            ]
+          ],
+          [
+            [
+              3.662960000000001e-15,
+              3.1729e-15
+            ],
+            [
+              3.1729e-15,
+              3.663e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              1.999999999993327e-18,
+              4.99999999999594e-18
+            ],
+            [
+              6.000000000005225e-18,
+              1.999999999993327e-18
+            ]
+          ],
+          [
+            [
+              0.0,
+              3.0000000000026125e-18
+            ],
+            [
+              3.0000000000026125e-18,
+              0.0
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reduction_allowance_f": [
+          [
+            3.3422500000000002e-15,
+            3.09696e-15
+          ],
+          [
+            3.09691e-15,
+            3.34223e-15
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            1.0769999999999913e-15,
+            1.0540000000000049e-15
+          ],
+          [
+            1.0489999999999963e-15,
+            1.0730000000000046e-15
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/effective_34um/a_0.00125/model.lst.run.numerically_converged_diagnostic.2665748681b9f51177e798dcc0becc33b092db4f56bba90ff946afb3e5057375.json",
+            "matrix_f": [
+              [
+                1.33146e-13,
+                -1.0863949999999999e-13
+              ],
+              [
+                -1.0863949999999999e-13,
+                1.33148e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.33146e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4507499995397628e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4506500000000013e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.33146e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4507499995397628e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.0000000000092854e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.0964e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4506000000000002e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.5384615384615,
+            "peak_rss_bytes": 1744109568,
+            "raw_matrix_f": [
+              [
+                1.33146e-13,
+                -1.0864e-13
+              ],
+              [
+                -1.08639e-13,
+                1.33148e-13
+              ]
+            ],
+            "refined_panels": 80760,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 15.783852,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 15.885497458046302
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/effective_34um/a_0.0009/model.lst.run.numerically_converged_diagnostic.4f20c692ee5f90d3aad1351b4ef14ef42b0916d36f1cd717df4f39db7bad02ee.json",
+            "matrix_f": [
+              [
+                1.33148e-13,
+                -1.08645e-13
+              ],
+              [
+                -1.08645e-13,
+                1.3315e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.33148e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.450399999539785e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4503e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.33148e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.450399999539785e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.09645e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4503e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.5384615384615,
+            "peak_rss_bytes": 1815822336,
+            "raw_matrix_f": [
+              [
+                1.33148e-13,
+                -1.08645e-13
+              ],
+              [
+                -1.08645e-13,
+                1.3315e-13
+              ]
+            ],
+            "refined_panels": 80760,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 16.627392,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 16.73874754202552
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/effective_34um/a_0.000625/model.lst.run.numerically_converged_diagnostic.73507c13be3d290e980d49afa8bb6f6f0e2a5d63d97af20f14d2b85a7c1722d6.json",
+            "matrix_f": [
+              [
+                1.33148e-13,
+                -1.08642e-13
+              ],
+              [
+                -1.08642e-13,
+                1.3315e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.33148e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4506999995397724e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4506000000000002e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.33148e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4506999995397724e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.09642e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4506000000000002e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.5384615384615,
+            "peak_rss_bytes": 1794375680,
+            "raw_matrix_f": [
+              [
+                1.33148e-13,
+                -1.08642e-13
+              ],
+              [
+                -1.08642e-13,
+                1.3315e-13
+              ]
+            ],
+            "refined_panels": 80760,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 18.021139,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 18.12624504195992
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 16,
+          "candidate_refined_panels": 80760,
+          "input_panel_reduction": false,
+          "reference_input_panels": 16,
+          "reference_refined_panels": 80776,
+          "refined_panel_reduction": true
+        },
+        "verdict": "fixture_qualified"
+      },
+      "physical_35um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00010000000000000002,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              3.68438e-15,
+              3.19376e-15
+            ],
+            [
+              3.19376e-15,
+              3.684420000000001e-15
+            ]
+          ],
+          [
+            [
+              3.6845e-15,
+              3.19392e-15
+            ],
+            [
+              3.19382e-15,
+              3.68446e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              4.000000000011898e-18,
+              0.0
+            ],
+            [
+              0.0,
+              3.0000000000152343e-18
+            ]
+          ],
+          [
+            [
+              9.99999999999188e-18,
+              7.999999999998552e-18
+            ],
+            [
+              2.9999999999899908e-18,
+              5.0000000000085615e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "runs": [
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/physical_35um/a_0.00125/model.lst.run.numerically_converged_diagnostic.ab9eaa3100f2f71eb5eeccf4c09b032f176d0a9c67b7fcf232cbba96eb098f38.json",
+            "matrix_f": [
+              [
+                1.34219e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34221e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34219e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441615e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34219e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441615e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068800000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.6923076923077,
+            "peak_rss_bytes": 1895399424,
+            "raw_matrix_f": [
+              [
+                1.34219e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34221e-13
+              ]
+            ],
+            "refined_panels": 80776,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 14.829257,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 14.932111834001262
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/physical_35um/a_0.0009/model.lst.run.numerically_converged_diagnostic.2c8f687189f0d6847933d5697c2221e6233f3b9706dfb250569e73ec2fb28f56.json",
+            "matrix_f": [
+              [
+                1.34215e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34218e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34215e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.452849998974362e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4526999999999995e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34215e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.452849998974362e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068800000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4526999999999995e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.6923076923077,
+            "peak_rss_bytes": 1829421056,
+            "raw_matrix_f": [
+              [
+                1.34215e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34218e-13
+              ]
+            ],
+            "refined_panels": 80776,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 16.516037,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 16.638677125039976
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/physical_35um/a_0.000625/model.lst.run.numerically_converged_diagnostic.c8122f7ecb7e9e473f34bff1ed9d2885db0c5b933d3a09aecb0c919b5606010e.json",
+            "matrix_f": [
+              [
+                1.34225e-13,
+                -1.096935e-13
+              ],
+              [
+                -1.096935e-13,
+                1.34223e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4530499995441844e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.45295e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4530499995441844e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 5.0000000000085615e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1069600000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4528999999999988e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.6923076923077,
+            "peak_rss_bytes": 1762721792,
+            "raw_matrix_f": [
+              [
+                1.34225e-13,
+                -1.09696e-13
+              ],
+              [
+                -1.09691e-13,
+                1.34223e-13
+              ]
+            ],
+            "refined_panels": 80776,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 17.253145,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.376206458022352
+          }
+        ],
+        "verdict": "physical_reference"
+      },
+      "simplify_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00010000000000000002,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              3.68438e-15,
+              3.19376e-15
+            ],
+            [
+              3.19376e-15,
+              3.684420000000001e-15
+            ]
+          ],
+          [
+            [
+              3.6845e-15,
+              3.19392e-15
+            ],
+            [
+              3.19382e-15,
+              3.68446e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              4.000000000011898e-18,
+              0.0
+            ],
+            [
+              0.0,
+              3.0000000000152343e-18
+            ]
+          ],
+          [
+            [
+              9.99999999999188e-18,
+              7.999999999998552e-18
+            ],
+            [
+              2.9999999999899908e-18,
+              5.0000000000085615e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reasons": [
+          "no tight-rung refined-panel reduction; input panels or runtime alone cannot select candidate"
+        ],
+        "reduction_allowance_f": [
+          [
+            3.3422500000000002e-15,
+            3.09696e-15
+          ],
+          [
+            3.09691e-15,
+            3.34223e-15
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/simplify_1um/a_0.00125/model.lst.run.numerically_converged_diagnostic.12f4b0cee4013399e3e6cc2b2e0b5e92495d620596d1b59c33e148f0b63c1114.json",
+            "matrix_f": [
+              [
+                1.34219e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34221e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34219e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441615e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34219e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441615e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068800000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.6923076923077,
+            "peak_rss_bytes": 1871364096,
+            "raw_matrix_f": [
+              [
+                1.34219e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34221e-13
+              ]
+            ],
+            "refined_panels": 80776,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 14.956354,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 15.072232333011925
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/simplify_1um/a_0.0009/model.lst.run.numerically_converged_diagnostic.54db0aebf93502884d8ea214c8ed74fd4a9e8488ed32cd00c872f69d3afd4d10.json",
+            "matrix_f": [
+              [
+                1.34215e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34218e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34215e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.452849998974362e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4526999999999995e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34215e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.452849998974362e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068800000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4526999999999995e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.6923076923077,
+            "peak_rss_bytes": 1883013120,
+            "raw_matrix_f": [
+              [
+                1.34215e-13,
+                -1.09688e-13
+              ],
+              [
+                -1.09688e-13,
+                1.34218e-13
+              ]
+            ],
+            "refined_panels": 80776,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 15.662908,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 15.756202374992426
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_air/simplify_1um/a_0.000625/model.lst.run.numerically_converged_diagnostic.d5a0f7639b5bc38f655b65c0a26e2153745a5c87dd12536d12edbcaa9f4fd225.json",
+            "matrix_f": [
+              [
+                1.34225e-13,
+                -1.096935e-13
+              ],
+              [
+                -1.096935e-13,
+                1.34223e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4530499995441844e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.45295e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4530499995441844e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 5.0000000000085615e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1069600000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4528999999999988e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 776.6923076923077,
+            "peak_rss_bytes": 1733476352,
+            "raw_matrix_f": [
+              [
+                1.34225e-13,
+                -1.09696e-13
+              ],
+              [
+                -1.09691e-13,
+                1.34223e-13
+              ]
+            ],
+            "refined_panels": 80776,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 17.64893,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.752356874989346
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 16,
+          "candidate_refined_panels": 80776,
+          "input_panel_reduction": false,
+          "reference_input_panels": 16,
+          "reference_refined_panels": 80776,
+          "refined_panel_reduction": false
+        },
+        "verdict": "rejected"
+      }
+    },
+    "parallel_plate_enclosed_fr4": {
+      "effective_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0005340000000000001,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 3.4000000000000176e-05,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 1.7000000000000088e-05,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [
+            "candidate clearance change exceeds min(1 um, 1% source gap)"
+          ],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": false
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "candidate clearance change exceeds min(1 um, 1% source gap)",
+          "physical reference did not converge"
+        ],
+        "runs": [],
+        "verdict": "rejected"
+      },
+      "effective_34um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.000501,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 1.0000000000001327e-06,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 5.000000000000664e-07,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected",
+          "physical reference did not converge"
+        ],
+        "runs": [
+          {
+            "failures": [
+              "terminal precedes a complete matrix",
+              "meaningful stdout after terminal at line 470: Error: Generic error, program execution stopped!",
+              "process_exit: exit code 1; limits ('GMRES iteration limit reached 1000',)",
+              "resource_limits: ('GMRES iteration limit reached 1000',)",
+              "solver_diagnostics: ('Error: not converging after 1000 iterations, norm of the residual is 0.341, while targeting 0.001', 'Error: explicit GMRES residual 10.4234 exceeds target 0.000625', 'Error: Generic error, program execution stopped!')",
+              "complete_iterations: ({'number': 0, 'parse_failures': (), 'matrix': True, 'refined_panels': 964, 'mesh_refinement': 1e+32, 'preconditioners': ('Jacobi',)}, {'number': 1, 'parse_failures': (), 'matrix': True, 'refined_panels': 1092, 'mesh_refinement': 232.84, 'preconditioners': ('Jacobi',)}, {'number': 2, 'parse_failures': (), 'matrix': True, 'refined_panels': 1339, 'mesh_refinement': 80.2753, 'preconditioners': ('Jacobi',)}, {'number': 3, 'parse_failures': (), 'matrix': True, 'refined_panels': 1548, 'mesh_refinement': 56.7178, 'preconditioners': ('Jacobi',)}, {'number': 4, 'parse_failures': (), 'matrix': True, 'refined_panels': 1908, 'mesh_refinement': 40.02, 'preconditioners': ('Jacobi',)}, {'number': 5, 'parse_failures': (), 'matrix': True, 'refined_panels': 2336, 'mesh_refinement': 28.2843, 'preconditioners': ('Jacobi',)}, {'number': 6, 'parse_failures': (), 'matrix': True, 'refined_panels': 3136, 'mesh_refinement': 19.9843, 'preconditioners': ('Jacobi',)}, {'number': 7, 'parse_failures': (), 'matrix': True, 'refined_panels': 4056, 'mesh_refinement': 14.1275, 'preconditioners': ('Jacobi',)}, {'number': 8, 'parse_failures': (), 'matrix': True, 'refined_panels': 5076, 'mesh_refinement': 9.98582, 'preconditioners': ('Jacobi',)}, {'number': 9, 'parse_failures': ('line 459: Error: not converging after 1000 iterations, norm of the residual is 0.341, while targeting 0.001',), 'matrix': False, 'refined_panels': 7460, 'mesh_refinement': 7.05922, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)})",
+              "final_iteration_complete: last iteration by position has a complete matrix",
+              "solver_label_identity: (('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ())",
+              "gmres_rhs_outcomes: ((0, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 13, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 13, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (1, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 14, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 15, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (2, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 21, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 21, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (3, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (4, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (5, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (6, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (7, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 57, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 57, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (8, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 62, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 65, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (9, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 1000, 'converged': False, 'residual': 0.341, 'target': 0.001, 'evidence': 'Error: not converging after 1000 iterations, norm of the residual is 0.341, while targeting 0.001'},)))",
+              "automatic_refinement: final norm None; target 0.00125",
+              "normal_termination: terminal follows final convergence evidence, is exact, and is the last meaningful stdout record; lines (465,)",
+              "matrix_validation: no final matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_enclosed_fr4/effective_34um/a_0.00125/model.lst.run.rejected_diagnostic.b3a169342fc6fcdbc99392a9891f540683beb4b2b63f599dd8733f64895489fe.json",
+            "relative_error": 0.00125,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      },
+      "physical_35um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004999999999999999,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected"
+        ],
+        "runs": [
+          {
+            "failures": [
+              "terminal precedes a complete matrix",
+              "meaningful stdout after terminal at line 470: Error: Generic error, program execution stopped!",
+              "process_exit: exit code 1; limits ('GMRES iteration limit reached 1000',)",
+              "resource_limits: ('GMRES iteration limit reached 1000',)",
+              "solver_diagnostics: ('Error: not converging after 1000 iterations, norm of the residual is 1.648, while targeting 0.001', 'Error: explicit GMRES residual 44.6349 exceeds target 0.000625', 'Error: Generic error, program execution stopped!')",
+              "complete_iterations: ({'number': 0, 'parse_failures': (), 'matrix': True, 'refined_panels': 932, 'mesh_refinement': 1e+32, 'preconditioners': ('Jacobi',)}, {'number': 1, 'parse_failures': (), 'matrix': True, 'refined_panels': 1060, 'mesh_refinement': 232.84, 'preconditioners': ('Jacobi',)}, {'number': 2, 'parse_failures': (), 'matrix': True, 'refined_panels': 1307, 'mesh_refinement': 80.2846, 'preconditioners': ('Jacobi',)}, {'number': 3, 'parse_failures': (), 'matrix': True, 'refined_panels': 1516, 'mesh_refinement': 56.7134, 'preconditioners': ('Jacobi',)}, {'number': 4, 'parse_failures': (), 'matrix': True, 'refined_panels': 1876, 'mesh_refinement': 40.0384, 'preconditioners': ('Jacobi',)}, {'number': 5, 'parse_failures': (), 'matrix': True, 'refined_panels': 2304, 'mesh_refinement': 28.3004, 'preconditioners': ('Jacobi',)}, {'number': 6, 'parse_failures': (), 'matrix': True, 'refined_panels': 3072, 'mesh_refinement': 20.0082, 'preconditioners': ('Jacobi',)}, {'number': 7, 'parse_failures': (), 'matrix': True, 'refined_panels': 4024, 'mesh_refinement': 14.1465, 'preconditioners': ('Jacobi',)}, {'number': 8, 'parse_failures': (), 'matrix': True, 'refined_panels': 5036, 'mesh_refinement': 10.0014, 'preconditioners': ('Jacobi',)}, {'number': 9, 'parse_failures': ('line 459: Error: not converging after 1000 iterations, norm of the residual is 1.648, while targeting 0.001',), 'matrix': False, 'refined_panels': 7428, 'mesh_refinement': 7.06751, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)})",
+              "final_iteration_complete: last iteration by position has a complete matrix",
+              "solver_label_identity: (('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ())",
+              "gmres_rhs_outcomes: ((0, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 13, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 13, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (1, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 14, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 15, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (2, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 21, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 21, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (3, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (4, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (5, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 49, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (6, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 49, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (7, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 57, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 57, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (8, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 61, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 64, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (9, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 1000, 'converged': False, 'residual': 1.648, 'target': 0.001, 'evidence': 'Error: not converging after 1000 iterations, norm of the residual is 1.648, while targeting 0.001'},)))",
+              "automatic_refinement: final norm None; target 0.00125",
+              "normal_termination: terminal follows final convergence evidence, is exact, and is the last meaningful stdout record; lines (465,)",
+              "matrix_validation: no final matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_enclosed_fr4/physical_35um/a_0.00125/model.lst.run.rejected_diagnostic.e9a9de29143be9f4a24d65806e7315b8fe70c702d30fe1b7a3e1947afb9a7e5f.json",
+            "relative_error": 0.00125,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      },
+      "simplify_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004999999999999999,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected",
+          "physical reference did not converge"
+        ],
+        "runs": [
+          {
+            "failures": [
+              "terminal precedes a complete matrix",
+              "meaningful stdout after terminal at line 470: Error: Generic error, program execution stopped!",
+              "process_exit: exit code 1; limits ('GMRES iteration limit reached 1000',)",
+              "resource_limits: ('GMRES iteration limit reached 1000',)",
+              "solver_diagnostics: ('Error: not converging after 1000 iterations, norm of the residual is 1.648, while targeting 0.001', 'Error: explicit GMRES residual 44.6349 exceeds target 0.000625', 'Error: Generic error, program execution stopped!')",
+              "complete_iterations: ({'number': 0, 'parse_failures': (), 'matrix': True, 'refined_panels': 932, 'mesh_refinement': 1e+32, 'preconditioners': ('Jacobi',)}, {'number': 1, 'parse_failures': (), 'matrix': True, 'refined_panels': 1060, 'mesh_refinement': 232.84, 'preconditioners': ('Jacobi',)}, {'number': 2, 'parse_failures': (), 'matrix': True, 'refined_panels': 1307, 'mesh_refinement': 80.2846, 'preconditioners': ('Jacobi',)}, {'number': 3, 'parse_failures': (), 'matrix': True, 'refined_panels': 1516, 'mesh_refinement': 56.7134, 'preconditioners': ('Jacobi',)}, {'number': 4, 'parse_failures': (), 'matrix': True, 'refined_panels': 1876, 'mesh_refinement': 40.0384, 'preconditioners': ('Jacobi',)}, {'number': 5, 'parse_failures': (), 'matrix': True, 'refined_panels': 2304, 'mesh_refinement': 28.3004, 'preconditioners': ('Jacobi',)}, {'number': 6, 'parse_failures': (), 'matrix': True, 'refined_panels': 3072, 'mesh_refinement': 20.0082, 'preconditioners': ('Jacobi',)}, {'number': 7, 'parse_failures': (), 'matrix': True, 'refined_panels': 4024, 'mesh_refinement': 14.1465, 'preconditioners': ('Jacobi',)}, {'number': 8, 'parse_failures': (), 'matrix': True, 'refined_panels': 5036, 'mesh_refinement': 10.0014, 'preconditioners': ('Jacobi',)}, {'number': 9, 'parse_failures': ('line 459: Error: not converging after 1000 iterations, norm of the residual is 1.648, while targeting 0.001',), 'matrix': False, 'refined_panels': 7428, 'mesh_refinement': 7.06751, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)})",
+              "final_iteration_complete: last iteration by position has a complete matrix",
+              "solver_label_identity: (('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ())",
+              "gmres_rhs_outcomes: ((0, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 13, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 13, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (1, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 14, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 15, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (2, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 21, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 21, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (3, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (4, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (5, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 49, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (6, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 49, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 50, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (7, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 57, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 57, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (8, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 61, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 64, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (9, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 1000, 'converged': False, 'residual': 1.648, 'target': 0.001, 'evidence': 'Error: not converging after 1000 iterations, norm of the residual is 1.648, while targeting 0.001'},)))",
+              "automatic_refinement: final norm None; target 0.00125",
+              "normal_termination: terminal follows final convergence evidence, is exact, and is the last meaningful stdout record; lines (465,)",
+              "matrix_validation: no final matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/parallel_plate_enclosed_fr4/simplify_1um/a_0.00125/model.lst.run.rejected_diagnostic.3c2b33c3b0d7c4d13226b3e8d577738fcd8f4c124418665e6cbc780b338f0b70.json",
+            "relative_error": 0.00125,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      }
+    },
+    "pcb_like_coplanar_air": {
+      "effective_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004,
+          "candidate_input_panels": 50,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 1.7e-05,
+          "minimum_boundary_segment_m": 0.0005,
+          "minimum_triangle_angle_deg": 21.13982480865764,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 50,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected"
+        ],
+        "runs": [
+          {
+            "failures": [
+              "terminal precedes a complete matrix",
+              "meaningful stdout after terminal at line 234: Error: Generic error, program execution stopped!",
+              "process_exit: exit code 1; limits ()",
+              "solver_diagnostics: ('Error: explicit GMRES residual 0.0121497 exceeds target 0.000625', 'Error: Generic error, program execution stopped!')",
+              "complete_iterations: ({'number': 0, 'parse_failures': (), 'matrix': True, 'refined_panels': 6112, 'mesh_refinement': 1e+32, 'preconditioners': ('Jacobi',)}, {'number': 1, 'parse_failures': (), 'matrix': True, 'refined_panels': 7402, 'mesh_refinement': 37.1807, 'preconditioners': ('Jacobi',)}, {'number': 2, 'parse_failures': (), 'matrix': True, 'refined_panels': 8749, 'mesh_refinement': 26.2906, 'preconditioners': ('Jacobi',)}, {'number': 3, 'parse_failures': (), 'matrix': True, 'refined_panels': 11412, 'mesh_refinement': 18.5901, 'preconditioners': ('Jacobi',)}, {'number': 4, 'parse_failures': (), 'matrix': False, 'refined_panels': 16192, 'mesh_refinement': 13.1449, 'preconditioners': ('Jacobi',)})",
+              "final_iteration_complete: last iteration by position has a complete matrix",
+              "solver_label_identity: (('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ())",
+              "gmres_rhs_outcomes: ((0, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 5, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 5, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (1, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 48, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 32, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (2, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 61, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 37, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (3, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 72, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 69, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (4, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 485, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'},)))",
+              "automatic_refinement: final norm None; target 0.00125",
+              "normal_termination: terminal follows final convergence evidence, is exact, and is the last meaningful stdout record; lines (229,)",
+              "matrix_validation: no final matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/effective_1um/a_0.00125/model.lst.run.rejected_diagnostic.e78c1796504e0fcbc87bc6ad6d38d24a24974a81cbf94cac63fc9b38ed8db3e0.json",
+            "relative_error": 0.00125,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      },
+      "effective_34um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004,
+          "candidate_input_panels": 50,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 4.999999999999986e-07,
+          "minimum_boundary_segment_m": 0.0005,
+          "minimum_triangle_angle_deg": 21.13982480865764,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 50,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected"
+        ],
+        "runs": [
+          {
+            "initial_panels": 218,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/effective_34um/a_0.00125/model.lst.run.numerically_converged_diagnostic.ea0a5236e27c7d8dc0f25f97267912cb139b1b59f3db8f7abeb0789a70e9b7cf.json",
+            "matrix_f": [
+              [
+                8.6481e-14,
+                -2.97983e-14
+              ],
+              [
+                -2.97983e-14,
+                9.24551e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.6481e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.95204098493554e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.66827e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.6481e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.95204098493554e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 7.400000000005603e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0802e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.66864e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 135.22477064220183,
+            "peak_rss_bytes": 192741376,
+            "raw_matrix_f": [
+              [
+                8.6481e-14,
+                -2.97946e-14
+              ],
+              [
+                -2.9802e-14,
+                9.24551e-14
+              ]
+            ],
+            "refined_panels": 29479,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 6.848761,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 6.937442834023386
+          },
+          {
+            "initial_panels": 218,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/effective_34um/a_0.0009/model.lst.run.numerically_converged_diagnostic.52fac507441cf003c102ea4a9e05aa8ddaa126b87b88185375325c7edc03d76c.json",
+            "matrix_f": [
+              [
+                8.64857e-14,
+                -2.980095e-14
+              ],
+              [
+                -2.980095e-14,
+                9.24581e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.64857e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.952170782461488e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.6684749999999995e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.64857e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.952170782461488e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 5.000000000046427e-19,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.08012e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6685e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 135.22477064220183,
+            "peak_rss_bytes": 208453632,
+            "raw_matrix_f": [
+              [
+                8.64857e-14,
+                -2.98007e-14
+              ],
+              [
+                -2.98012e-14,
+                9.24581e-14
+              ]
+            ],
+            "refined_panels": 29479,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 7.904303,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 7.991897500003688
+          },
+          {
+            "failures": [
+              "matrix_validation: capacitor branches do not exactly reconstruct Maxwell matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/effective_34um/a_0.000625/model.lst.run.rejected_diagnostic.41c0b0010fe3688470d305591dfde633cfeb149d68f2fdec294d5e518ad0ff8f.json",
+            "relative_error": 0.000625,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      },
+      "physical_35um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004,
+          "candidate_input_panels": 50,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.0005,
+          "minimum_triangle_angle_deg": 21.13982480865764,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 50,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              2.7310840000000003e-15,
+              1.596808e-15
+            ],
+            [
+              1.5968920000000002e-15,
+              2.850426e-15
+            ]
+          ],
+          [
+            [
+              2.7310840000000003e-15,
+              1.596808e-15
+            ],
+            [
+              1.5968660000000002e-15,
+              2.850426e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              3.199999999991848e-18,
+              3.2999999999990873e-18
+            ],
+            [
+              1.2999999999994492e-18,
+              2.5999999999988984e-18
+            ]
+          ],
+          [
+            [
+              1.2120000000000205e-16,
+              3.579999999999794e-17
+            ],
+            [
+              4.160000000000131e-17,
+              6.989999999999903e-17
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "runs": [
+          {
+            "initial_panels": 210,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/physical_35um/a_0.00125/model.lst.run.numerically_converged_diagnostic.9ba4f344e9e8cbe494451119ff8dea55d44a4551c6ba4c8de5ddc3e3239944dd.json",
+            "matrix_f": [
+              [
+                8.6551e-14,
+                -2.984085e-14
+              ],
+              [
+                -2.984085e-14,
+                9.25187e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.6551e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.954519028960981e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.6710150000000003e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.6551e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.954519028960981e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 7.50000000000022e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0844599999999997e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6713900000000004e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 137.97142857142856,
+            "peak_rss_bytes": 250675200,
+            "raw_matrix_f": [
+              [
+                8.6551e-14,
+                -2.98371e-14
+              ],
+              [
+                -2.98446e-14,
+                9.25187e-14
+              ]
+            ],
+            "refined_panels": 28974,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 11.366088,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 11.484448584029451
+          },
+          {
+            "initial_panels": 210,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/physical_35um/a_0.0009/model.lst.run.numerically_converged_diagnostic.ee0e519e96f31766705f92090277aa5942362b6fb6cfd43f89708475360f627e.json",
+            "matrix_f": [
+              [
+                8.65542e-14,
+                -2.984185e-14
+              ],
+              [
+                -2.984185e-14,
+                9.25213e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.65542e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.954712509779097e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.671235e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.65542e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.954712509779097e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 2.900000000001684e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0843299999999997e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6713799999999996e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 137.97142857142856,
+            "peak_rss_bytes": 250347520,
+            "raw_matrix_f": [
+              [
+                8.65542e-14,
+                -2.98404e-14
+              ],
+              [
+                -2.98433e-14,
+                9.25213e-14
+              ]
+            ],
+            "refined_panels": 28974,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 13.185434,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 13.274974874977488
+          },
+          {
+            "initial_panels": 210,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/physical_35um/a_0.000625/model.lst.run.numerically_converged_diagnostic.b7057eb1bb0c581913f7859ba6b11215ce11d3e51cde60a6d9b9a7a5e8f2de58.json",
+            "matrix_f": [
+              [
+                8.6433e-14,
+                -2.980315e-14
+              ],
+              [
+                -2.980315e-14,
+                9.24514e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.6433e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.948751698444297e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.6629849999999996e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.6433e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.948751698444297e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 2.900000000001684e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.08046e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.662839999999999e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 288.6333333333333,
+            "peak_rss_bytes": 483360768,
+            "raw_matrix_f": [
+              [
+                8.6433e-14,
+                -2.98046e-14
+              ],
+              [
+                -2.98017e-14,
+                9.24514e-14
+              ]
+            ],
+            "refined_panels": 60613,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 17.735157,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.82467108295532
+          }
+        ],
+        "verdict": "physical_reference"
+      },
+      "simplify_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004000000000000001,
+          "candidate_input_panels": 22,
+          "clearance_change_m": 5.421010862427522e-20,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.0006000000000000001,
+          "minimum_triangle_angle_deg": 30.96375653207355,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 50,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected"
+        ],
+        "runs": [
+          {
+            "failures": [
+              "matrix_validation: capacitor branches do not exactly reconstruct Maxwell matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-cycle3-fixture-requalification/pcb_like_coplanar_air/simplify_1um/a_0.00125/model.lst.run.rejected_diagnostic.16026f7d74a3872b0a90551a70e0204d6f08f7b9629a5ec6ac73ed5f83e70d7f.json",
+            "relative_error": 0.00125,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      }
+    }
+  },
+  "solver_executable": "/Users/fab/dev/vendor/FastFieldSolvers/build-fastercap-clang/FasterCap",
+  "thin_sheet_status": "excluded: homogeneous open-sheet semantics are undocumented and zero-thickness conductors at unlike-dielectric interfaces are explicitly unsupported upstream"
+}

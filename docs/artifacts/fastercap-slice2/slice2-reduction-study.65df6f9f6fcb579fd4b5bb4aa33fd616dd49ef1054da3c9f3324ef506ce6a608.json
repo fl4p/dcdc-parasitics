@@ -1,0 +1,3750 @@
+{
+  "candidates": [
+    {
+      "anchor": "midplane",
+      "documented_semantics": "closed finite-thickness reference",
+      "effective_thickness_m": 3.5e-05,
+      "name": "physical_35um",
+      "representation": "physical_thickness",
+      "simplify_tolerance_m": 0.0
+    },
+    {
+      "anchor": "midplane",
+      "documented_semantics": "controlled closed effective thickness",
+      "effective_thickness_m": 3.4e-05,
+      "name": "effective_34um",
+      "representation": "effective_thickness",
+      "simplify_tolerance_m": 0.0
+    },
+    {
+      "anchor": "midplane",
+      "documented_semantics": "controlled closed effective thickness",
+      "effective_thickness_m": 1e-06,
+      "name": "effective_1um",
+      "representation": "effective_thickness",
+      "simplify_tolerance_m": 0.0
+    },
+    {
+      "anchor": "midplane",
+      "documented_semantics": "topology-preserving boundary simplification",
+      "effective_thickness_m": 3.5e-05,
+      "name": "simplify_1um",
+      "representation": "boundary_simplification",
+      "simplify_tolerance_m": 1e-06
+    }
+  ],
+  "content_sha256": "65df6f9f6fcb579fd4b5bb4aa33fd616dd49ef1054da3c9f3324ef506ce6a608",
+  "fixed_gates": {
+    "area_relative": 0.0001,
+    "clearance_change_cap_m": 1e-06,
+    "geometry_grid_m": 1e-09,
+    "ladder_absolute_f": 1e-15,
+    "ladder_relative": 0.02,
+    "minimum_segment_fraction_of_tolerance": 0.5,
+    "reduction_absolute_f": 2e-15,
+    "reduction_relative": 0.01
+  },
+  "fixtures": [
+    {
+      "name": "parallel_plate_air",
+      "relative_permittivity": 1.0,
+      "scope": "overlapping parallel rectangular plates in air; 1 mm square; 100 um physical face gap",
+      "source_thickness_m": 3.5e-05
+    },
+    {
+      "name": "pcb_like_coplanar_air",
+      "relative_permittivity": 1.0,
+      "scope": "coplanar L-shape and rectangle in air; 400 um lateral clearance; redundant collinear boundary segmentation at 0.5-1 mm spacing",
+      "source_thickness_m": 3.5e-05
+    },
+    {
+      "name": "parallel_plate_enclosed_fr4",
+      "relative_permittivity": 4.2,
+      "scope": "10 mm parallel plates wholly inside a convex epsilon_r=4.2 region with the nearest air interface 982.5 um from physical copper",
+      "source_thickness_m": 3.5e-05
+    }
+  ],
+  "format": "dcdc-fastercap-reduction-study-v1",
+  "gate_policy": "fastercap-pcb-gates-v1",
+  "ladder_relative_errors": [
+    0.00125,
+    0.0009,
+    0.000625
+  ],
+  "lifecycle_scope": "fixture_qualification_only",
+  "qualification_limit": "No result authorizes a PCB physical model or Fugu2 use; Slice 5 must requalify over its complete geometry/material/topology envelope.",
+  "results": {
+    "parallel_plate_air": {
+      "effective_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00013399999999999998,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 3.399999999999996e-05,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 1.7e-05,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [
+            "candidate clearance change exceeds min(1 um, 1% source gap)"
+          ],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": false
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "candidate clearance change exceeds min(1 um, 1% source gap)"
+        ],
+        "runs": [],
+        "verdict": "rejected"
+      },
+      "effective_34um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00010099999999999999,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 9.9999999999997e-07,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 4.999999999999986e-07,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              3.662820000000001e-15,
+              3.17268e-15
+            ],
+            [
+              3.17268e-15,
+              3.66286e-15
+            ]
+          ],
+          [
+            [
+              3.66284e-15,
+              3.17276e-15
+            ],
+            [
+              3.17278e-15,
+              3.66288e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              3.999999999986654e-18,
+              9.999999999966636e-19
+            ],
+            [
+              9.999999999966636e-19,
+              3.999999999986654e-18
+            ]
+          ],
+          [
+            [
+              4.999999999983318e-18,
+              4.99999999999594e-18
+            ],
+            [
+              5.999999999992603e-18,
+              4.999999999983318e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reduction_allowance_f": [
+          [
+            3.34223e-15,
+            3.09694e-15
+          ],
+          [
+            3.09694e-15,
+            3.3422500000000002e-15
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            1.0810000000000032e-15,
+            1.0559999999999982e-15
+          ],
+          [
+            1.0550000000000016e-15,
+            1.0810000000000032e-15
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/effective_34um/a_0.00125/model.lst.run.numerically_converged_diagnostic.41908a4ced406ae1ac05fa7e51849be98d22158cc6e9a1eff5ac13f2eea9e1f1.json",
+            "matrix_f": [
+              [
+                1.33141e-13,
+                -1.08634e-13
+              ],
+              [
+                -1.08634e-13,
+                1.33143e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.33141e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.450799999539738e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4507e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.33141e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.450799999539738e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.09634e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4507e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 783.3846153846154,
+            "peak_rss_bytes": 1970372608,
+            "raw_matrix_f": [
+              [
+                1.33141e-13,
+                -1.08634e-13
+              ],
+              [
+                -1.08634e-13,
+                1.33143e-13
+              ]
+            ],
+            "refined_panels": 81472,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 17.012449,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.034416250011418
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/effective_34um/a_0.0009/model.lst.run.numerically_converged_diagnostic.1e658161b62e6037bb1d695e9109efc885280bb553e531ed7db027a86b357f54.json",
+            "matrix_f": [
+              [
+                1.33137e-13,
+                -1.08633e-13
+              ],
+              [
+                -1.08633e-13,
+                1.33139e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.33137e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4504999995397352e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.450400000000001e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.33137e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4504999995397352e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.0963300000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.450400000000001e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 783.3846153846154,
+            "peak_rss_bytes": 2023915520,
+            "raw_matrix_f": [
+              [
+                1.33137e-13,
+                -1.08633e-13
+              ],
+              [
+                -1.08633e-13,
+                1.33139e-13
+              ]
+            ],
+            "refined_panels": 81472,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 17.01652,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.03653270896757
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/effective_34um/a_0.000625/model.lst.run.numerically_converged_diagnostic.6d838ee9973a1cf111424310aa3764c1bd7553252a697dfe33552e3e2a13b19c.json",
+            "matrix_f": [
+              [
+                1.33142e-13,
+                -1.086385e-13
+              ],
+              [
+                -1.086385e-13,
+                1.33144e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.33142e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.450449999539757e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4503499999999998e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.33142e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.450449999539757e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 9.999999999966636e-19,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.09639e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4503999999999996e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 783.3846153846154,
+            "peak_rss_bytes": 1923547136,
+            "raw_matrix_f": [
+              [
+                1.33142e-13,
+                -1.08638e-13
+              ],
+              [
+                -1.08639e-13,
+                1.33144e-13
+              ]
+            ],
+            "refined_panels": 81472,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 17.614048,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.63446412497433
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 16,
+          "candidate_refined_panels": 81472,
+          "input_panel_reduction": false,
+          "reference_input_panels": 16,
+          "reference_refined_panels": 81680,
+          "refined_panel_reduction": true
+        },
+        "verdict": "fixture_qualified"
+      },
+      "physical_35um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00010000000000000002,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              3.6844000000000005e-15,
+              3.19378e-15
+            ],
+            [
+              3.19378e-15,
+              3.68444e-15
+            ]
+          ],
+          [
+            [
+              3.68446e-15,
+              3.19388e-15
+            ],
+            [
+              3.19388e-15,
+              3.6845e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              2.0000000000185707e-18,
+              0.0
+            ],
+            [
+              0.0,
+              2.9999999999899908e-18
+            ]
+          ],
+          [
+            [
+              5.0000000000085615e-18,
+              4.99999999999594e-18
+            ],
+            [
+              4.99999999999594e-18,
+              5.9999999999799815e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "runs": [
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/physical_35um/a_0.00125/model.lst.run.numerically_converged_diagnostic.9d37d3bd4123406ac0d314ac54cb7cbf9cc1c1c1d56bcf6171c570bacd57150a.json",
+            "matrix_f": [
+              [
+                1.3422e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34222e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.3422e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441665e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.3422e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441665e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068900000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 785.3846153846154,
+            "peak_rss_bytes": 2074476544,
+            "raw_matrix_f": [
+              [
+                1.3422e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34222e-13
+              ]
+            ],
+            "refined_panels": 81680,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 16.597374,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 16.649763999972492
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/physical_35um/a_0.0009/model.lst.run.numerically_converged_diagnostic.9565bf5566111353535489aa75e6930388f4a8a9d8ae8627cc590623d811ed02.json",
+            "matrix_f": [
+              [
+                1.34218e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34219e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34218e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529499998860408e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4528999999999988e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34218e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529499998860408e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068900000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4528999999999988e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 785.3846153846154,
+            "peak_rss_bytes": 2041888768,
+            "raw_matrix_f": [
+              [
+                1.34218e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34219e-13
+              ]
+            ],
+            "refined_panels": 81680,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 16.137022,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 16.155160458001774
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/physical_35um/a_0.000625/model.lst.run.numerically_converged_diagnostic.8e0750b3901fc719731cc6a5ea5f94b4946daf3ef46f1a1298bfccf4e7463464.json",
+            "matrix_f": [
+              [
+                1.34223e-13,
+                -1.09694e-13
+              ],
+              [
+                -1.09694e-13,
+                1.34225e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529999995441868e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4529e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529999995441868e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.10694e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4529e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 785.3846153846154,
+            "peak_rss_bytes": 2086158336,
+            "raw_matrix_f": [
+              [
+                1.34223e-13,
+                -1.09694e-13
+              ],
+              [
+                -1.09694e-13,
+                1.34225e-13
+              ]
+            ],
+            "refined_panels": 81680,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 17.056467,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.073478875041474
+          }
+        ],
+        "verdict": "physical_reference"
+      },
+      "simplify_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.00010000000000000002,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.001,
+          "minimum_triangle_angle_deg": 45.00000000000001,
+          "reasons": [],
+          "source_clearance_m": 0.00010000000000000002,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              3.6844000000000005e-15,
+              3.19378e-15
+            ],
+            [
+              3.19378e-15,
+              3.68444e-15
+            ]
+          ],
+          [
+            [
+              3.68446e-15,
+              3.19388e-15
+            ],
+            [
+              3.19388e-15,
+              3.6845e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              2.0000000000185707e-18,
+              0.0
+            ],
+            [
+              0.0,
+              2.9999999999899908e-18
+            ]
+          ],
+          [
+            [
+              5.0000000000085615e-18,
+              4.99999999999594e-18
+            ],
+            [
+              4.99999999999594e-18,
+              5.9999999999799815e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reasons": [
+          "no tight-rung refined-panel reduction; input panels or runtime alone cannot select candidate"
+        ],
+        "reduction_allowance_f": [
+          [
+            3.34223e-15,
+            3.09694e-15
+          ],
+          [
+            3.09694e-15,
+            3.3422500000000002e-15
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/simplify_1um/a_0.00125/model.lst.run.numerically_converged_diagnostic.e786cc43cd5a28ec7f36d69f1080d06b74a2b330acc98126135639ebd3a4feaf.json",
+            "matrix_f": [
+              [
+                1.3422e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34222e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.3422e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441665e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.3422e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4531999995441665e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068900000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4531000000000007e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 785.3846153846154,
+            "peak_rss_bytes": 2078916608,
+            "raw_matrix_f": [
+              [
+                1.3422e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34222e-13
+              ]
+            ],
+            "refined_panels": 81680,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 16.591696,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 16.607623959018383
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/simplify_1um/a_0.0009/model.lst.run.numerically_converged_diagnostic.912795597b1130f0e2e8f0f16d6953c1374d0a679bc36865b281145b63ef1163.json",
+            "matrix_f": [
+              [
+                1.34218e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34219e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34218e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529499998860408e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4528999999999988e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34218e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529499998860408e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.1068900000000001e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4528999999999988e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 785.3846153846154,
+            "peak_rss_bytes": 1942355968,
+            "raw_matrix_f": [
+              [
+                1.34218e-13,
+                -1.09689e-13
+              ],
+              [
+                -1.09689e-13,
+                1.34219e-13
+              ]
+            ],
+            "refined_panels": 81680,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 16.672718,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 16.69516412500525
+          },
+          {
+            "initial_panels": 104,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_air/simplify_1um/a_0.000625/model.lst.run.numerically_converged_diagnostic.8450502300a0ee09690b1bc3cff40411b5c9fc0e7ed970109b6b21aae8faf161.json",
+            "matrix_f": [
+              [
+                1.34223e-13,
+                -1.09694e-13
+              ],
+              [
+                -1.09694e-13,
+                1.34225e-13
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529999995441868e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 2.4529e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 1.34223e-13,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 2.4529999995441868e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 1.10694e-16
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 2.4529e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 785.3846153846154,
+            "peak_rss_bytes": 2077163520,
+            "raw_matrix_f": [
+              [
+                1.34223e-13,
+                -1.09694e-13
+              ],
+              [
+                -1.09694e-13,
+                1.34225e-13
+              ]
+            ],
+            "refined_panels": 81680,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 17.38674,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 17.41034387500258
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 16,
+          "candidate_refined_panels": 81680,
+          "input_panel_reduction": false,
+          "reference_input_panels": 16,
+          "reference_refined_panels": 81680,
+          "refined_panel_reduction": false
+        },
+        "verdict": "rejected"
+      }
+    },
+    "parallel_plate_enclosed_fr4": {
+      "effective_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0005340000000000001,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 3.4000000000000176e-05,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 1.7000000000000088e-05,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [
+            "candidate clearance change exceeds min(1 um, 1% source gap)"
+          ],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": false
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "candidate clearance change exceeds min(1 um, 1% source gap)"
+        ],
+        "runs": [],
+        "verdict": "rejected"
+      },
+      "effective_34um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.000501,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 1.0000000000001327e-06,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 5.000000000000664e-07,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              1.084102e-13,
+              8.988840000000001e-14
+            ],
+            [
+              8.988840000000001e-14,
+              1.084098e-13
+            ]
+          ],
+          [
+            [
+              1.0829819999999999e-13,
+              8.9757e-14
+            ],
+            [
+              8.9757e-14,
+              1.082978e-13
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              5.600000000000703e-15,
+              6.570000000000042e-15
+            ],
+            [
+              6.570000000000042e-15,
+              5.599999999999895e-15
+            ]
+          ],
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reasons": [
+          "matrix error exceeds 2 fF + 1%"
+        ],
+        "reduction_allowance_f": [
+          [
+            8.25037e-14,
+            7.348790000000001e-14
+          ],
+          [
+            7.349610000000001e-14,
+            8.24957e-14
+          ]
+        ],
+        "reduction_budget_passed": false,
+        "reduction_difference_f": [
+          [
+            2.6854599999999997e-12,
+            2.71094e-12
+          ],
+          [
+            2.71176e-12,
+            2.6846799999999994e-12
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 964,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/effective_34um/a_0.00125/model.lst.run.numerically_converged_diagnostic.5f12a070ea410f77d02aa2f73da0de52ad783ff7769c384c7a262a218fd17f52.json",
+            "matrix_f": [
+              [
+                5.37051e-12,
+                -4.44442e-12
+              ],
+              [
+                -4.44442e-12,
+                5.37049e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 5.37049e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.260799999887499e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.2607e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 5.37049e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.260799999887499e-13,
+                  "passed": true,
+                  "tolerance": 5.37051e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 4.44542e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.2607e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.1452282157676348,
+            "peak_rss_bytes": 71319552,
+            "raw_matrix_f": [
+              [
+                5.37051e-12,
+                -4.44442e-12
+              ],
+              [
+                -4.44442e-12,
+                5.37049e-12
+              ]
+            ],
+            "refined_panels": 1104,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 0.017835,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.0405127500416711
+          },
+          {
+            "initial_panels": 964,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/effective_34um/a_0.0009/model.lst.run.numerically_converged_diagnostic.1da0f097a3898637c06a76c8ea41d8c83af0896e5308dece30411b9fc3fea39a.json",
+            "matrix_f": [
+              [
+                5.36491e-12,
+                -4.43785e-12
+              ],
+              [
+                -4.43785e-12,
+                5.36489e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 5.36489e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.27049999988733e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.2704e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 5.36489e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.27049999988733e-13,
+                  "passed": true,
+                  "tolerance": 5.3649099999999996e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 4.43885e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.2704e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.1452282157676348,
+            "peak_rss_bytes": 71352320,
+            "raw_matrix_f": [
+              [
+                5.36491e-12,
+                -4.43785e-12
+              ],
+              [
+                -4.43785e-12,
+                5.36489e-12
+              ]
+            ],
+            "refined_panels": 1104,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 0.007224,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.02596937498310581
+          },
+          {
+            "initial_panels": 964,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/effective_34um/a_0.000625/model.lst.run.numerically_converged_diagnostic.1b30ac1c5443e56ef93761b99917dd520ce8becf46323d9d0d84491eb26a0500.json",
+            "matrix_f": [
+              [
+                5.36491e-12,
+                -4.43785e-12
+              ],
+              [
+                -4.43785e-12,
+                5.36489e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 5.36489e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.27049999988733e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.2704e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 5.36489e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.27049999988733e-13,
+                  "passed": true,
+                  "tolerance": 5.3649099999999996e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 0.0,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 4.43885e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.2704e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.1452282157676348,
+            "peak_rss_bytes": 71385088,
+            "raw_matrix_f": [
+              [
+                5.36491e-12,
+                -4.43785e-12
+              ],
+              [
+                -4.43785e-12,
+                5.36489e-12
+              ]
+            ],
+            "refined_panels": 1104,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 0.007217,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.026876999996602535
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 16,
+          "candidate_refined_panels": 1104,
+          "input_panel_reduction": false,
+          "reference_input_panels": 16,
+          "reference_refined_panels": 1072,
+          "refined_panel_reduction": false
+        },
+        "verdict": "rejected"
+      },
+      "physical_35um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004999999999999999,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              1.619866e-13,
+              1.439444e-13
+            ],
+            [
+              1.439646e-13,
+              1.619746e-13
+            ]
+          ],
+          [
+            [
+              1.620074e-13,
+              1.439758e-13
+            ],
+            [
+              1.439922e-13,
+              1.619914e-13
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              1.0399999999993574e-15,
+              1.569999999999962e-15
+            ],
+            [
+              1.3800000000001415e-15,
+              8.400000000002266e-16
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "runs": [
+          {
+            "initial_panels": 932,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/physical_35um/a_0.00125/model.lst.run.numerically_converged_diagnostic.89290ec4fc26375ffacaf2bf5f87d2aba67a07c0abfc155123fe0079bdfd2e75.json",
+            "matrix_f": [
+              [
+                8.04933e-12,
+                -7.147725e-12
+              ],
+              [
+                -7.147725e-12,
+                8.04873e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.010049999999991e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 8.04933e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.009999999999811e-15,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 7.14923e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.004999999999992e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.150214592274678,
+            "peak_rss_bytes": 71041024,
+            "raw_matrix_f": [
+              [
+                8.04933e-12,
+                -7.14722e-12
+              ],
+              [
+                -7.14823e-12,
+                8.04873e-12
+              ]
+            ],
+            "refined_panels": 1072,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 0.007748,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.02856204198906198
+          },
+          {
+            "initial_panels": 932,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/physical_35um/a_0.0009/model.lst.run.numerically_converged_diagnostic.6080868fc0fec6333c409a6344fa741d5f45235db68780f6eedbaa99e74def48.json",
+            "matrix_f": [
+              [
+                8.04933e-12,
+                -7.147725e-12
+              ],
+              [
+                -7.147725e-12,
+                8.04873e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.010049999999991e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 8.04933e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.009999999999811e-15,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 7.14923e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.004999999999992e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.150214592274678,
+            "peak_rss_bytes": 71073792,
+            "raw_matrix_f": [
+              [
+                8.04933e-12,
+                -7.14722e-12
+              ],
+              [
+                -7.14823e-12,
+                8.04873e-12
+              ]
+            ],
+            "refined_panels": 1072,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 0.008763,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.04573262500343844
+          },
+          {
+            "initial_panels": 932,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/physical_35um/a_0.000625/model.lst.run.numerically_converged_diagnostic.1949ae2193b935dfdc2b1f765b880567c112962c3d3c926e8c17b8e7444dac62.json",
+            "matrix_f": [
+              [
+                8.05037e-12,
+                -7.1492e-12
+              ],
+              [
+                -7.1492e-12,
+                8.04957e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.04957e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.00769988809936e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.003699999999993e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.04957e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.00769988809936e-13,
+                  "passed": true,
+                  "tolerance": 8.050369999999999e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 8.199999999999904e-16,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 7.15061e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 8.999599999999993e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.150214592274678,
+            "peak_rss_bytes": 71204864,
+            "raw_matrix_f": [
+              [
+                8.05037e-12,
+                -7.14879e-12
+              ],
+              [
+                -7.14961e-12,
+                8.04957e-12
+              ]
+            ],
+            "refined_panels": 1072,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 0.020256,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.04003358300542459
+          }
+        ],
+        "verdict": "physical_reference"
+      },
+      "simplify_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004999999999999999,
+          "candidate_input_panels": 16,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.01,
+          "minimum_triangle_angle_deg": 45.0,
+          "reasons": [],
+          "source_clearance_m": 0.0004999999999999999,
+          "source_input_panels": 16,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              1.619866e-13,
+              1.439444e-13
+            ],
+            [
+              1.439646e-13,
+              1.619746e-13
+            ]
+          ],
+          [
+            [
+              1.620074e-13,
+              1.439758e-13
+            ],
+            [
+              1.439922e-13,
+              1.619914e-13
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          [
+            [
+              1.0399999999993574e-15,
+              1.569999999999962e-15
+            ],
+            [
+              1.3800000000001415e-15,
+              8.400000000002266e-16
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reasons": [
+          "no tight-rung refined-panel reduction; input panels or runtime alone cannot select candidate"
+        ],
+        "reduction_allowance_f": [
+          [
+            8.25037e-14,
+            7.348790000000001e-14
+          ],
+          [
+            7.349610000000001e-14,
+            8.24957e-14
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 932,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/simplify_1um/a_0.00125/model.lst.run.numerically_converged_diagnostic.223f000a8e13ba40d90da9309797bab8109e905c47c364dfe5a0aca2ac6df0db.json",
+            "matrix_f": [
+              [
+                8.04933e-12,
+                -7.147725e-12
+              ],
+              [
+                -7.147725e-12,
+                8.04873e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.010049999999991e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 8.04933e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.009999999999811e-15,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 7.14923e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.004999999999992e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.150214592274678,
+            "peak_rss_bytes": 71368704,
+            "raw_matrix_f": [
+              [
+                8.04933e-12,
+                -7.14722e-12
+              ],
+              [
+                -7.14823e-12,
+                8.04873e-12
+              ]
+            ],
+            "refined_panels": 1072,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 0.007394,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.026179415988735855
+          },
+          {
+            "initial_panels": 932,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/simplify_1um/a_0.0009/model.lst.run.numerically_converged_diagnostic.286c6ceffb4f534b1704112243a7cedca6c4aed5c279da06728dfa643e836a91.json",
+            "matrix_f": [
+              [
+                8.04933e-12,
+                -7.147725e-12
+              ],
+              [
+                -7.147725e-12,
+                8.04873e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.010049999999991e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.04873e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.013049937042901e-13,
+                  "passed": true,
+                  "tolerance": 8.04933e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.009999999999811e-15,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 7.14923e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 9.004999999999992e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.150214592274678,
+            "peak_rss_bytes": 71368704,
+            "raw_matrix_f": [
+              [
+                8.04933e-12,
+                -7.14722e-12
+              ],
+              [
+                -7.14823e-12,
+                8.04873e-12
+              ]
+            ],
+            "refined_panels": 1072,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 0.007126,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.025158500007819384
+          },
+          {
+            "initial_panels": 932,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/parallel_plate_enclosed_fr4/simplify_1um/a_0.000625/model.lst.run.numerically_converged_diagnostic.d98bfe3282aef7980ea0b0fd46a53485f8c7e042eb4d8a7b53816492735b39e6.json",
+            "matrix_f": [
+              [
+                8.05037e-12,
+                -7.1492e-12
+              ],
+              [
+                -7.1492e-12,
+                8.04957e-12
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.04957e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.00769988809936e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 9.003699999999993e-13,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.04957e-12,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 9.00769988809936e-13,
+                  "passed": true,
+                  "tolerance": 8.050369999999999e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 8.199999999999904e-16,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 7.15061e-15
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 8.999599999999993e-13,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 1.150214592274678,
+            "peak_rss_bytes": 71368704,
+            "raw_matrix_f": [
+              [
+                8.05037e-12,
+                -7.14879e-12
+              ],
+              [
+                -7.14961e-12,
+                8.04957e-12
+              ]
+            ],
+            "refined_panels": 1072,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 0.007242,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.026332125009503216
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 16,
+          "candidate_refined_panels": 1072,
+          "input_panel_reduction": false,
+          "reference_input_panels": 16,
+          "reference_refined_panels": 1072,
+          "refined_panel_reduction": false
+        },
+        "verdict": "rejected"
+      }
+    },
+    "pcb_like_coplanar_air": {
+      "effective_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004,
+          "candidate_input_panels": 46,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 1.7e-05,
+          "minimum_boundary_segment_m": 0.0005,
+          "minimum_triangle_angle_deg": 19.23067237566127,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 46,
+          "valid": true
+        },
+        "ladder_allowances_f": [],
+        "ladder_differences_f": [],
+        "ladder_passed": false,
+        "reasons": [
+          "one or more numerical ladder rungs rejected"
+        ],
+        "runs": [
+          {
+            "failures": [
+              "process_exit: exit code -9; limits ('wall time exceeded 120s',)",
+              "resource_limits: ('wall time exceeded 120s',)",
+              "solver_runtime: None",
+              "complete_iterations: ({'number': 0, 'parse_failures': (), 'matrix': True, 'refined_panels': 6108, 'mesh_refinement': 1e+32, 'preconditioners': ('Jacobi',)}, {'number': 1, 'parse_failures': (), 'matrix': True, 'refined_panels': 7106, 'mesh_refinement': 39.2762, 'preconditioners': ('Jacobi',)}, {'number': 2, 'parse_failures': (), 'matrix': True, 'refined_panels': 8384, 'mesh_refinement': 27.7721, 'preconditioners': ('Jacobi',)}, {'number': 3, 'parse_failures': (), 'matrix': True, 'refined_panels': 10428, 'mesh_refinement': 19.6325, 'preconditioners': ('Jacobi',)}, {'number': 4, 'parse_failures': (), 'matrix': True, 'refined_panels': 15296, 'mesh_refinement': 13.8785, 'preconditioners': ('Jacobi',)}, {'number': 5, 'parse_failures': (), 'matrix': True, 'refined_panels': 23484, 'mesh_refinement': 9.81327, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)}, {'number': 6, 'parse_failures': (), 'matrix': True, 'refined_panels': 40896, 'mesh_refinement': 6.93862, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)}, {'number': 7, 'parse_failures': (), 'matrix': False, 'refined_panels': 75708, 'mesh_refinement': 4.90567, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)})",
+              "final_iteration_complete: last iteration by position has a complete matrix",
+              "solver_label_identity: (('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ('g1_dcp_c0001', 'g2_dcp_c0002'), ())",
+              "gmres_rhs_outcomes: ((0, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 9, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 8, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (1, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 56, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 41, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (2, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 37, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 36, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (3, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 66, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 67, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (4, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 67, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 91, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (5, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 74, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 73, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (6, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 772, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 491, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (7, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 35, 'converged': True, 'residual': None, 'target': 0.000625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'},)))",
+              "automatic_refinement: final norm None; target 0.00125",
+              "normal_termination: terminal follows final convergence evidence, is exact, and is the last meaningful stdout record; lines ()",
+              "matrix_validation: no final matrix"
+            ],
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/effective_1um/a_0.00125/model.lst.run.rejected_diagnostic.5ea982b766be5ef8ac8797b2ba767d814bf04b413d9e63c857794c6bb3642fb7.json",
+            "relative_error": 0.00125,
+            "state": "rejected_diagnostic"
+          }
+        ],
+        "verdict": "rejected"
+      },
+      "effective_34um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004,
+          "candidate_input_panels": 46,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 4.999999999999986e-07,
+          "minimum_boundary_segment_m": 0.0005,
+          "minimum_triangle_angle_deg": 19.23067237566127,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 46,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              2.726342e-15,
+              1.59515e-15
+            ],
+            [
+              1.5951640000000001e-15,
+              2.8482380000000003e-15
+            ]
+          ],
+          [
+            [
+              2.726446e-15,
+              1.59515e-15
+            ],
+            [
+              1.5951640000000001e-15,
+              2.848336e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              1.2999999999931383e-18,
+              6.200000000000771e-18
+            ],
+            [
+              8.79999999999967e-18,
+              4.50000000001023e-18
+            ]
+          ],
+          [
+            [
+              5.199999999997797e-18,
+              1.2999999999994492e-18
+            ],
+            [
+              2.0000000000185707e-19,
+              4.8999999999887e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reasons": [
+          "no tight-rung refined-panel reduction; input panels or runtime alone cannot select candidate"
+        ],
+        "reduction_allowance_f": [
+          [
+            2.864738e-15,
+            2.298315e-15
+          ],
+          [
+            2.298347e-15,
+            2.9251500000000002e-15
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            1.514999999999994e-16,
+            7.529999999999868e-17
+          ],
+          [
+            7.669999999999906e-17,
+            9.820000000000306e-17
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 214,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/effective_34um/a_0.00125/model.lst.run.numerically_converged_diagnostic.b04f2fc15ad2c86a0e3713b5d2838dc654b4d51f8d3f0ac3bdb643e0f6f7c584.json",
+            "matrix_f": [
+              [
+                8.63158e-14,
+                -2.975035e-14
+              ],
+              [
+                -2.975035e-14,
+                9.24074e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.63158e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.945574400552126e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.6565450000000004e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.63158e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.945574400552126e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.8999999999987095e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0751299999999994e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6564500000000005e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 134.24766355140187,
+            "peak_rss_bytes": 222019584,
+            "raw_matrix_f": [
+              [
+                8.63158e-14,
+                -2.97513e-14
+              ],
+              [
+                -2.97494e-14,
+                9.24074e-14
+              ]
+            ],
+            "refined_panels": 28729,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 1.57911,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.5989247919642366
+          },
+          {
+            "initial_panels": 214,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/effective_34um/a_0.0009/model.lst.run.numerically_converged_diagnostic.7b9afb8460420f4afbeeff895b84f21879372ac312902be467978188643b4c26.json",
+            "matrix_f": [
+              [
+                8.63171e-14,
+                -2.975785e-14
+              ],
+              [
+                -2.975785e-14,
+                9.24119e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.63171e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.945102003891055e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.655925e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.63171e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.945102003891055e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 7.000000000001889e-19,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.07582e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.65596e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 134.24766355140187,
+            "peak_rss_bytes": 213221376,
+            "raw_matrix_f": [
+              [
+                8.63171e-14,
+                -2.97575e-14
+              ],
+              [
+                -2.97582e-14,
+                9.24119e-14
+              ]
+            ],
+            "refined_panels": 28729,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 1.468992,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.486722124973312
+          },
+          {
+            "initial_panels": 214,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/effective_34um/a_0.000625/model.lst.run.numerically_converged_diagnostic.3dfedee5b70272cf98268cffb57051323d34b79ce8ab440f61cddaadcfd5f351.json",
+            "matrix_f": [
+              [
+                8.63223e-14,
+                -2.9757099999999996e-14
+              ],
+              [
+                -2.9757099999999996e-14,
+                9.24168e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.63223e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.945683141789014e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.65652e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.63223e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.945683141789014e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.799999999997781e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0757999999999996e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6566099999999994e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 134.24766355140187,
+            "peak_rss_bytes": 217186304,
+            "raw_matrix_f": [
+              [
+                8.63223e-14,
+                -2.97562e-14
+              ],
+              [
+                -2.9758e-14,
+                9.24168e-14
+              ]
+            ],
+            "refined_panels": 28729,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 1.476003,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.492636915994808
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 46,
+          "candidate_refined_panels": 28729,
+          "input_panel_reduction": false,
+          "reference_input_panels": 46,
+          "reference_refined_panels": 27586,
+          "refined_panel_reduction": false
+        },
+        "verdict": "rejected"
+      },
+      "physical_35um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004,
+          "candidate_input_panels": 46,
+          "clearance_change_m": 0.0,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.0005,
+          "minimum_triangle_angle_deg": 19.23067237566127,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 46,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              2.729382e-15,
+              1.596628e-15
+            ],
+            [
+              1.596674e-15,
+              2.850212e-15
+            ]
+          ],
+          [
+            [
+              2.7294760000000003e-15,
+              1.59663e-15
+            ],
+            [
+              1.596694e-15,
+              2.8503e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              1.8999999999987095e-18,
+              4.299999999995751e-18
+            ],
+            [
+              6.499999999997246e-18,
+              3.399999999993705e-18
+            ]
+          ],
+          [
+            [
+              4.699999999999465e-18,
+              1.0000000000092854e-19
+            ],
+            [
+              9.999999999966636e-19,
+              4.40000000000299e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "runs": [
+          {
+            "initial_panels": 206,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/physical_35um/a_0.00125/model.lst.run.numerically_converged_diagnostic.9e276dc43e38d98fe22adc0e7c4d766db936f8d65e45903abd64e74d1ce85314.json",
+            "matrix_f": [
+              [
+                8.64672e-14,
+                -2.9827150000000006e-14
+              ],
+              [
+                -2.9827150000000006e-14,
+                9.25072e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.64672e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.950755228488332e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.664004999999999e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.64672e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.950755228488332e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 1.0000000000092854e-19,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.08272e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6640099999999994e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 133.9126213592233,
+            "peak_rss_bytes": 167854080,
+            "raw_matrix_f": [
+              [
+                8.64672e-14,
+                -2.98271e-14
+              ],
+              [
+                -2.98272e-14,
+                9.25072e-14
+              ]
+            ],
+            "refined_panels": 27586,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 1.183193,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.2025710840243846
+          },
+          {
+            "initial_panels": 206,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/physical_35um/a_0.0009/model.lst.run.numerically_converged_diagnostic.f7eb1e4e801e24ec43aab6404d9cb086f860b8cd211a9e60d8a4fe065aa76973.json",
+            "matrix_f": [
+              [
+                8.64691e-14,
+                -2.983255e-14
+              ],
+              [
+                -2.983255e-14,
+                9.25106e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.64691e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.950475420117021e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.6636549999999995e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.64691e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.950475420117021e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 2.3000000000024237e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.08337e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6637699999999997e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 133.9126213592233,
+            "peak_rss_bytes": 198393856,
+            "raw_matrix_f": [
+              [
+                8.64691e-14,
+                -2.98314e-14
+              ],
+              [
+                -2.98337e-14,
+                9.25106e-14
+              ]
+            ],
+            "refined_panels": 27586,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 1.263529,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.2825444580521435
+          },
+          {
+            "initial_panels": 206,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/physical_35um/a_0.000625/model.lst.run.numerically_converged_diagnostic.f8d9e0a3278f00d47803404143ce6450c38a9aa7e97e0a838c05eb388c6f2f70.json",
+            "matrix_f": [
+              [
+                8.64738e-14,
+                -2.9833099999999995e-14
+              ],
+              [
+                -2.9833099999999995e-14,
+                9.2515e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.64738e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.950877210979233e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.66407e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.64738e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.950877210979233e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 3.1999999999981587e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.08347e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.6642299999999995e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 133.9126213592233,
+            "peak_rss_bytes": 188481536,
+            "raw_matrix_f": [
+              [
+                8.64738e-14,
+                -2.98315e-14
+              ],
+              [
+                -2.98347e-14,
+                9.2515e-14
+              ]
+            ],
+            "refined_panels": 27586,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 1.285344,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.3036814579972997
+          }
+        ],
+        "verdict": "physical_reference"
+      },
+      "simplify_1um": {
+        "geometry": {
+          "allowed_clearance_change_m": 1e-06,
+          "candidate_clearance_m": 0.0004000000000000001,
+          "candidate_input_panels": 22,
+          "clearance_change_m": 5.421010862427522e-20,
+          "maximum_anchor_displacement_m": 0.0,
+          "maximum_area_relative_error": 0.0,
+          "maximum_planar_boundary_displacement_m": 0.0,
+          "maximum_surface_displacement_m": 0.0,
+          "minimum_boundary_segment_m": 0.0006000000000000001,
+          "minimum_triangle_angle_deg": 30.96375653207355,
+          "reasons": [],
+          "source_clearance_m": 0.0004,
+          "source_input_panels": 46,
+          "valid": true
+        },
+        "ladder_allowances_f": [
+          [
+            [
+              2.7283480000000002e-15,
+              1.595286e-15
+            ],
+            [
+              1.595156e-15,
+              2.849206e-15
+            ]
+          ],
+          [
+            [
+              2.7272960000000003e-15,
+              1.59524e-15
+            ],
+            [
+              1.595114e-15,
+              2.849102e-15
+            ]
+          ]
+        ],
+        "ladder_differences_f": [
+          [
+            [
+              5.570000000000601e-17,
+              3.0000000000026125e-18
+            ],
+            [
+              3.9000000000046585e-18,
+              8.499999999996884e-18
+            ]
+          ],
+          [
+            [
+              3.100000000009852e-18,
+              7.000000000001889e-19
+            ],
+            [
+              1.800000000004092e-18,
+              3.2999999999990873e-18
+            ]
+          ]
+        ],
+        "ladder_passed": true,
+        "reasons": [
+          "no tight-rung refined-panel reduction; input panels or runtime alone cannot select candidate"
+        ],
+        "reduction_allowance_f": [
+          [
+            2.864738e-15,
+            2.298315e-15
+          ],
+          [
+            2.298347e-15,
+            2.9251500000000002e-15
+          ]
+        ],
+        "reduction_budget_passed": true,
+        "reduction_difference_f": [
+          [
+            1.0899999999998974e-16,
+            6.950000000000162e-17
+          ],
+          [
+            7.899999999999517e-17,
+            5.989999999999452e-17
+          ]
+        ],
+        "runs": [
+          {
+            "initial_panels": 182,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/simplify_1um/a_0.00125/model.lst.run.numerically_converged_diagnostic.0d75da819f3c87e5a6206ec42a5541e30aba4334bab87861a3cb3d07f62b4048.json",
+            "matrix_f": [
+              [
+                8.64174e-14,
+                -2.9761050000000004e-14
+              ],
+              [
+                -2.9761050000000004e-14,
+                9.24603e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.64174e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.952481889075294e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.6656349999999996e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.64174e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.952481889075294e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 6.499999999997246e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0764299999999996e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.66531e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 125.5,
+            "peak_rss_bytes": 156188672,
+            "raw_matrix_f": [
+              [
+                8.64174e-14,
+                -2.97643e-14
+              ],
+              [
+                -2.97578e-14,
+                9.24603e-14
+              ]
+            ],
+            "refined_panels": 22841,
+            "relative_error": 0.00125,
+            "solver_runtime_s": 0.831906,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 0.8522870419546962
+          },
+          {
+            "initial_panels": 182,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/simplify_1um/a_0.0009/model.lst.run.numerically_converged_diagnostic.1dc5a2604d01d66ea9a3908383a5d34912010d8cf9df31f616a2f36258c8426c.json",
+            "matrix_f": [
+              [
+                8.63617e-14,
+                -2.9757599999999994e-14
+              ],
+              [
+                -2.9757599999999994e-14,
+                9.24518e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.63617e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.949375805231112e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.66041e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.63617e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.949375805231112e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 7.399999999999292e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0761299999999994e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.66004e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 155.2912087912088,
+            "peak_rss_bytes": 231620608,
+            "raw_matrix_f": [
+              [
+                8.63617e-14,
+                -2.97613e-14
+              ],
+              [
+                -2.97539e-14,
+                9.24518e-14
+              ]
+            ],
+            "refined_panels": 28263,
+            "relative_error": 0.0009,
+            "solver_runtime_s": 1.655242,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.6727764579700306
+          },
+          {
+            "initial_panels": 182,
+            "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-reduction-study-slice2-v7/pcb_like_coplanar_air/simplify_1um/a_0.000625/model.lst.run.numerically_converged_diagnostic.a6853f4d9d5c06898df9064f8a299cbabc303fea2227a916b7c07df88e31264e.json",
+            "matrix_f": [
+              [
+                8.63648e-14,
+                -2.9758849999999996e-14
+              ],
+              [
+                -2.9758849999999996e-14,
+                9.24551e-14
+              ]
+            ],
+            "matrix_gate_results": {
+              "downstream": {
+                "diagonal": {
+                  "minimum": 8.63648e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.949570436610511e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "row_sum": {
+                  "minimum": 5.660595000000001e-14,
+                  "passed": true,
+                  "tolerance": 0.0
+                },
+                "symmetry": {
+                  "error": 0.0,
+                  "passed": true,
+                  "tolerance": 0.0
+                }
+              },
+              "exact_branch_reconstruction": {
+                "passed": true
+              },
+              "raw": {
+                "diagonal": {
+                  "minimum": 8.63648e-14,
+                  "passed": true
+                },
+                "finite": {
+                  "passed": true,
+                  "value": true
+                },
+                "off_diagonal": {
+                  "maximum": 0.0,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "positive_semidefinite": {
+                  "minimum_eigenvalue": 5.949570436610511e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                },
+                "reciprocity": {
+                  "couplings": [
+                    {
+                      "column": "conductor_2",
+                      "error": 6.299999999995389e-18,
+                      "passed": true,
+                      "row": "conductor_1",
+                      "tolerance": 3.0762e-17
+                    }
+                  ],
+                  "passed": true
+                },
+                "row_sum": {
+                  "minimum": 5.660280000000001e-14,
+                  "passed": true,
+                  "tolerance": 1e-18
+                }
+              }
+            },
+            "panel_growth": 155.2912087912088,
+            "peak_rss_bytes": 234323968,
+            "raw_matrix_f": [
+              [
+                8.63648e-14,
+                -2.9762e-14
+              ],
+              [
+                -2.97557e-14,
+                9.24551e-14
+              ]
+            ],
+            "refined_panels": 28263,
+            "relative_error": 0.000625,
+            "solver_runtime_s": 1.744907,
+            "state": "numerically_converged_diagnostic",
+            "wall_time_s": 1.7721539159538224
+          }
+        ],
+        "selection_evidence": {
+          "candidate_input_panels": 22,
+          "candidate_refined_panels": 28263,
+          "input_panel_reduction": true,
+          "reference_input_panels": 46,
+          "reference_refined_panels": 27586,
+          "refined_panel_reduction": false
+        },
+        "verdict": "rejected"
+      }
+    }
+  },
+  "solver_executable": "/Users/fab/dev/vendor/FastFieldSolvers/build-fastercap-clang/FasterCap",
+  "thin_sheet_status": "excluded: homogeneous open-sheet semantics are undocumented and zero-thickness conductors at unlike-dielectric interfaces are explicitly unsupported upstream"
+}

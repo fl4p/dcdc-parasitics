@@ -1,0 +1,266 @@
+{
+  "board": "/Users/fab/dev/ee/hw/Fugu2/Fugu2.kicad_pcb",
+  "board_sha256": "32906787c3c5bfaf9b0efc0156b6ae40c0d2b29dd69c354e75a8ee8a8b0d3665",
+  "content_id_sha256": "bbfef8868c457744e3623ed6d39c8755775bd0b5c1970a6ccef7198ab645925b",
+  "executable": "/Users/fab/dev/vendor/FastFieldSolvers/build-fastercap-clang/FasterCap",
+  "executable_sha256": "c0e9e3382024ba6ee601bc918a7052fecd7762e13b21b1c83019b101dd33171c",
+  "format": "dcdc-fastercap-fugu-diagnostic-study-v1",
+  "gate_policy": "fastercap-pcb-gates-v1",
+  "geometry": {
+    "0.0005": {
+      "area_mm2": {
+        "PGND": 1556.0628267512257,
+        "SW": 246.74091166538147,
+        "VIN": 1027.4381314698294
+      },
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/extract_capacitance.py",
+        "/Users/fab/dev/ee/hw/Fugu2/Fugu2.kicad_pcb",
+        "--group",
+        "SW=SW",
+        "--group",
+        "VIN=Solar+",
+        "--group",
+        "PGND=BuckGND",
+        "--geometry-tolerance",
+        "0.00050000000000000001",
+        "--representation",
+        "effective-thickness",
+        "--effective-thickness-um",
+        "34",
+        "--anchor",
+        "midplane",
+        "-o",
+        "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm"
+      ],
+      "deck": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst",
+      "deck_manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst.manifest.json",
+      "deck_manifest_sha256": "c475cc6518a9363837c3ad427932af7a82ecb433a1c8fb7431d2137057957f2a",
+      "deck_sha256": "3e639b84072ee71682a8c7414517ab252cbe524020ca71931b70cc60bfed6a33",
+      "failures": [],
+      "geometry_content_id": "6cf7fc7ce3b8b18cf731ac0d2e926ccd963be84dbc8a7464ef6095103d903cb8",
+      "geometry_manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/filled_zones_effective_34um_midplane_air_only_diagnostic.geometry.6cf7fc7ce3b8b18cf731ac0d2e926ccd963be84dbc8a7464ef6095103d903cb8.json",
+      "geometry_tolerance_mm": 0.0005,
+      "ideal_short_assignments": {
+        "PGND": "PGND",
+        "SW": "SW",
+        "VIN": "VIN"
+      },
+      "ideal_short_group_order": [
+        "SW",
+        "VIN",
+        "PGND"
+      ],
+      "panel_count": {
+        "PGND": 14601,
+        "SW": 3252,
+        "VIN": 5891
+      },
+      "returncode": 0,
+      "solver_conductor_names": [
+        "SW",
+        "VIN",
+        "PGND"
+      ],
+      "solver_panel_count": {
+        "PGND": 14601,
+        "SW": 3252,
+        "VIN": 5891
+      },
+      "stderr": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/extraction.stderr.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.bin",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/extraction.stdout.ffce5a2541f4e9ab9f138e3653cedb20bdbc3a1171d1a68ca1fc5d77514f585e.bin",
+      "stdout_sha256": "ffce5a2541f4e9ab9f138e3653cedb20bdbc3a1171d1a68ca1fc5d77514f585e"
+    },
+    "0.001": {
+      "area_mm2": {
+        "PGND": 1556.0643058115102,
+        "SW": 246.740840474834,
+        "VIN": 1027.438931275436
+      },
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/extract_capacitance.py",
+        "/Users/fab/dev/ee/hw/Fugu2/Fugu2.kicad_pcb",
+        "--group",
+        "SW=SW",
+        "--group",
+        "VIN=Solar+",
+        "--group",
+        "PGND=BuckGND",
+        "--geometry-tolerance",
+        "0.001",
+        "--representation",
+        "effective-thickness",
+        "--effective-thickness-um",
+        "34",
+        "--anchor",
+        "midplane",
+        "-o",
+        "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.001mm"
+      ],
+      "deck": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.001mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst",
+      "deck_manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.001mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst.manifest.json",
+      "deck_manifest_sha256": "78ec92704a65d2cc1194513aeb67a65fb15bb8ec3c15ba82c08b7ad39258249e",
+      "deck_sha256": "3ba6974e6c7a5036809b1ad72a8ff978f2dea29846aa3a1a6a49372a75bdf8d9",
+      "failures": [],
+      "geometry_content_id": "e2ac6a59ea7e24a1c7e0e7522bb8a2d41c4956c823598f70b1450afd1185ad65",
+      "geometry_manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.001mm/filled_zones_effective_34um_midplane_air_only_diagnostic.geometry.e2ac6a59ea7e24a1c7e0e7522bb8a2d41c4956c823598f70b1450afd1185ad65.json",
+      "geometry_tolerance_mm": 0.001,
+      "ideal_short_assignments": {
+        "PGND": "PGND",
+        "SW": "SW",
+        "VIN": "VIN"
+      },
+      "ideal_short_group_order": [
+        "SW",
+        "VIN",
+        "PGND"
+      ],
+      "panel_count": {
+        "PGND": 13295,
+        "SW": 3183,
+        "VIN": 5330
+      },
+      "returncode": 0,
+      "solver_conductor_names": [
+        "SW",
+        "VIN",
+        "PGND"
+      ],
+      "solver_panel_count": {
+        "PGND": 13295,
+        "SW": 3183,
+        "VIN": 5330
+      },
+      "stderr": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.001mm/extraction.stderr.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.bin",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.001mm/extraction.stdout.35d6f6095830848c3e30ae87552d8f0090b15b29579cfd65856704ae7342b098.bin",
+      "stdout_sha256": "35d6f6095830848c3e30ae87552d8f0090b15b29579cfd65856704ae7342b098"
+    },
+    "0.002": {
+      "area_mm2": {
+        "PGND": 1556.058236606603,
+        "SW": 246.73482538696442,
+        "VIN": 1027.4269616988993
+      },
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/extract_capacitance.py",
+        "/Users/fab/dev/ee/hw/Fugu2/Fugu2.kicad_pcb",
+        "--group",
+        "SW=SW",
+        "--group",
+        "VIN=Solar+",
+        "--group",
+        "PGND=BuckGND",
+        "--geometry-tolerance",
+        "0.002",
+        "--representation",
+        "effective-thickness",
+        "--effective-thickness-um",
+        "34",
+        "--anchor",
+        "midplane",
+        "-o",
+        "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.002mm"
+      ],
+      "deck": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.002mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst",
+      "deck_manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.002mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst.manifest.json",
+      "deck_manifest_sha256": "e068350c31778b16fec4782caa6d661b6b942a19d8b468015366940c2a9fca44",
+      "deck_sha256": "c2ed424ff1fd1d6943cbfe9492a07f2f6bd5df26dd964151e6acd50602402c0d",
+      "failures": [],
+      "geometry_content_id": "911645a36344022d6328f25fe3aaa799218735972bb441f2ff13198d029751da",
+      "geometry_manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.002mm/filled_zones_effective_34um_midplane_air_only_diagnostic.geometry.911645a36344022d6328f25fe3aaa799218735972bb441f2ff13198d029751da.json",
+      "geometry_tolerance_mm": 0.002,
+      "ideal_short_assignments": {
+        "PGND": "PGND",
+        "SW": "SW",
+        "VIN": "VIN"
+      },
+      "ideal_short_group_order": [
+        "SW",
+        "VIN",
+        "PGND"
+      ],
+      "panel_count": {
+        "PGND": 10542,
+        "SW": 2713,
+        "VIN": 4748
+      },
+      "returncode": 0,
+      "solver_conductor_names": [
+        "SW",
+        "VIN",
+        "PGND"
+      ],
+      "solver_panel_count": {
+        "PGND": 10542,
+        "SW": 2713,
+        "VIN": 4748
+      },
+      "stderr": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.002mm/extraction.stderr.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.bin",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.002mm/extraction.stdout.b19508934054a466cf04eb38ee97a20f13674b513848b63091d7cca5ec83e034.bin",
+      "stdout_sha256": "b19508934054a466cf04eb38ee97a20f13674b513848b63091d7cca5ec83e034"
+    }
+  },
+  "geometry_ladder": {
+    "allowances_f": [],
+    "differences_f": [],
+    "passed": false
+  },
+  "geometry_rungs_mm": [
+    0.002,
+    0.001,
+    0.0005
+  ],
+  "implementation_sha256": {
+    "extract_capacitance": "f2b16fe6aba23df250c9d501bf98ec0fee7539d00e8659b32638946d9da46a64",
+    "fastercap_reduction": "595e6073f5845979aa74a779d09f70ff6b299a48ce9c021ca3a096bc6bd29341",
+    "kicad_dump": "80d8e42d26da1ed8d283c81e843fde6de6a35884669ad584665a8918789835b0",
+    "kicad_fastercap": "7a7fcb79ecd4a2006ace0646c55ceca90778bd81171b3dc54dccf2d80d5ac4d7",
+    "study": "04f34afa194974ae3bede029ffe896222de56d98d3d9e43999bf0af53dd8f8e4"
+  },
+  "limitations": [
+    "filled zones only",
+    "air only; no dielectric interfaces",
+    "outside the qualified synthetic-fixture envelope",
+    "not a physical PCB capacitance model",
+    "cannot enter Slice 6"
+  ],
+  "production_endpoint": {
+    "geometry_tolerance_mm": 0.0005,
+    "solver_relative_error": 0.0125
+  },
+  "runs": {
+    "g=0.0005,a=0.0125": {
+      "deck": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst",
+      "failures": [
+        "process_exit: exit code 0; limits ('refined panels exceeded 500000', 'GMRES iteration limit reached 1000')",
+        "resource_limits: ('refined panels exceeded 500000', 'GMRES iteration limit reached 1000')",
+        "solver_diagnostics: ('Error: not converging after 1000 iterations, norm of the residual is 0.008, while targeting 0.006',)",
+        "complete_iterations: ({'number': 0, 'parse_failures': (), 'matrix': True, 'refined_panels': 35334, 'mesh_refinement': 1e+32, 'preconditioners': ('Jacobi',)}, {'number': 1, 'parse_failures': (), 'matrix': True, 'refined_panels': 39171, 'mesh_refinement': 0.828833, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)}, {'number': 2, 'parse_failures': (), 'matrix': True, 'refined_panels': 44151, 'mesh_refinement': 0.585957, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)}, {'number': 3, 'parse_failures': (), 'matrix': True, 'refined_panels': 54553, 'mesh_refinement': 0.41433, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)}, {'number': 4, 'parse_failures': (), 'matrix': True, 'refined_panels': 75434, 'mesh_refinement': 0.292974, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 128',)}, {'number': 5, 'parse_failures': (), 'matrix': True, 'refined_panels': 116930, 'mesh_refinement': 0.207162, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 512',)}, {'number': 6, 'parse_failures': ('line 250: Error: not converging after 1000 iterations, norm of the residual is 0.008, while targeting 0.006',), 'matrix': True, 'refined_panels': 194034, 'mesh_refinement': 0.146486, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 1024',)}, {'number': 7, 'parse_failures': (), 'matrix': True, 'refined_panels': 330878, 'mesh_refinement': 0.103581, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 1024',)}, {'number': 8, 'parse_failures': (), 'matrix': True, 'refined_panels': 574018, 'mesh_refinement': 0.0732429, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 1024',)}, {'number': 9, 'parse_failures': (), 'matrix': True, 'refined_panels': 938216, 'mesh_refinement': 0.0517905, 'preconditioners': ('Two-levels, two-levels preconditioner dimension (-ps): 1024',)})",
+        "gmres_rhs_outcomes: ((0, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 11, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 11, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 11, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (1, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 26, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 34, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 30, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (2, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 65, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 76, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 74, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (3, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 73, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 101, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 89, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (4, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 43, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 60, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 48, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (5, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 54, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 47, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 46, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (6, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 1000, 'converged': False, 'residual': 0.008, 'target': 0.006, 'evidence': 'Error: not converging after 1000 iterations, norm of the residual is 0.008, while targeting 0.006'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 313, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 342, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (7, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 289, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 52, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 59, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (8, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 60, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 44, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 46, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})), (9, ({'conductor_label': 'g1_dcp_c0001', 'maximum_iteration': 56, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g2_dcp_c0002', 'maximum_iteration': 41, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'}, {'conductor_label': 'g3_dcp_c0003', 'maximum_iteration': 42, 'converged': True, 'residual': None, 'target': 0.00625, 'evidence': 'strict contiguous GMRES iteration trace followed by no failure diagnostic'})))",
+        "matrix_validation: Maxwell coupling is not reciprocal for 'SW'/'VIN': error 8.027e-15 > 6.20289e-16"
+      ],
+      "geometry_tolerance_mm": 0.0005,
+      "manifest": "/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/fastercap-slice4-final/geometry_0.0005mm/filled_zones_effective_34um_midplane_air_only_diagnostic.lst.run.rejected_diagnostic.d6ffc2668ebee697a831fd4820db2fc4d6fd9d098cc3f5e72df2d6d2c63bbe02.json",
+      "solver_relative_error": 0.0125,
+      "state": "rejected_diagnostic"
+    }
+  },
+  "solver_ladder": {
+    "allowances_f": [],
+    "differences_f": [],
+    "passed": false
+  },
+  "solver_rungs": [
+    0.05,
+    0.025,
+    0.0125
+  ],
+  "state": "rejected_diagnostic",
+  "uncertainty_f": null
+}

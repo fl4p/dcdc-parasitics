@@ -1,0 +1,24 @@
+{
+  "binary_sha256": "c04078e4e16cc691fa906477a61fa84e0a85a685bb1a5ccfd6be8840cdf55790",
+  "command": [
+    "/Users/fab/dev/vendor/FastFieldSolvers/build-fastercap-clang/FasterCap",
+    "filled_zones_effective_34um_midplane_air_only_diagnostic.lst",
+    "-a0.0125",
+    "-ap",
+    "-b"
+  ],
+  "directory_growth_bytes": 0,
+  "elapsed_s": 355.36622416600585,
+  "limit_failures": [
+    "refined panels exceeded 500000",
+    "GMRES iteration limit reached 1000"
+  ],
+  "max_gmres_iteration": 999,
+  "max_refined_panels": 938216,
+  "output_bytes": 27248,
+  "peak_rss_bytes": 1817739264,
+  "returncode": 0,
+  "source_sha256": "60457ee58c1b964fad397dcad4dd6ce63bc3058f54c364437e63147eae22d820",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "072844372cc157a9064674da47c7b3fac43aff4a6c2d7fb4e3c9dd5c4213d599"
+}
