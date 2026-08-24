@@ -3,6 +3,11 @@ numpy
 PyYAML
 scipy            # density.py: sparse DC nodal solve for the copper loss-density map
 matplotlib       # density.py / mesh_viewer.py / power_copper.py: heatmap + mesh rasters
+shapely>=2.1     # polygon cleanup after KiCad emits zone contours
+meshpy           # constrained planar topology for FasterCap panels and Palace PLC meshes
+gmsh>=4.15       # conformal volume meshes for Palace electrostatics
+psutil           # cross-platform solver process-tree RSS and termination
+pywin32; sys_platform == "win32"  # suspended Job Object launch on Windows
 
 # NOT installable via pip — provided externally (see README.md):
 #   pcbnew    : bundled with KiCad; the geometry step runs under KiCad's own
