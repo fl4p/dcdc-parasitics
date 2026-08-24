@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Palace progress and trusted resource-decision workflow helpers."""
+from contextlib import contextmanager
 from dataclasses import asdict
 import json
 import math
@@ -11,6 +12,11 @@ import shutil
 import stat
 
 import psutil
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 if __package__:
     from .palace_build import validate_palace_build_manifest
@@ -221,14 +227,125 @@ def execution_workload_inputs(
     }
 
 
-def prepare_execution_snapshot(
+@contextmanager
+def _snapshot_construction_lock(root):
+    lock_path = Path(root).parent / f".{Path(root).name}.construction.lock"
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(lock_path, flags, 0o600)
+    locked = False
+    try:
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode)
+                or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())):
+            raise ValueError("Palace snapshot construction lock is unsafe")
+        if os.name == "nt":
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        locked = True
+        yield
+    finally:
+        if locked:
+            if os.name == "nt":
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _open_matching_local_path(path, expected_type, message):
+    path = Path(path)
+    metadata = path.lstat()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    if expected_type == stat.S_IFDIR:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(message) from error
+    opened = os.fstat(descriptor)
+    if ((metadata.st_dev, metadata.st_ino) != (opened.st_dev, opened.st_ino)
+            or stat.S_IFMT(opened.st_mode) != expected_type
+            or stat.S_ISLNK(metadata.st_mode)
+            or (hasattr(os, "geteuid") and opened.st_uid != os.geteuid())):
+        os.close(descriptor)
+        raise ValueError(message)
+    return descriptor
+
+
+def _set_local_mode(descriptor, path, mode):
+    if hasattr(os, "fchmod"):
+        os.fchmod(descriptor, mode)
+    else:
+        Path(path).chmod(mode)
+
+
+def _ensure_local_snapshot_directory(path, mode):
+    path = Path(path)
+    try:
+        os.mkdir(path, mode=mode)
+    except FileExistsError:
+        pass
+    descriptor = _open_matching_local_path(
+        path, stat.S_IFDIR, "Palace local snapshot directory is unsafe",
+    )
+    try:
+        _set_local_mode(descriptor, path, mode)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_or_validate_snapshot_file(path, content, mode):
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
+        exclusive_publish_bytes(path, content)
+    descriptor = _open_matching_local_path(
+        path, stat.S_IFREG, "Palace retained snapshot input differs",
+    )
+    try:
+        retained = bytearray()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            retained.extend(chunk)
+        if retained != content:
+            raise ValueError("Palace retained snapshot input differs")
+        _set_local_mode(descriptor, path, mode)
+    finally:
+        os.close(descriptor)
+
+
+def _local_directory_names(path):
+    descriptor = _open_matching_local_path(
+        path, stat.S_IFDIR, "Palace local snapshot directory is unsafe",
+    )
+    try:
+        return set(os.listdir(descriptor if os.name != "nt" else path))
+    finally:
+        os.close(descriptor)
+
+
+def _validate_local_snapshot_inventory(
+        root, bin_directory, output_directory, allowed_root, allowed_bin):
+    if _local_directory_names(root) - allowed_root:
+        raise ValueError("Palace retained snapshot root contains unknown entries")
+    if _local_directory_names(bin_directory) - allowed_bin:
+        raise ValueError("Palace retained snapshot bin contains unknown entries")
+    if _local_directory_names(output_directory):
+        raise ValueError("Palace retained snapshot output is not empty")
+
+
+def _prepare_execution_snapshot_locked(
         manifest, workload, *, executable, binaries, mpi_launcher):
     root = manifest.config_path.parent / (
         f".{manifest.config_path.name}.execution.{workload['content_sha256']}"
     )
-    os.mkdir(root, mode=0o700)
     bin_directory = root / "bin"
-    os.mkdir(bin_directory, mode=0o700)
     sources = [
         ("config", manifest.config_path, root / manifest.config_path.name, False),
         ("mesh", manifest.mesh_path, root / manifest.mesh_path.name, False),
@@ -240,6 +357,28 @@ def prepare_execution_snapshot(
         "mpi_launcher", Path(mpi_launcher),
         bin_directory / Path(mpi_launcher).name, True,
     ))
+    destinations = [snapshot for _, _, snapshot, _ in sources]
+    root_names = {
+        "bin", manifest.config_path.name, manifest.mesh_path.name,
+        manifest.output_directory.name,
+    }
+    if len(root_names) != 4 or len(destinations) != len(set(destinations)):
+        raise ValueError("Palace snapshot input and output names collide")
+    _ensure_local_snapshot_directory(root, 0o700)
+    _ensure_local_snapshot_directory(bin_directory, 0o700)
+    output_directory = root / manifest.output_directory.name
+    _ensure_local_snapshot_directory(output_directory, 0o700)
+    allowed_root = {
+        "bin", manifest.config_path.name, manifest.mesh_path.name,
+        manifest.output_directory.name,
+    }
+    allowed_bin = {
+        snapshot.name for snapshot in destinations
+        if snapshot.parent == bin_directory
+    }
+    _validate_local_snapshot_inventory(
+        root, bin_directory, output_directory, allowed_root, allowed_bin,
+    )
     bound_hashes = {
         "config": workload["config_sha256"],
         "mesh": workload["mesh_sha256"],
@@ -251,26 +390,32 @@ def prepare_execution_snapshot(
         for record in workload["runtime_binaries"]
     }
     records = []
+    retained_inputs = []
     for role, source, snapshot, executable_bit in sources:
         content = source.read_bytes()
+        digest = bytes_sha256(content)
         expected_hash = (
             runtime_binaries.get(source.name)
             if role in {"executable", "solver_binary"}
             else bound_hashes.get(role)
         )
-        if expected_hash is None or bytes_sha256(content) != expected_hash:
+        if expected_hash is None or digest != expected_hash:
             raise ValueError(f"Palace {role} changed after workload derivation")
-        exclusive_publish_bytes(snapshot, content)
-        snapshot.chmod(0o500 if executable_bit else 0o400)
+        mode = 0o500 if executable_bit else 0o400
+        _publish_or_validate_snapshot_file(snapshot, content, mode)
+        retained_inputs.append((snapshot, content, mode))
         records.append({
             "role": role,
             "source": str(source.resolve()),
-            "source_sha256": file_sha256(source),
+            "source_sha256": digest,
             "snapshot": str(snapshot.resolve()),
-            "snapshot_sha256": file_sha256(snapshot),
+            "snapshot_sha256": digest,
         })
-    output_directory = root / manifest.output_directory.name
-    os.mkdir(output_directory, mode=0o700)
+    for snapshot, content, mode in retained_inputs:
+        _publish_or_validate_snapshot_file(snapshot, content, mode)
+    _validate_local_snapshot_inventory(
+        root, bin_directory, output_directory, allowed_root, allowed_bin,
+    )
     bin_directory.chmod(0o500)
     root.chmod(0o500)
     payload = {
@@ -280,6 +425,18 @@ def prepare_execution_snapshot(
         "inputs": records,
     }
     return {**payload, "content_sha256": canonical_sha256(payload)}
+
+
+def prepare_execution_snapshot(
+        manifest, workload, *, executable, binaries, mpi_launcher):
+    root = manifest.config_path.parent / (
+        f".{manifest.config_path.name}.execution.{workload['content_sha256']}"
+    )
+    with _snapshot_construction_lock(root):
+        return _prepare_execution_snapshot_locked(
+            manifest, workload, executable=executable,
+            binaries=binaries, mpi_launcher=mpi_launcher,
+        )
 
 
 def validate_execution_snapshot_privilege_boundary(record):
