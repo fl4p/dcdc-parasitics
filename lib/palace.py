@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Fail-closed Palace electrostatic configuration, execution, and result parsing."""
-from __future__ import annotations
 from dataclasses import asdict, dataclass
 import csv
 import io
@@ -18,7 +17,16 @@ if __package__:
     from .palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
         read_attested_matrix as _read_attested_matrix)
-    from .palace_build import palace_build_identity, palace_build_source_commit, validate_palace_build_manifest
+    from .palace_ledger_v2 import CanonicalLedgerPublicationV2
+    from .palace_runtime import (
+        native_campaign_digest as _native_campaign_digest,
+        quarantine_or_purge_matrix_files as _quarantine_or_purge_matrix_files,
+        validate_execution_runtime_binding as _validate_execution_runtime_binding,
+        validate_runtime_build_identity as _validate_runtime_build_identity,
+        validate_runtime_metadata_schema as _validate_runtime_metadata_schema,
+        validate_runtime_progress_accounting as _validate_runtime_progress_accounting,
+    )
+    from .palace_build import palace_build_identity, validate_palace_build_manifest
     from .palace_mesh import BoxBounds, validate_palace_mesh_manifest
     from .palace_resources import (
         PalaceTopologyWorkload, build_palace_resource_decision,
@@ -31,11 +39,11 @@ if __package__:
         implementation_identity,
         palace_config_payload as _palace_config_payload,
         palace_progress_events as _palace_progress_events,
-        prepare_execution_snapshot as _prepare_execution_snapshot, projection_from_completed_runs,
-        publish_snapshot_output, resolve_execution_snapshot, trusted_resource_policy,
-        validate_bound_resource_decision, validate_prelaunch_resource_authority,
+        prepare_execution_snapshot, projection_from_completed_runs,
+        publish_snapshot_output, trusted_resource_policy,
+        validate_bound_resource_decision,
         validate_completed_palace_progress as _validate_completed_palace_progress,
-        validate_execution_snapshot, validate_execution_snapshot_privilege_boundary,
+        validate_execution_snapshot,
         workload_record as _workload_record,
     )
     from .process_monitor import (
@@ -53,7 +61,16 @@ else:
     from palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
         read_attested_matrix as _read_attested_matrix)
-    from palace_build import palace_build_identity, palace_build_source_commit, validate_palace_build_manifest
+    from palace_ledger_v2 import CanonicalLedgerPublicationV2
+    from palace_runtime import (
+        native_campaign_digest as _native_campaign_digest,
+        quarantine_or_purge_matrix_files as _quarantine_or_purge_matrix_files,
+        validate_execution_runtime_binding as _validate_execution_runtime_binding,
+        validate_runtime_build_identity as _validate_runtime_build_identity,
+        validate_runtime_metadata_schema as _validate_runtime_metadata_schema,
+        validate_runtime_progress_accounting as _validate_runtime_progress_accounting,
+    )
+    from palace_build import palace_build_identity, validate_palace_build_manifest
     from palace_mesh import BoxBounds, validate_palace_mesh_manifest
     from palace_resources import (
         PalaceTopologyWorkload, build_palace_resource_decision,
@@ -66,11 +83,11 @@ else:
         implementation_identity,
         palace_config_payload as _palace_config_payload,
         palace_progress_events as _palace_progress_events,
-        prepare_execution_snapshot as _prepare_execution_snapshot, projection_from_completed_runs,
-        publish_snapshot_output, resolve_execution_snapshot, trusted_resource_policy,
-        validate_bound_resource_decision, validate_prelaunch_resource_authority,
+        prepare_execution_snapshot, projection_from_completed_runs,
+        publish_snapshot_output, trusted_resource_policy,
+        validate_bound_resource_decision,
         validate_completed_palace_progress as _validate_completed_palace_progress,
-        validate_execution_snapshot, validate_execution_snapshot_privilege_boundary,
+        validate_execution_snapshot,
         workload_record as _workload_record,
     )
     from process_monitor import (
@@ -83,7 +100,7 @@ else:
         exclusive_publish_bytes, exclusive_publish_json, file_sha256, strict_json_file,
     )
 
-prepare_execution_snapshot = _prepare_execution_snapshot
+
 GATE_POLICY = "palace-electrostatic-pcb-gates-v2"
 CONFIG_MANIFEST_FORMAT = "dcdc-palace-config-v3"
 LEGACY_CONFIG_MANIFEST_FORMAT = "dcdc-palace-config-v2"
@@ -96,7 +113,6 @@ FAILURE_RE = re.compile(
     r"verification failed)", re.IGNORECASE)
 NORMAL_COMPLETION_MARKERS = ("Elapsed Time Report (s)", "Peak Memory")
 MESH_LIMITS = {"synthetic": {"nodes": 1_000_000, "tetrahedra": 5_000_000}, "pcb_diagnostic": {"nodes": 10_000_000, "tetrahedra": 50_000_000}}
-RESOURCE_AUTHORIZED_OBSERVATION_SHA256, RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256 = (), ()
 RESOURCE_LIMITS = {
     "synthetic": ProcessLimits(300.0, 8 * 1024**3, 1024**3, 2**63 - 1, 2**31 - 1),
     "pcb_diagnostic": ProcessLimits(30 * 60.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
@@ -107,8 +123,7 @@ def _trusted_resource_policy():
     return trusted_resource_policy(
         RESOURCE_LIMITS, MESH_LIMITS,
         validator_path=Path(__file__).with_name("palace_resources.py"),
-        authorized_observation_sha256=RESOURCE_AUTHORIZED_OBSERVATION_SHA256,
-        authorized_static_projection_sha256=RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256)
+    )
 
 
 @dataclass(frozen=True)
@@ -543,7 +558,7 @@ def _parse_palace_matrix_csv(path, manifest, *, matrix_name):
 
 
 def parse_palace_matrix_csv(path, manifest, *, matrix_name, matrix_access):
-    if not isinstance(matrix_access, PalaceMatrixAccess):
+    if type(matrix_access) is not PalaceMatrixAccess:
         raise ValueError("Palace matrix access requires the bound attested campaign")
     content = _read_attested_matrix(
         path, manifest, matrix_name=matrix_name, matrix_access=matrix_access,
@@ -551,34 +566,6 @@ def parse_palace_matrix_csv(path, manifest, *, matrix_name, matrix_access):
     return _parse_palace_matrix_content(
         content, manifest, matrix_name=matrix_name,
     )
-
-
-def _quarantine_matrix_files(output_directory, paths):
-    existing = [Path(path) for path in paths if Path(path).exists() or Path(path).is_symlink()]
-    if not existing:
-        return tuple(paths)
-    quarantine = Path(output_directory) / ".quarantine"
-    quarantine.mkdir(mode=0o700, exist_ok=False)
-    result = []
-    for path in paths:
-        path = Path(path)
-        if path not in existing:
-            result.append(path)
-            continue
-        if path.is_symlink():
-            digest = bytes_sha256(os.readlink(path).encode())
-        else:
-            digest = file_sha256(path)
-        target = quarantine / f"{path.name}.{digest}.quarantined"
-        os.rename(path, target)
-        result.append(target)
-    for directory in (quarantine, Path(output_directory)):
-        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    return tuple(result)
 
 
 def _parse_residuals(stdout, manifest):
@@ -694,7 +681,7 @@ def _expected_resolved_config(manifest):
                 "MGSmoothOrder": max(4, 2 * manifest.order),
                 "MGUseMesh": True,
                 "MaxIts": manifest.maximum_iterations,
-                "MaxSize": 500,
+                "MaxSize": manifest.maximum_iterations,
                 "PCMatReal": False,
                 "PCMatShifted": False,
                 "PCSide": "Default",
@@ -716,87 +703,6 @@ def _expected_resolved_config(manifest):
     }
 
 
-def _validate_runtime_metadata_schema(metadata):
-    expected_top_level = {
-        "ElapsedTime", "GitTag", "LinearSolver", "PeakMemoryGrowthMegabytes",
-        "PeakMemoryMegabytes", "PeakNodeMemoryGrowthMegabytes",
-        "PeakNodeMemoryMegabytes", "Problem",
-    }
-    if set(metadata) != expected_top_level:
-        raise ValueError("Palace runtime metadata schema mismatch")
-    elapsed = metadata.get("ElapsedTime")
-    if not isinstance(elapsed, dict) or set(elapsed) != {"Counts", "Durations"}:
-        raise ValueError("Palace runtime elapsed-time metadata is invalid")
-    counts = elapsed["Counts"]
-    durations = elapsed["Durations"]
-    if (not isinstance(counts, dict) or not counts
-            or set(counts) != set(durations)
-            or any(type(value) is not int or value < 0 for value in counts.values())
-            or any(type(value) is not float
-                   or not np.isfinite(value) or value < 0.0
-                   for value in durations.values())):
-        raise ValueError("Palace runtime timing metadata is invalid")
-    linear = metadata.get("LinearSolver")
-    if not isinstance(linear, dict) or set(linear) != {"TotalIts", "TotalSolves"}:
-        raise ValueError("Palace runtime linear-solver metadata is invalid")
-    problem = metadata.get("Problem")
-    if (not isinstance(problem, dict) or set(problem) != {
-            "DegreesOfFreedom", "MPISize", "MeshElements",
-            "MultigridDegreesOfFreedom"}):
-        raise ValueError("Palace runtime problem metadata is invalid")
-    multigrid = problem["MultigridDegreesOfFreedom"]
-    if (not isinstance(multigrid, list) or not multigrid
-            or any(type(value) is not int or value <= 0 for value in multigrid)):
-        raise ValueError("Palace runtime multigrid metadata is invalid")
-    for name in ("PeakMemoryGrowthMegabytes", "PeakNodeMemoryGrowthMegabytes"):
-        value = metadata.get(name)
-        if (not isinstance(value, dict) or set(value) != {"Max", "Min", "Sum"}
-                or any(not isinstance(group, dict) or set(group) != set(counts)
-                       for group in value.values())
-                or any(type(number) is not float
-                       or not np.isfinite(number) or number < 0.0
-                       for group in value.values() for number in group.values())):
-            raise ValueError(f"Palace runtime {name} is invalid")
-    for name in ("PeakMemoryMegabytes", "PeakNodeMemoryMegabytes"):
-        value = metadata.get(name)
-        if (not isinstance(value, dict)
-                or set(value) != {"Average", "Max", "Min", "Total"}
-                or any(type(number) is not float
-                       or not np.isfinite(number) or number < 0.0
-                       for number in value.values())):
-            raise ValueError(f"Palace runtime {name} is invalid")
-    for event, count in counts.items():
-        duration = durations[event]
-        if (count == 0 and duration != 0.0) or (count > 0 and duration <= 0.0):
-            raise ValueError("Palace runtime counts and durations are inconsistent")
-        for name in ("PeakMemoryGrowthMegabytes",
-                     "PeakNodeMemoryGrowthMegabytes"):
-            growth = metadata[name]
-            if not (growth["Min"][event] <= growth["Max"][event]
-                    <= growth["Sum"][event]):
-                raise ValueError(f"Palace runtime {name} ordering is inconsistent")
-    total_duration = durations.get("Total")
-    if (type(total_duration) is not float or total_duration <= 0.0
-            or any(value > total_duration for value in durations.values())):
-        raise ValueError("Palace runtime durations are inconsistent")
-    for name in ("PeakMemoryMegabytes", "PeakNodeMemoryMegabytes"):
-        value = metadata[name]
-        if not (value["Min"] <= value["Average"] <= value["Max"] <= value["Total"]):
-            raise ValueError(f"Palace runtime {name} ordering is inconsistent")
-
-
-def _validate_execution_runtime_binding(execution, metadata):
-    runtime_s = metadata["ElapsedTime"]["Durations"]["Total"]
-    peak_memory_bytes = max(
-        metadata["PeakMemoryMegabytes"]["Max"],
-        metadata["PeakNodeMemoryMegabytes"]["Max"],
-    ) * 1024**2
-    if execution["elapsed_s"] < runtime_s:
-        raise ValueError("Palace execution elapsed time contradicts runtime metadata")
-    if execution["peak_rss_bytes"] < peak_memory_bytes:
-        raise ValueError("Palace execution RSS contradicts runtime metadata")
-
-
 def _validate_completion_metadata(output_directory, manifest, *, processes):
     palace_path = output_directory / "palace.json"
     resolved_path = output_directory / "config_resolved.json"
@@ -811,12 +717,14 @@ def _validate_completion_metadata(output_directory, manifest, *, processes):
     except (KeyError, TypeError) as error:
         raise ValueError("Palace runtime metadata is incomplete") from error
     terminal_count = len(manifest.terminals)
+    linear_solves = counts.get("LinearSolve")
+    total_solves = linear.get("TotalSolves")
+    expected_solves = terminal_count if manifest.checkpoint is None else total_solves
     required_exact_ints = (
         (counts.get("Total"), 1),
-        (counts.get("LinearSolve"), terminal_count),
+        (linear_solves, expected_solves),
         (counts.get("Estimation"), 0),
         (counts.get("Solve"), 0),
-        (linear.get("TotalSolves"), terminal_count),
         (problem.get("MPISize"), processes),
         (problem.get("MeshElements"), manifest.mesh_provenance["tetrahedron_count"]),
     )
@@ -833,10 +741,12 @@ def _validate_completion_metadata(output_directory, manifest, *, processes):
     )
     expected_hierarchy = topology.h1_hierarchy
     runtime_hierarchy = problem.get("MultigridDegreesOfFreedom")
-    if (any(type(value) is not int or value != expected
-            for value, expected in required_exact_ints)
+    if (type(total_solves) is not int
+            or not 0 <= total_solves <= terminal_count
+            or any(type(value) is not int or value != expected
+                   for value, expected in required_exact_ints)
             or type(total_iterations) is not int
-            or not 0 <= total_iterations <= terminal_count * manifest.maximum_iterations
+            or not 0 <= total_iterations <= total_solves * manifest.maximum_iterations
             or type(degrees_of_freedom) is not int
             or degrees_of_freedom != expected_hierarchy[-1]
             or type(runtime_hierarchy) is not list
@@ -877,15 +787,9 @@ def write_palace_resource_decision(
         validate_build=validate_palace_build_manifest,
     )
     policy = _trusted_resource_policy()
-    observation_hashes = tuple(
-        file_sha256(Path(path).resolve())
-        for path in completed_run_manifest_paths
-    )
-    if not observation_hashes:
+    completed_run_manifest_paths = tuple(completed_run_manifest_paths)
+    if not completed_run_manifest_paths:
         raise ValueError("at least one completed observation run is required")
-    if any(value not in policy["authorized_observation_tuple"]
-           for value in observation_hashes):
-        raise ValueError("resource observation is not policy-authorized")
     projection = projection_from_completed_runs(
         inputs["workload"],
         completed_run_manifest_paths,
@@ -910,7 +814,7 @@ def write_palace_resource_decision(
     return path
 
 
-def validate_palace_run_manifest(path, *, _document=None):
+def _validate_palace_run_manifest_unattested(path, *, _document=None):
     path = Path(path).resolve()
     if _document is None:
         _document = (strict_json_file(path, label="Palace run manifest"), file_sha256(path))
@@ -1037,8 +941,8 @@ def validate_palace_run_manifest(path, *, _document=None):
     decision_sha256 = identity.get("resource_decision_sha256")
     if (decision_value is None) != (decision_sha256 is None):
         raise ValueError("Palace run resource decision identity is partial")
-    if decision_value is None:
-        raise ValueError("Palace run lacks a trusted resource decision")
+    if manifest.checkpoint is not None and decision_value is None:
+        raise ValueError("checkpointed Palace run lacks a resource decision")
     decision_path = None
     if decision_value is not None:
         decision_path = Path(decision_value).resolve()
@@ -1059,7 +963,7 @@ def validate_palace_run_manifest(path, *, _document=None):
             decision_path=decision_path,
             config_path=manifest.config_path,
         )
-    if identity.get("resource_enforcement") != "portable_monitor_not_native_containment":
+    if identity.get("resource_enforcement") != "portable_process_limits":
         raise ValueError("Palace run resource-enforcement identity mismatch")
     if (identity.get("lifecycle") != "numerically_converged_diagnostic"
             or identity.get("failures") != []):
@@ -1108,10 +1012,14 @@ def validate_palace_run_manifest(path, *, _document=None):
     stderr_path = manifest.config_path.with_name(
         f"{manifest.config_path.name}.stderr.{stderr_sha256}.bin"
     )
-    raw_path = manifest.output_directory / "terminal-Craw.csv"
-    standard_path = manifest.output_directory / "terminal-C.csv"
-    palace_path = manifest.output_directory / "palace.json"
-    resolved_path = manifest.output_directory / "config_resolved.json"
+    output_directory = (
+        Path(snapshot["root"]) / manifest.output_directory.name
+        if manifest.checkpoint is not None else manifest.output_directory
+    )
+    raw_path = output_directory / "terminal-Craw.csv"
+    standard_path = output_directory / "terminal-C.csv"
+    palace_path = output_directory / "palace.json"
+    resolved_path = output_directory / "config_resolved.json"
     required_artifacts = [
         manifest.config_path, manifest.mesh_path, manifest.mesh_manifest_path,
         workload_path, raw_path, standard_path, palace_path, resolved_path,
@@ -1141,7 +1049,12 @@ def validate_palace_run_manifest(path, *, _document=None):
     if not canonical_equal(
             execution.get("palace_progress_events"), expected_progress):
         raise ValueError("Palace run progress-event witness mismatch")
-    _validate_completed_palace_progress(expected_progress, len(manifest.terminals))
+    progress_summary = _validate_completed_palace_progress(
+        expected_progress, len(manifest.terminals),
+        checkpoint_enabled=manifest.checkpoint is not None,
+        campaign_digest=_native_campaign_digest(manifest),
+        terminal_indices=(terminal.index for terminal in manifest.terminals),
+    )
     try:
         stdout = stdout_bytes.decode("utf-8", errors="strict")
         stderr = stderr_bytes.decode("utf-8", errors="strict")
@@ -1164,14 +1077,13 @@ def validate_palace_run_manifest(path, *, _document=None):
     if not canonical_equal(identity.get("residuals"), expected_residuals):
         raise ValueError("Palace run residual witness mismatch")
     _, _, metadata = _validate_completion_metadata(
-        manifest.output_directory, manifest, processes=processes
+        output_directory, manifest, processes=processes
     )
     _validate_execution_runtime_binding(execution, metadata)
+    _validate_runtime_build_identity(metadata, build)
+    _validate_runtime_progress_accounting(metadata, progress_summary)
     if not canonical_equal(identity.get("runtime_metadata"), metadata):
         raise ValueError("Palace run metadata witness mismatch")
-    source_commit = palace_build_source_commit(build)
-    if source_commit[:8] not in metadata["GitTag"]:
-        raise ValueError("Palace run Git/build identity mismatch")
     raw_matrix = _parse_palace_matrix_csv(raw_path, manifest, matrix_name="raw")
     downstream_matrix = _parse_palace_matrix_csv(
         standard_path, manifest, matrix_name="standard"
@@ -1192,9 +1104,28 @@ def validate_palace_run_manifest(path, *, _document=None):
     }
 
 
+def validate_palace_run_manifest(path, *, matrix_access=None):
+    validated = _validate_palace_run_manifest_unattested(path)
+    manifest = validated["manifest"]
+    if manifest.checkpoint is None:
+        if matrix_access is not None:
+            raise ValueError("ordinary Palace run does not accept campaign matrix access")
+        return validated
+    snapshot_root = Path(validated["raw"]["execution_snapshot"]["root"])
+    output = snapshot_root / manifest.output_directory.name
+    validated["raw_matrix"] = parse_palace_matrix_csv(
+        output / "terminal-Craw.csv", manifest, matrix_name="raw",
+        matrix_access=matrix_access,
+    )
+    validated["downstream_matrix"] = parse_palace_matrix_csv(
+        output / "terminal-C.csv", manifest, matrix_name="standard",
+        matrix_access=matrix_access,
+    )
+    return validated
+
+
 def run_palace(config_manifest_path, *, executable, build_manifest_path, processes=1,
                resource_class=None, resource_decision_path=None,
-               execution_snapshot_path=None,
                campaign_ledger=None, attempt_id=None):
     manifest = load_palace_config_manifest(config_manifest_path)
     inputs = _execution_workload_inputs(
@@ -1214,6 +1145,7 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     mpi_launcher = inputs["mpi_launcher"]
     workload = inputs["workload"]
     resource_decision = None
+    policy = None
     if resource_decision_path is not None:
         resource_decision_path = Path(resource_decision_path).resolve()
         raw_decision = strict_json_file(
@@ -1229,7 +1161,6 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
             trusted_validator_sha256=policy["validator_sha256"],
             trusted_minimum_headroom_ratio=policy["minimum_headroom_ratio"],
         )
-        validate_prelaunch_resource_authority(resource_decision, policy)
         expected_name = (
             f"{manifest.config_path.name}.resource-decision."
             f"{resource_decision['content_sha256']}.json"
@@ -1241,44 +1172,75 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         if resource_class is not None and resource_class != selected:
             raise ValueError("caller resource class differs from trusted decision")
         resource_class = selected
-    else:
-        raise ValueError("Palace runs require a trusted resource decision")
-    if resource_class not in RESOURCE_LIMITS:
-        raise ValueError("unknown Palace resource class")
     node_count = manifest.mesh_provenance.get("node_count")
     tetrahedron_count = manifest.mesh_provenance.get("tetrahedron_count")
-    mesh_limits = MESH_LIMITS[resource_class]
     if (type(node_count) is not int or type(tetrahedron_count) is not int
             or node_count <= 0 or tetrahedron_count <= 0):
         raise ValueError("Palace mesh manifest lacks positive resource counts")
+    if resource_class is None:
+        resource_class = next((
+            name for name, limits in MESH_LIMITS.items()
+            if node_count <= limits["nodes"]
+            and tetrahedron_count <= limits["tetrahedra"]
+        ), None)
+    if resource_class not in RESOURCE_LIMITS:
+        raise ValueError("unknown Palace resource class")
+    mesh_limits = MESH_LIMITS[resource_class]
     if node_count > mesh_limits["nodes"] or tetrahedron_count > mesh_limits["tetrahedra"]:
         raise ValueError("Palace mesh exceeds its resource-class element cap")
-    if manifest.output_directory.exists():
+    if manifest.checkpoint is None and manifest.output_directory.exists():
         raise ValueError("Palace output directory must not exist before a run")
     workload_path = manifest.config_path.with_name(
         f"{manifest.config_path.name}.workload.{workload['content_sha256']}.json"
     )
-    execution_snapshot = resolve_execution_snapshot(
-        execution_snapshot_path, manifest, workload, executable=executable,
+    if (campaign_ledger is None) != (attempt_id is None):
+        raise ValueError("Palace campaign ledger and attempt ID must be supplied together")
+    if manifest.checkpoint is not None:
+        if (resource_decision is None
+                or type(campaign_ledger) is not CanonicalLedgerPublicationV2):
+            raise ValueError(
+                "checkpointed Palace runs require a resource decision and canonical campaign attempt"
+            )
+    elif campaign_ledger is not None:
+        raise ValueError("campaign accounting requires checkpointing")
+    if workload_path.exists() or workload_path.is_symlink():
+        if not canonical_equal(
+                strict_json_file(workload_path, label="Palace workload"), workload):
+            raise ValueError("Palace content-addressed workload differs")
+    else:
+        try:
+            exclusive_publish_json(workload_path, workload)
+        except FileExistsError:
+            if not canonical_equal(
+                    strict_json_file(workload_path, label="Palace workload"), workload):
+                raise ValueError("Palace content-addressed workload differs")
+    snapshot_instance = (
+        canonical_sha256({"attempt_id": attempt_id})
+        if manifest.checkpoint is not None else None
+    )
+    execution_snapshot = prepare_execution_snapshot(
+        manifest,
+        workload,
+        executable=executable,
         binaries=tuple(Path(path) for path in binaries),
         mpi_launcher=mpi_launcher,
+        instance_id=snapshot_instance,
     )
-    validate_execution_snapshot_privilege_boundary(execution_snapshot)
-    if manifest.checkpoint is not None:
-        if campaign_ledger is None or attempt_id is None:
-            raise ValueError("checkpointed Palace runs require a campaign attempt")
-        campaign_ledger.register_attempt(
-            attempt_id, resource_decision=resource_decision,
+    if campaign_ledger is not None:
+        assert resource_decision is not None and policy is not None
+        CanonicalLedgerPublicationV2.register_attempt(
+            campaign_ledger, attempt_id, resource_decision=resource_decision,
             execution_snapshot=execution_snapshot, trusted_policy=policy,
         )
-    elif campaign_ledger is not None or attempt_id is not None:
-        raise ValueError("non-checkpointed Palace runs cannot join a campaign")
-    exclusive_publish_json(workload_path, workload)
     snapshot_inputs = {
         item["role"]: item for item in execution_snapshot["inputs"]
     }
     snapshot_executable = snapshot_inputs["executable"]["snapshot"]
     snapshot_root = Path(execution_snapshot["root"])
+    run_output_directory = (
+        snapshot_root / manifest.output_directory.name
+        if manifest.checkpoint is not None else manifest.output_directory
+    )
     command = (
         snapshot_executable, "-np", str(processes), manifest.config_path.name
     )
@@ -1287,17 +1249,19 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         str(snapshot_root / "bin") + os.pathsep + environment.get("PATH", "")
     )
     environment["OMP_NUM_THREADS"] = "1"
+    monitor_kwargs = {}
+    if manifest.checkpoint is not None:
+        monitor_kwargs["additional_output_paths"] = (
+            manifest.checkpoint["path"],
+        )
     execution = run_monitored_process(
         command,
         cwd=snapshot_root,
         limits=RESOURCE_LIMITS[resource_class],
         environment=environment,
+        **monitor_kwargs,
     )
     failures = list(execution.limit_failures)
-    try:
-        publish_snapshot_output(snapshot_root, manifest.output_directory)
-    except (OSError, ValueError) as error:
-        failures.append(f"output_publication: {error}")
     snapshot_failure = None
     try:
         validate_execution_snapshot(
@@ -1305,8 +1269,13 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
             binaries=tuple(Path(path) for path in binaries),
             mpi_launcher=mpi_launcher,
         )
-    except ValueError as error:
+    except (OSError, ValueError) as error:
         snapshot_failure = str(error)
+    if snapshot_failure is None and manifest.checkpoint is None:
+        try:
+            publish_snapshot_output(snapshot_root, run_output_directory)
+        except (OSError, ValueError) as error:
+            failures.append(f"output_publication: {error}")
     try:
         stdout = execution.stdout.decode("utf-8", errors="strict")
         stderr = execution.stderr.decode("utf-8", errors="strict")
@@ -1331,16 +1300,18 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         failures.append(f"residual_validation: {error}")
         residuals = ()
 
-    palace_metadata_path = manifest.output_directory / "palace.json"
-    resolved_config_path = manifest.output_directory / "config_resolved.json"
+    palace_metadata_path = run_output_directory / "palace.json"
+    resolved_config_path = run_output_directory / "config_resolved.json"
     runtime_metadata = None
+    progress_summary = None
     try:
         palace_metadata_path, resolved_config_path, runtime_metadata = (
             _validate_completion_metadata(
-                manifest.output_directory, manifest, processes=processes
+                run_output_directory, manifest, processes=processes
             )
         )
         _validate_execution_runtime_binding(asdict(execution), runtime_metadata)
+        _validate_runtime_build_identity(runtime_metadata, build_manifest)
     except ValueError as error:
         failures.append(f"completion_metadata: {error}")
 
@@ -1353,17 +1324,24 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         progress_events = []
     else:
         try:
-            _validate_completed_palace_progress(
+            progress_summary = _validate_completed_palace_progress(
                 progress_events, len(manifest.terminals),
+                checkpoint_enabled=manifest.checkpoint is not None,
+                campaign_digest=_native_campaign_digest(manifest),
+                terminal_indices=(terminal.index for terminal in manifest.terminals),
             )
+            if runtime_metadata is not None:
+                _validate_runtime_progress_accounting(
+                    runtime_metadata, progress_summary,
+                )
         except ValueError as error:
             wall_limit = any(value.startswith("wall time exceeded ")
                              for value in execution.limit_failures)
             progress_failure = "progress_incomplete" if wall_limit else "progress_validation"
             failures.append(f"{progress_failure}: {error}")
 
-    raw_path = manifest.output_directory / "terminal-Craw.csv"
-    standard_path = manifest.output_directory / "terminal-C.csv"
+    raw_path = run_output_directory / "terminal-Craw.csv"
+    standard_path = run_output_directory / "terminal-C.csv"
     raw_matrix = downstream_matrix = None
     try:
         raw_matrix = _parse_palace_matrix_csv(raw_path, manifest, matrix_name="raw")
@@ -1374,20 +1352,26 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     except ValueError as error:
         failures.append(f"matrix_validation: {error}")
 
-    snapshot_quarantined = ()
+    snapshot_quarantined = quarantine_survivors = ()
     if failures:
-        raw_path, standard_path = _quarantine_matrix_files(
-            manifest.output_directory, (raw_path, standard_path),
-        )
-        snapshot_output = snapshot_root / manifest.output_directory.name
-        snapshot_quarantined = _quarantine_matrix_files(
-            snapshot_output,
-            (
-                snapshot_output / "terminal-Craw.csv",
-                snapshot_output / "terminal-C.csv",
-            ),
-        )
-
+        if run_output_directory.is_dir():
+            quarantined, error = _quarantine_or_purge_matrix_files(
+                run_output_directory, (raw_path, standard_path),
+            )
+            raw_path, standard_path, *quarantine_survivors = quarantined
+            if error is not None:
+                failures.append(f"matrix_quarantine: {error}")
+        if manifest.checkpoint is None:
+            snapshot_output = snapshot_root / manifest.output_directory.name
+            snapshot_quarantined, error = _quarantine_or_purge_matrix_files(
+                snapshot_output,
+                (
+                    snapshot_output / "terminal-Craw.csv",
+                    snapshot_output / "terminal-C.csv",
+                ),
+            )
+            if error is not None:
+                failures.append(f"matrix_quarantine: {error}")
     stdout_sha256 = bytes_sha256(execution.stdout)
     stderr_sha256 = bytes_sha256(execution.stderr)
     stdout_path = manifest.config_path.with_name(
@@ -1416,7 +1400,7 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     artifact_candidates.extend(
         Path(item["snapshot"]) for item in execution_snapshot["inputs"]
     )
-    artifact_candidates.extend(snapshot_quarantined)
+    artifact_candidates.extend((*quarantine_survivors, *snapshot_quarantined))
     for artifact in artifact_candidates:
         if artifact.is_file():
             artifacts[str(artifact.resolve())] = file_sha256(artifact)
@@ -1453,7 +1437,7 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
             **asdict(RESOURCE_LIMITS[resource_class]),
             **mesh_limits,
         },
-        "resource_enforcement": "portable_monitor_not_native_containment",
+        "resource_enforcement": "portable_process_limits",
         "execution": execution_record,
         "runtime_metadata": runtime_metadata,
         "residuals": [
@@ -1478,17 +1462,32 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     )
     run_manifest = {"format": RUN_MANIFEST_FORMAT, **identity}
     exclusive_publish_json(run_manifest_path, run_manifest)
+    matrix_access = None
     if campaign_ledger is not None:
         assert manifest.checkpoint is not None
-        campaign_ledger.finish_attempt(
-            attempt_id, run_manifest_path=run_manifest_path,
+        CanonicalLedgerPublicationV2.finish_attempt(
+            campaign_ledger, attempt_id, run_manifest_path=run_manifest_path,
             checkpoint_root=manifest.checkpoint["path"],
         )
+        if not failures:
+            matrix_access = checkpoint_matrix_access(
+                campaign_ledger, manifest,
+                raw_path=raw_path, standard_path=standard_path,
+            )
     if failures:
         raise PalaceRunRejected(
             "; ".join(failures), failures=failures, manifest_path=run_manifest_path
         )
     assert raw_matrix is not None and downstream_matrix is not None
+    if manifest.checkpoint is not None:
+        assert matrix_access is not None
+        raw_matrix = parse_palace_matrix_csv(
+            raw_path, manifest, matrix_name="raw", matrix_access=matrix_access,
+        )
+        downstream_matrix = parse_palace_matrix_csv(
+            standard_path, manifest, matrix_name="standard",
+            matrix_access=matrix_access,
+        )
     return PalaceRun(
         command=command,
         stdout=stdout,
