@@ -15,6 +15,7 @@ from palace_ledger_v2 import (  # noqa: E402
     abort_campaign_attempt_on_error,
     bind_campaign_abort_checkpoint_root,
 )
+from process_monitor import ProcessCleanupError  # noqa: E402
 from test_palace_campaign import (  # noqa: E402
     _zero_accounting,
     campaign_v2,
@@ -38,10 +39,12 @@ def test_abort_clears_active_registration_and_allows_fresh_attempt(
     @abort_campaign_attempt_on_error
     def fail_after_registration(*, campaign_ledger, attempt_id):
         bind_campaign_abort_checkpoint_root(tmp_path / "checkpoint")
-        campaign_ledger._register_attempt(
-            attempt_id, resource_decision_sha256="d" * 64,
-            resource_reservation=_zero_accounting(),
-        )
+        expected = {
+            "resource_decision_sha256": "d" * 64,
+            "resource_reservation": _zero_accounting(),
+        }
+        palace_ledger_v2._ABORT_REGISTRATION.set(expected)
+        campaign_ledger._register_attempt(attempt_id, **expected)
         raise OSError("launch failed")
 
     with pytest.raises(OSError, match="launch failed"):
@@ -61,6 +64,66 @@ def test_abort_clears_active_registration_and_allows_fresh_attempt(
     assert ledger._validate_local_state()["active_registration"][
         "attempt_id"
     ] == "attempt-2"
+
+
+def test_cleanup_failure_keeps_canonical_attempt_active(tmp_path):
+    campaign, workload, authority = campaign_v2(tmp_path)
+    ledger = CanonicalLedgerPublicationV2.create(
+        tmp_path / "ledger", campaign, authority=authority,
+        expected_campaign_sha256=campaign["content_sha256"],
+        expected_workload=workload,
+    )
+
+    @abort_campaign_attempt_on_error
+    def fail_cleanup(*, campaign_ledger, attempt_id):
+        expected = {
+            "resource_decision_sha256": "d" * 64,
+            "resource_reservation": _zero_accounting(),
+        }
+        palace_ledger_v2._ABORT_REGISTRATION.set(expected)
+        campaign_ledger._register_attempt(attempt_id, **expected)
+        bind_campaign_abort_checkpoint_root(tmp_path / "checkpoint")
+        raise ProcessCleanupError("survivor")
+
+    with pytest.raises(ProcessCleanupError, match="survivor"):
+        fail_cleanup(campaign_ledger=ledger, attempt_id="attempt-1")
+    assert ledger._validate_local_state()["active_registration"][
+        "attempt_id"
+    ] == "attempt-1"
+
+
+def test_historical_completion_replay_does_not_reread_live_checkpoint(
+        tmp_path, monkeypatch):
+    campaign, workload, authority = campaign_v2(tmp_path)
+    ledger = CanonicalLedgerPublicationV2.create(
+        tmp_path / "ledger", campaign, authority=authority,
+        expected_campaign_sha256=campaign["content_sha256"],
+        expected_workload=workload,
+    )
+    ledger._register_attempt(
+        "attempt-1", resource_decision_sha256="d" * 64,
+        resource_reservation=_zero_accounting(),
+    )
+    reconciliation = ledger_reconciliation(
+        campaign, tmp_path, outcome="wall_timeout", before=0, after=1,
+        witness="ab",
+    )
+    monkeypatch.setattr(
+        palace_ledger_v2, "reconcile_campaign_attempt_v2",
+        lambda *args, **kwargs: deepcopy(reconciliation),
+    )
+    ledger.finish_attempt(
+        "attempt-1", run_manifest_path=tmp_path / "run.json",
+        checkpoint_root=tmp_path / "checkpoint",
+    )
+
+    def stale_live_root(*args, **kwargs):
+        raise ValueError("live checkpoint advanced")
+
+    monkeypatch.setattr(
+        palace_ledger_v2, "reconcile_campaign_attempt_v2", stale_live_root,
+    )
+    assert ledger._validate_local_state()["head"]["prefix"] == 1
 
 
 def test_public_recovery_completes_interrupted_completion_without_registration_inputs(

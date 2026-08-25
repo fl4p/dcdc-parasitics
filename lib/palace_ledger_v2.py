@@ -22,6 +22,7 @@ if __package__:
     from .palace_checkpoint import validate_native_checkpoint
     from .palace_head_authority import CanonicalHeadAuthority
     from .palace_reservation import derive_attempt_reservation
+    from .process_monitor import ProcessCleanupError
     from .provenance import (
         bytes_sha256, canonical_equal, canonical_sha256, exclusive_publish_json,
     )
@@ -37,6 +38,7 @@ else:
     from palace_checkpoint import validate_native_checkpoint
     from palace_head_authority import CanonicalHeadAuthority
     from palace_reservation import derive_attempt_reservation
+    from process_monitor import ProcessCleanupError
     from provenance import (
         bytes_sha256, canonical_equal, canonical_sha256, exclusive_publish_json,
     )
@@ -49,6 +51,8 @@ except ImportError:  # pragma: no cover - intentionally POSIX-only
 
 _ABORT_CHECKPOINT_ROOT: ContextVar[str | None] = ContextVar(
     "palace_abort_checkpoint_root", default=None)
+_ABORT_REGISTRATION: ContextVar[dict | None] = ContextVar(
+    "palace_abort_registration", default=None)
 
 HEAD_FORMAT = "palace-checkpoint-campaign-head-v2"
 PENDING_FORMAT = "palace-checkpoint-campaign-pending-v2"
@@ -495,21 +499,23 @@ class CanonicalLedgerPublicationV2:
         payload.pop("content_sha256")
         return {**payload, "content_sha256": canonical_sha256(payload)}
 
-    def _completion_successor(self, predecessor, entry, registration):
+    def _completion_successor(
+            self, predecessor, entry, registration, *, verify_live=False):
         if (registration is None
                 or registration["attempt_id"] != entry["attempt_id"]):
             raise ValueError("campaign v2 completion lacks its registration")
         reconciliation = entry["reconciliation"]
-        replayed = reconcile_campaign_attempt_v2(
-            self.campaign,
-            expected_campaign_sha256=self.campaign["content_sha256"],
-            expected_workload=self.expected_workload,
-            expected_authority_identity=_authority_identity(self.authority),
-            run_manifest_path=reconciliation["execution_witness"]["path"],
-            checkpoint_root=reconciliation["checkpoint_root"],
-        )
-        if not canonical_equal(replayed, reconciliation):
-            raise ValueError("campaign v2 attempt reconciliation is stale")
+        if verify_live:
+            replayed = reconcile_campaign_attempt_v2(
+                self.campaign,
+                expected_campaign_sha256=self.campaign["content_sha256"],
+                expected_workload=self.expected_workload,
+                expected_authority_identity=_authority_identity(self.authority),
+                run_manifest_path=reconciliation["execution_witness"]["path"],
+                checkpoint_root=reconciliation["checkpoint_root"],
+            )
+            if not canonical_equal(replayed, reconciliation):
+                raise ValueError("campaign v2 attempt reconciliation is stale")
         if (reconciliation["resource_decision_sha256"]
                 != registration["resource_decision_sha256"]):
             raise ValueError("campaign v2 attempt resource decision was substituted")
@@ -571,13 +577,14 @@ class CanonicalLedgerPublicationV2:
         payload.pop("content_sha256")
         return {**payload, "content_sha256": canonical_sha256(payload)}
 
-    def _entry_successor(self, predecessor, entry, registration):
+    def _entry_successor(
+            self, predecessor, entry, registration, *, verify_live=False):
         if entry["event"] == "attempt_registered":
             return self._registration_successor(predecessor, entry), entry
         if entry["event"] == "attempt_aborted":
             return self._abortion_successor(predecessor, entry, registration), None
         return self._completion_successor(
-            predecessor, entry, registration,
+            predecessor, entry, registration, verify_live=verify_live,
         ), None
 
     def _validate_local_state(self):
@@ -699,29 +706,21 @@ class CanonicalLedgerPublicationV2:
             expected_workload=self.expected_workload,
             trusted_policy=trusted_policy,
         )
-        return self._register_attempt(
-            attempt_id,
-            resource_decision_sha256=receipt["decision_sha256"],
-            resource_reservation=receipt["reservation"],
-        )
+        expected = {
+            "resource_decision_sha256": receipt["decision_sha256"],
+            "resource_reservation": receipt["reservation"],
+        }
+        _ABORT_REGISTRATION.set(expected)
+        return self._register_attempt(attempt_id, **expected)
 
     def _register_attempt(self, attempt_id, *, resource_decision_sha256,
-                          resource_reservation, _allow_existing=False):
+                          resource_reservation):
         reservation = _validate_accounting(resource_reservation)
         with self._lock():
             state = self._validate_local_state()
             predecessor = state["head"]
             existing = state["active_registration"]
             if existing is not None:
-                if _allow_existing:
-                    if (existing["attempt_id"] != attempt_id
-                            or existing["resource_decision_sha256"]
-                            != resource_decision_sha256
-                            or existing["resource_reservation"] != reservation):
-                        raise ValueError(
-                            "campaign v2 active registration differs from retry"
-                        )
-                    return deepcopy(existing)
                 raise ValueError("campaign v2 already has an active attempt")
             payload = {
                 "format": ENTRY_FORMAT,
@@ -739,7 +738,9 @@ class CanonicalLedgerPublicationV2:
             self._publish_locked(state, entry, successor)
             return entry
 
-    def abort_attempt_if_active(self, attempt_id, *, reason, checkpoint_root):
+    def abort_attempt_if_active(
+            self, attempt_id, *, reason, checkpoint_root,
+            expected_registration):
         if (not isinstance(reason, str)
                 or not 0 < len(reason.encode()) <= 4096):
             raise ValueError("campaign v2 abort reason is invalid")
@@ -750,6 +751,13 @@ class CanonicalLedgerPublicationV2:
                 pending_entry = pending["entry"]
                 if (pending_entry["event"] == "attempt_registered"
                         and pending_entry["attempt_id"] == attempt_id):
+                    actual = {
+                        name: pending_entry[name] for name in (
+                            "resource_decision_sha256", "resource_reservation")
+                    }
+                    if actual != expected_registration:
+                        raise ValueError(
+                            "campaign v2 abort registration lacks trusted derivation")
                     self._reconcile_locked(pending, state)
                     state = self._validate_local_state()
                 elif pending_entry["attempt_id"] == attempt_id:
@@ -906,7 +914,7 @@ class CanonicalLedgerPublicationV2:
         self._reject_candidate_reuse(entry, state)
         successor = validate_head_v2(successor_head, self.campaign)
         expected, _ = self._entry_successor(
-            predecessor, entry, state["active_registration"],
+            predecessor, entry, state["active_registration"], verify_live=True,
         )
         if not canonical_equal(successor, expected):
             raise ValueError("campaign v2 successor does not bind its entry")
@@ -921,6 +929,12 @@ class CanonicalLedgerPublicationV2:
             **pending_payload,
             "content_sha256": canonical_sha256(pending_payload),
         }
+        for label, document in (("entry", entry), ("pending", pending)):
+            encoded = (json.dumps(
+                document, indent=2, sort_keys=True, allow_nan=False,
+            ) + "\n").encode()
+            if len(encoded) > 1024 * 1024:
+                raise ValueError(f"campaign v2 {label} exceeds publication limit")
         exclusive_publish_json(self.pending_path, pending)
         return self._reconcile_locked(pending, state)
 
@@ -979,7 +993,7 @@ class CanonicalLedgerPublicationV2:
         entry = pending["entry"]
         self._reject_candidate_reuse(entry, state)
         derived, _ = self._entry_successor(
-            predecessor, entry, state["last_registration"],
+            predecessor, entry, state["last_registration"], verify_live=True,
         )
         if not canonical_equal(derived, successor):
             raise ValueError("campaign v2 pending successor is not derived")
@@ -1049,19 +1063,25 @@ def abort_campaign_attempt_on_error(function):
     def guarded(*args, **kwargs):
         ledger = kwargs.get("campaign_ledger")
         attempt_id = kwargs.get("attempt_id")
-        token = _ABORT_CHECKPOINT_ROOT.set(None)
+        root_token = _ABORT_CHECKPOINT_ROOT.set(None)
+        registration_token = _ABORT_REGISTRATION.set(None)
         try:
             return function(*args, **kwargs)
         except BaseException as error:
+            if isinstance(error, ProcessCleanupError):
+                raise
             checkpoint_root = _ABORT_CHECKPOINT_ROOT.get()
+            expected_registration = _ABORT_REGISTRATION.get()
             if (type(ledger) is CanonicalLedgerPublicationV2
-                    and attempt_id is not None and checkpoint_root is not None):
+                    and attempt_id is not None and checkpoint_root is not None
+                    and expected_registration is not None):
                 try:
                     reason = f"{type(error).__name__}: {error}"
                     ledger.abort_attempt_if_active(
                         attempt_id,
                         reason=reason.encode()[:4096].decode(errors="ignore"),
                         checkpoint_root=checkpoint_root,
+                        expected_registration=expected_registration,
                     )
                 except Exception as abort_error:
                     raise RuntimeError(
@@ -1069,6 +1089,7 @@ def abort_campaign_attempt_on_error(function):
                     ) from error
             raise
         finally:
-            _ABORT_CHECKPOINT_ROOT.reset(token)
+            _ABORT_CHECKPOINT_ROOT.reset(root_token)
+            _ABORT_REGISTRATION.reset(registration_token)
 
     return guarded

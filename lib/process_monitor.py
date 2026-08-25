@@ -19,6 +19,10 @@ import psutil
 MONITOR_TOKEN_ENV = "DCDC_PROCESS_MONITOR_TOKEN"
 
 
+class ProcessCleanupError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ProcessLimits:
     wall_time_s: float
@@ -379,25 +383,29 @@ def run_monitored_process(
         stderr=subprocess.PIPE,
         start_new_session=os.name == "posix",
     )
-    monitor_events.append({
-        "event": "process_started",
-        "monotonic_ns": time.monotonic_ns() - started_ns,
-        "detail": str(process.pid),
-    })
-    leader_created = psutil.Process(process.pid).create_time()
-    messages = queue.Queue()
-    threads = [
-        threading.Thread(
-            target=_reader,
-            args=(stream, source, messages, started_ns),
-            daemon=True,
-        )
-        for source, stream in (("stdout", process.stdout), ("stderr", process.stderr))
-    ]
-    for thread in threads:
-        thread.start()
-
+    tracked_descendants = {}
+    leader_created = None
+    threads = []
     try:
+        monitor_events.append({
+            "event": "process_started",
+            "monotonic_ns": time.monotonic_ns() - started_ns,
+            "detail": str(process.pid),
+        })
+        leader_created = psutil.Process(process.pid).create_time()
+        messages = queue.Queue()
+        threads = [
+            threading.Thread(
+                target=_reader,
+                args=(stream, source, messages, started_ns),
+                daemon=True,
+            )
+            for source, stream in (
+                ("stdout", process.stdout), ("stderr", process.stderr))
+        ]
+        for thread in threads:
+            thread.start()
+
         buffers = {"stdout": bytearray(), "stderr": bytearray()}
         stream_events = []
         resource_samples = []
@@ -410,7 +418,6 @@ def run_monitored_process(
         max_gmres = 0
         gmres_seen = False
         failures = []
-        tracked_descendants = {}
         monitor_process = psutil.Process(os.getpid())
 
         while _tree_alive(process, tracked_descendants, token) or active_readers:
@@ -581,6 +588,10 @@ def run_monitored_process(
             resource_samples=tuple(resource_samples),
         )
     except BaseException as error:
+        try:
+            process.kill()
+        except (OSError, ProcessLookupError):
+            pass
         deadline = time.monotonic() + 5.0
         while _tree_alive(process, tracked_descendants, token):
             _kill_tree(process, leader_created, tracked_descendants, token)
@@ -593,13 +604,13 @@ def run_monitored_process(
         for thread in threads:
             thread.join(timeout=1)
         if _tree_alive(process, tracked_descendants, token):
-            raise RuntimeError(
+            raise ProcessCleanupError(
                 "process monitor could not establish exceptional cleanup"
             ) from error
         try:
             process.wait(timeout=1)
         except subprocess.TimeoutExpired as cleanup_error:
-            raise RuntimeError(
+            raise ProcessCleanupError(
                 "process monitor could not reap exceptional process"
             ) from cleanup_error
         raise

@@ -34,7 +34,10 @@ from palace_ledger_v2 import (  # noqa: E402
     _zero_accounting,
     validate_head_v2,
 )
-from palace_matrix_access import checkpoint_matrix_access  # noqa: E402
+from palace_matrix_access import (  # noqa: E402
+    checkpoint_matrix_access,
+    validate_matrix_access,
+)
 from palace_resources import PalaceTopologyWorkload, build_palace_workload  # noqa: E402
 from provenance import canonical_sha256, file_sha256  # noqa: E402
 
@@ -1197,6 +1200,10 @@ def test_campaign_v2_completed_attempt_binds_terminal_reconciliation(
         raw_path=tmp_path / "raw.csv",
         standard_path=tmp_path / "standard.csv",
     )
+    with pytest.raises(ValueError, match="attested execution witness"):
+        validate_matrix_access(
+            access, manifest, run_manifest_path=tmp_path / "other-run.json",
+        )
     assert access.campaign_sha256 == campaign["content_sha256"]
     assert access.terminal_names == ("A", "B")
     parsed = parse_palace_matrix_csv(
