@@ -241,13 +241,22 @@ def _identity_schema_failures(item):
                  for name in ("minimum", "maximum"))):
         failures.append("study finite-reference bounds schema mismatch")
     config_provenance = config["provenance"]
-    if not isinstance(config_provenance, dict) or set(config_provenance) != {
+    expected_config_provenance = {
         "checkpoint", "config_sha256", "explicit_residual_tolerance",
         "finite_reference", "gate_policy", "ground_attribute",
         "linear_tolerance", "materials",
         "maximum_iterations",
         "mesh_manifest_sha256", "mesh_sha256", "order", "terminals",
-    }:
+    }
+    if isinstance(config_provenance, dict):
+        # Optional solver-selection provenance, matching the contract in
+        # load_palace_config_manifest; legacy manifests omit both keys.
+        expected_config_provenance |= {
+            key for key in ("linear_solver_type", "multigrid_max_levels")
+            if key in config_provenance
+        }
+    if (not isinstance(config_provenance, dict)
+            or set(config_provenance) != expected_config_provenance):
         failures.append("config provenance schema mismatch")
     else:
         if config_provenance["checkpoint"] is not None:
