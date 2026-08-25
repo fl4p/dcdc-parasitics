@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "test"))
 
 import palace_ledger_v2  # noqa: E402
+import process_monitor  # noqa: E402
 from palace_ledger_v2 import (  # noqa: E402
     CanonicalLedgerPublicationV2,
     abort_campaign_attempt_on_error,
@@ -122,6 +123,91 @@ def test_pending_abort_recovery_revalidates_checkpoint(
     head = ledger.recover_pending_attempt()
     assert head["prefix"] == 1
     assert ledger._validate_local_state()["active_registration"] is None
+
+
+def test_pending_abort_recovery_pure_replays_canonical_transition(
+        tmp_path, monkeypatch):
+    campaign, workload, authority = campaign_v2(tmp_path)
+    ledger = CanonicalLedgerPublicationV2.create(
+        tmp_path / "ledger", campaign, authority=authority,
+        expected_campaign_sha256=campaign["content_sha256"],
+        expected_workload=workload,
+    )
+    expected = {
+        "resource_decision_sha256": "d" * 64,
+        "resource_reservation": _zero_accounting(),
+    }
+    ledger._register_attempt("attempt-1", **expected)
+    monkeypatch.setattr(
+        palace_ledger_v2, "validate_native_checkpoint",
+        lambda *args, **kwargs: {"prefix": 1},
+    )
+    matches = CanonicalLedgerPublicationV2._external_matches
+    heads = []
+
+    def interrupt_after_cas(self, head):
+        heads.append(head)
+        if len(heads) == 2:
+            raise OSError("injected post-CAS crash")
+        return matches(self, head)
+
+    monkeypatch.setattr(
+        CanonicalLedgerPublicationV2, "_external_matches",
+        interrupt_after_cas,
+    )
+    with pytest.raises(OSError, match="post-CAS crash"):
+        ledger.abort_attempt_if_active(
+            "attempt-1", reason="launch failed",
+            checkpoint_root=tmp_path / "checkpoint",
+            expected_registration=expected,
+        )
+    monkeypatch.setattr(
+        CanonicalLedgerPublicationV2, "_external_matches", matches,
+    )
+    assert ledger.pending_path.exists()
+
+    def vanished_root(*args, **kwargs):
+        raise ValueError("campaign v2 checkpoint root is missing")
+
+    monkeypatch.setattr(
+        palace_ledger_v2, "validate_native_checkpoint", vanished_root,
+    )
+    head = ledger.recover_pending_attempt()
+    assert head["prefix"] == 1
+    assert not ledger.pending_path.exists()
+    state = ledger._validate_local_state()
+    assert state["active_registration"] is None
+    assert authority.read(campaign["content_sha256"])["head_sha256"] == head[
+        "content_sha256"
+    ]
+
+
+def test_untagged_interrupt_with_live_tree_skips_abort(tmp_path):
+    campaign, workload, authority = campaign_v2(tmp_path)
+    ledger = CanonicalLedgerPublicationV2.create(
+        tmp_path / "ledger", campaign, authority=authority,
+        expected_campaign_sha256=campaign["content_sha256"],
+        expected_workload=workload,
+    )
+
+    @abort_campaign_attempt_on_error
+    def fail_with_live_tree(*, campaign_ledger, attempt_id):
+        expected = {
+            "resource_decision_sha256": "d" * 64,
+            "resource_reservation": _zero_accounting(),
+        }
+        palace_ledger_v2._ABORT_REGISTRATION.set(expected)
+        campaign_ledger._register_attempt(attempt_id, **expected)
+        bind_campaign_abort_checkpoint_root(tmp_path / "checkpoint")
+        process_monitor._TREE_MAY_BE_ALIVE.set(True)
+        raise KeyboardInterrupt("escaped untagged")
+
+    with pytest.raises(KeyboardInterrupt):
+        fail_with_live_tree(campaign_ledger=ledger, attempt_id="attempt-1")
+    assert not process_monitor.solver_tree_may_be_alive()
+    assert ledger._validate_local_state()["active_registration"][
+        "attempt_id"
+    ] == "attempt-1"
 
 
 def test_abort_reason_bounds_and_decorator_truncation(tmp_path, monkeypatch):

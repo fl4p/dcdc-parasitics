@@ -643,7 +643,7 @@ def ledger_reconciliation(campaign, root, *, outcome, before, after, witness):
         "new_rhs_indices": list(range(before + 1, after + 1)),
         "resource_bounds": bounds,
         "causal_classification": {
-            "version": "palace-causal-timeout-v1",
+            "version": "palace-causal-timeout-v2",
             "monitor_initiated": outcome == "wall_timeout",
             "limit": "wall_time" if outcome == "wall_timeout" else None,
             "diagnostics_before_kill": [],

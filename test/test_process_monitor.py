@@ -75,14 +75,31 @@ def test_secondary_cleanup_interrupt_is_tagged_while_process_survives(
         lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     monkeypatch.setattr(process_monitor, "_tree_alive", lambda *args: True)
-    with pytest.raises(
-            process_monitor.ProcessCleanupError,
-            match="interrupted before tree death"):
+    token = process_monitor.reset_solver_tree_state()
+    try:
+        with pytest.raises(
+                process_monitor.ProcessCleanupError,
+                match="interrupted before tree death"):
+            run_monitored_process(
+                [sys.executable, "-c", "import time; time.sleep(0.1)"],
+                cwd=tmp_path,
+                limits=_limits(),
+            )
+        assert process_monitor.solver_tree_may_be_alive()
+    finally:
+        process_monitor.restore_solver_tree_state(token)
+
+
+def test_solver_tree_state_clears_after_normal_completion(tmp_path):
+    token = process_monitor.reset_solver_tree_state()
+    try:
+        assert not process_monitor.solver_tree_may_be_alive()
         run_monitored_process(
-            [sys.executable, "-c", "import time; time.sleep(0.1)"],
-            cwd=tmp_path,
-            limits=_limits(),
+            [sys.executable, "-c", "pass"], cwd=tmp_path, limits=_limits(),
         )
+        assert not process_monitor.solver_tree_may_be_alive()
+    finally:
+        process_monitor.restore_solver_tree_state(token)
 
 
 def test_additional_output_path_is_included_in_disk_limit(tmp_path):

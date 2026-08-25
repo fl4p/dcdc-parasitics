@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Bounded subprocess execution with byte-exact stream capture."""
+import contextvars
 from dataclasses import dataclass
 import hashlib
 import json
@@ -21,6 +22,28 @@ MONITOR_TOKEN_ENV = "DCDC_PROCESS_MONITOR_TOKEN"
 
 class ProcessCleanupError(RuntimeError):
     pass
+
+
+_TREE_MAY_BE_ALIVE = contextvars.ContextVar(
+    "process_monitor_tree_may_be_alive", default=False)
+
+
+def solver_tree_may_be_alive():
+    """True from just before a monitored launch until tree death is confirmed.
+
+    Fail-closed liveness signal for abort decisions: any interrupt delivered
+    between launch and confirmed cleanup leaves this True, so callers must
+    not rely on exception typing alone to decide the tree is dead.
+    """
+    return _TREE_MAY_BE_ALIVE.get()
+
+
+def reset_solver_tree_state():
+    return _TREE_MAY_BE_ALIVE.set(False)
+
+
+def restore_solver_tree_state(token):
+    _TREE_MAY_BE_ALIVE.reset(token)
 
 
 @dataclass(frozen=True)
@@ -374,6 +397,7 @@ def _cleanup_exceptional_process(
     except subprocess.TimeoutExpired as error:
         raise ProcessCleanupError(
             "process monitor could not reap exceptional process") from error
+    _TREE_MAY_BE_ALIVE.set(False)
 
 
 def run_monitored_process(
@@ -401,6 +425,7 @@ def run_monitored_process(
     token = uuid.uuid4().hex
     child_environment = dict(os.environ if environment is None else environment)
     child_environment[MONITOR_TOKEN_ENV] = token
+    _TREE_MAY_BE_ALIVE.set(True)
     process = subprocess.Popen(
         launch_command,
         cwd=cwd,
@@ -596,6 +621,7 @@ def run_monitored_process(
             "detail": str(process.returncode),
         })
         elapsed = exited_ns / 1e9
+        _TREE_MAY_BE_ALIVE.set(False)
         return ProcessExecution(
             command=command,
             cwd=cwd,
@@ -627,6 +653,7 @@ def run_monitored_process(
                 raise ProcessCleanupError(
                     "process monitor cleanup was interrupted before tree death"
                 ) from cleanup_error
+            _TREE_MAY_BE_ALIVE.set(False)
             if isinstance(cleanup_error, ProcessCleanupError):
                 raise
         raise

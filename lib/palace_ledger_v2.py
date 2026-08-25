@@ -22,7 +22,12 @@ if __package__:
     from .palace_checkpoint import validate_native_checkpoint
     from .palace_head_authority import CanonicalHeadAuthority
     from .palace_reservation import derive_attempt_reservation
-    from .process_monitor import ProcessCleanupError
+    from .process_monitor import (
+        ProcessCleanupError,
+        reset_solver_tree_state,
+        restore_solver_tree_state,
+        solver_tree_may_be_alive,
+    )
     from .provenance import (
         bytes_sha256, canonical_equal, canonical_sha256, exclusive_publish_json,
     )
@@ -38,7 +43,12 @@ else:
     from palace_checkpoint import validate_native_checkpoint
     from palace_head_authority import CanonicalHeadAuthority
     from palace_reservation import derive_attempt_reservation
-    from process_monitor import ProcessCleanupError
+    from process_monitor import (
+        ProcessCleanupError,
+        reset_solver_tree_state,
+        restore_solver_tree_state,
+        solver_tree_may_be_alive,
+    )
     from provenance import (
         bytes_sha256, canonical_equal, canonical_sha256, exclusive_publish_json,
     )
@@ -989,30 +999,47 @@ class CanonicalLedgerPublicationV2:
                         "campaign v2 registration recovery lacks trusted derivation"
                     )
             elif entry["event"] == "attempt_aborted":
-                reconciliation = entry["reconciliation"]
-                partition = self.campaign["checkpoint_partition"]
-                inventory = validate_native_checkpoint(
-                    reconciliation["checkpoint_root"],
-                    campaign_identity=self.campaign["native_campaign_identity"],
-                    ordered_terminal_indices=(
-                        item["index"]
-                        for item in self.campaign["ordered_terminals"]),
-                    process_count=partition["process_count"],
-                    global_true_dofs=partition["global_true_dofs"],
-                    partition=partition["local_true_dofs"],
-                )
-                if not canonical_equal(
-                        inventory, reconciliation["checkpoint_inventory"]):
-                    raise ValueError(
-                        "campaign v2 pending abort checkpoint is stale")
                 if expected_registration is not None:
                     raise ValueError(
                         "campaign v2 abort recovery rejects registration inputs")
+                _, already_canonical = self._external_successor_state(pending)
+                if not already_canonical:
+                    reconciliation = entry["reconciliation"]
+                    partition = self.campaign["checkpoint_partition"]
+                    inventory = validate_native_checkpoint(
+                        reconciliation["checkpoint_root"],
+                        campaign_identity=self.campaign[
+                            "native_campaign_identity"],
+                        ordered_terminal_indices=(
+                            item["index"]
+                            for item in self.campaign["ordered_terminals"]),
+                        process_count=partition["process_count"],
+                        global_true_dofs=partition["global_true_dofs"],
+                        partition=partition["local_true_dofs"],
+                    )
+                    if not canonical_equal(
+                            inventory, reconciliation["checkpoint_inventory"]):
+                        raise ValueError(
+                            "campaign v2 pending abort checkpoint is stale")
             elif expected_registration is not None:
                 raise ValueError(
                     "campaign v2 completion recovery rejects registration inputs"
                 )
             return self._reconcile_locked(pending, state)
+
+    def _external_successor_state(self, pending):
+        """Read the external authority and report whether the pending
+        successor is already the canonical head (a pure replay)."""
+        external = CanonicalHeadAuthority.read(
+            self.authority, self.campaign["content_sha256"])
+        successor = pending["successor_head"]
+        matches = (
+            external["head_sha256"] == successor["content_sha256"]
+            and external["sequence"] == successor["sequence"]
+            and external["entry_sha256"]
+            == pending["entry"]["content_sha256"]
+        )
+        return external, matches
 
     def _reconcile_locked(self, pending, state):
         predecessor = pending["predecessor_head"]
@@ -1020,13 +1047,8 @@ class CanonicalLedgerPublicationV2:
         successor = pending["successor_head"]
         entry = pending["entry"]
         self._reject_candidate_reuse(entry, state)
-        external = CanonicalHeadAuthority.read(
-            self.authority, self.campaign["content_sha256"])
-        external_is_successor = (
-            external["head_sha256"] == successor["content_sha256"]
-            and external["sequence"] == successor["sequence"]
-            and external["entry_sha256"] == entry["content_sha256"]
-        )
+        external, external_is_successor = self._external_successor_state(
+            pending)
         derived, _ = self._entry_successor(
             predecessor, entry, state["last_registration"],
             verify_live=not external_is_successor,
@@ -1098,10 +1120,11 @@ def abort_campaign_attempt_on_error(function):
         attempt_id = kwargs.get("attempt_id")
         root_token = _ABORT_CHECKPOINT_ROOT.set(None)
         registration_token = _ABORT_REGISTRATION.set(None)
+        tree_token = reset_solver_tree_state()
         try:
             return function(*args, **kwargs)
         except BaseException as error:
-            if isinstance(error, ProcessCleanupError):
+            if isinstance(error, ProcessCleanupError) or solver_tree_may_be_alive():
                 raise
             checkpoint_root = _ABORT_CHECKPOINT_ROOT.get()
             expected_registration = _ABORT_REGISTRATION.get()
@@ -1124,5 +1147,6 @@ def abort_campaign_attempt_on_error(function):
         finally:
             _ABORT_CHECKPOINT_ROOT.reset(root_token)
             _ABORT_REGISTRATION.reset(registration_token)
+            restore_solver_tree_state(tree_token)
 
     return guarded
