@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Crash-safe local publication against the external Palace head authority."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from functools import wraps
 import json
@@ -18,9 +19,12 @@ if __package__:
         reconcile_campaign_attempt_v2,
         validate_campaign_identity_v2,
     )
+    from .palace_checkpoint import validate_native_checkpoint
     from .palace_head_authority import CanonicalHeadAuthority
     from .palace_reservation import derive_attempt_reservation
-    from .provenance import canonical_equal, canonical_sha256, exclusive_publish_json
+    from .provenance import (
+        bytes_sha256, canonical_equal, canonical_sha256, exclusive_publish_json,
+    )
 else:
     from palace_campaign import (
         ATTEMPT_ID_RE,
@@ -30,15 +34,21 @@ else:
         reconcile_campaign_attempt_v2,
         validate_campaign_identity_v2,
     )
+    from palace_checkpoint import validate_native_checkpoint
     from palace_head_authority import CanonicalHeadAuthority
     from palace_reservation import derive_attempt_reservation
-    from provenance import canonical_equal, canonical_sha256, exclusive_publish_json
+    from provenance import (
+        bytes_sha256, canonical_equal, canonical_sha256, exclusive_publish_json,
+    )
 
 try:
     import fcntl
 except ImportError:  # pragma: no cover - intentionally POSIX-only
     fcntl = None
 
+
+_ABORT_CHECKPOINT_ROOT: ContextVar[str | None] = ContextVar(
+    "palace_abort_checkpoint_root", default=None)
 
 HEAD_FORMAT = "palace-checkpoint-campaign-head-v2"
 PENDING_FORMAT = "palace-checkpoint-campaign-pending-v2"
@@ -217,11 +227,34 @@ def validate_entry_v2(value, campaign, predecessor):
                 "charged_accounting"]:
             raise ValueError("campaign v2 charged accounting is not canonical")
     elif value.get("event") == "attempt_aborted":
-        if (set(value) != common | {"reason", "charged_accounting"}
+        if (set(value) != common | {"reconciliation", "charged_accounting"}
                 or predecessor["terminal"]
-                or predecessor["active_attempt"] != value["attempt_id"]
-                or not isinstance(value["reason"], str) or not value["reason"]):
+                or predecessor["active_attempt"] != value["attempt_id"]):
             raise ValueError("campaign v2 abort schema mismatch")
+        reconciliation = _content_document(
+            value["reconciliation"], "campaign v2 abort reconciliation",
+        )
+        if (set(reconciliation) != {
+                "format", "campaign_sha256", "attempt_id", "prefix_before",
+                "prefix_after", "checkpoint_root", "checkpoint_inventory",
+                "reason", "reason_sha256", "content_sha256"}
+                or reconciliation["format"]
+                != "palace-checkpoint-attempt-abort-v1"
+                or reconciliation["campaign_sha256"] != campaign["content_sha256"]
+                or reconciliation["attempt_id"] != value["attempt_id"]
+                or reconciliation["prefix_before"] != predecessor["prefix"]
+                or type(reconciliation["prefix_after"]) is not int
+                or not predecessor["prefix"] <= reconciliation["prefix_after"]
+                <= len(campaign["ordered_terminals"])
+                or not isinstance(reconciliation["checkpoint_root"], str)
+                or not isinstance(reconciliation["reason"], str)
+                or not 0 < len(reconciliation["reason"].encode()) <= 4096
+                or reconciliation["reason_sha256"]
+                != bytes_sha256(reconciliation["reason"].encode())
+                or not isinstance(reconciliation["checkpoint_inventory"], dict)
+                or reconciliation["checkpoint_inventory"].get("prefix")
+                != reconciliation["prefix_after"]):
+            raise ValueError("campaign v2 abort reconciliation is invalid")
         if _validate_accounting(value["charged_accounting"]) != value[
                 "charged_accounting"]:
             raise ValueError("campaign v2 abort accounting is not canonical")
@@ -531,6 +564,7 @@ class CanonicalLedgerPublicationV2:
             "sequence": entry["sequence"],
             "entry_sha256": entry["content_sha256"],
             "active_attempt": None,
+            "prefix": entry["reconciliation"]["prefix_after"],
             "attempts_finished": predecessor["attempts_finished"] + 1,
             "accounting": accounting,
         }
@@ -705,19 +739,54 @@ class CanonicalLedgerPublicationV2:
             self._publish_locked(state, entry, successor)
             return entry
 
-    def abort_attempt_if_active(self, attempt_id, *, reason):
-        if not isinstance(reason, str) or not reason:
+    def abort_attempt_if_active(self, attempt_id, *, reason, checkpoint_root):
+        if (not isinstance(reason, str)
+                or not 0 < len(reason.encode()) <= 4096):
             raise ValueError("campaign v2 abort reason is invalid")
         with self._lock():
             state = self._validate_local_state()
-            if state["pending"] is not None:
-                return False
+            pending = state["pending"]
+            if pending is not None:
+                pending_entry = pending["entry"]
+                if (pending_entry["event"] == "attempt_registered"
+                        and pending_entry["attempt_id"] == attempt_id):
+                    self._reconcile_locked(pending, state)
+                    state = self._validate_local_state()
+                elif pending_entry["attempt_id"] == attempt_id:
+                    return False
+                else:
+                    raise ValueError("campaign v2 pending attempt differs from abort")
             predecessor = state["head"]
             registration = state["active_registration"]
             if registration is None:
                 return False
             if registration["attempt_id"] != attempt_id:
                 raise ValueError("campaign v2 active attempt differs from abort")
+            partition = self.campaign["checkpoint_partition"]
+            inventory = validate_native_checkpoint(
+                checkpoint_root,
+                campaign_identity=self.campaign["native_campaign_identity"],
+                ordered_terminal_indices=(
+                    item["index"] for item in self.campaign["ordered_terminals"]),
+                process_count=partition["process_count"],
+                global_true_dofs=partition["global_true_dofs"],
+                partition=partition["local_true_dofs"],
+            )
+            reconciliation_payload = {
+                "format": "palace-checkpoint-attempt-abort-v1",
+                "campaign_sha256": self.campaign["content_sha256"],
+                "attempt_id": attempt_id,
+                "prefix_before": predecessor["prefix"],
+                "prefix_after": inventory["prefix"],
+                "checkpoint_root": str(Path(checkpoint_root).resolve()),
+                "checkpoint_inventory": inventory,
+                "reason": reason,
+                "reason_sha256": bytes_sha256(reason.encode()),
+            }
+            reconciliation = {
+                **reconciliation_payload,
+                "content_sha256": canonical_sha256(reconciliation_payload),
+            }
             payload = {
                 "format": ENTRY_FORMAT,
                 "campaign_sha256": self.campaign["content_sha256"],
@@ -725,13 +794,11 @@ class CanonicalLedgerPublicationV2:
                 "previous_entry_sha256": predecessor["entry_sha256"],
                 "event": "attempt_aborted",
                 "attempt_id": attempt_id,
-                "reason": reason,
+                "reconciliation": reconciliation,
                 "charged_accounting": registration["resource_reservation"],
             }
             entry = {**payload, "content_sha256": canonical_sha256(payload)}
-            successor = self._abortion_successor(
-                predecessor, entry, registration,
-            )
+            successor = self._abortion_successor(predecessor, entry, registration)
             self._publish_locked(state, entry, successor)
             return True
 
@@ -804,6 +871,10 @@ class CanonicalLedgerPublicationV2:
                 ],
                 "ordered_terminals": deepcopy(self.campaign["ordered_terminals"]),
                 "final_attempt_sha256": reconciliation["content_sha256"],
+                "execution_witness": {
+                    name: reconciliation["execution_witness"][name]
+                    for name in ("path", "sha256")
+                },
                 "matrices": deepcopy(artifacts),
             }
             return {**payload, "content_sha256": canonical_sha256(payload)}
@@ -969,22 +1040,35 @@ class CanonicalLedgerPublicationV2:
         return final
 
 
+def bind_campaign_abort_checkpoint_root(path):
+    _ABORT_CHECKPOINT_ROOT.set(str(Path(path).resolve()))
+
+
 def abort_campaign_attempt_on_error(function):
     @wraps(function)
     def guarded(*args, **kwargs):
         ledger = kwargs.get("campaign_ledger")
         attempt_id = kwargs.get("attempt_id")
+        token = _ABORT_CHECKPOINT_ROOT.set(None)
         try:
             return function(*args, **kwargs)
         except BaseException as error:
-            if type(ledger) is CanonicalLedgerPublicationV2 and attempt_id is not None:
+            checkpoint_root = _ABORT_CHECKPOINT_ROOT.get()
+            if (type(ledger) is CanonicalLedgerPublicationV2
+                    and attempt_id is not None and checkpoint_root is not None):
                 try:
+                    reason = f"{type(error).__name__}: {error}"
                     ledger.abort_attempt_if_active(
-                        attempt_id, reason=f"{type(error).__name__}: {error}")
+                        attempt_id,
+                        reason=reason.encode()[:4096].decode(errors="ignore"),
+                        checkpoint_root=checkpoint_root,
+                    )
                 except Exception as abort_error:
                     raise RuntimeError(
                         f"Palace run failed and campaign abort failed: {abort_error}"
                     ) from error
             raise
+        finally:
+            _ABORT_CHECKPOINT_ROOT.reset(token)
 
     return guarded

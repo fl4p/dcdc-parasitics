@@ -35,6 +35,34 @@ def _limits(**overrides):
     return ProcessLimits(**values)
 
 
+def test_monitor_exception_kills_and_reaps_started_process(tmp_path, monkeypatch):
+    pid_path = tmp_path / "child.pid"
+    real_tree_rss = process_monitor._tree_rss
+    injected = False
+
+    def fail_after_start(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            raise RuntimeError("injected monitor failure")
+        return real_tree_rss(*args, **kwargs)
+
+    monkeypatch.setattr(process_monitor, "_tree_rss", fail_after_start)
+    with pytest.raises(RuntimeError, match="injected monitor failure"):
+        run_monitored_process(
+            [sys.executable, "-c", (
+                "from pathlib import Path; import os,time; "
+                "Path(os.environ['PID_PATH']).write_text(str(os.getpid())); "
+                "time.sleep(60)"
+            )],
+            cwd=tmp_path,
+            limits=_limits(),
+            environment={**os.environ, "PID_PATH": str(pid_path)},
+        )
+    if pid_path.exists():
+        assert not psutil.pid_exists(int(pid_path.read_text()))
+
+
 def test_additional_output_path_is_included_in_disk_limit(tmp_path):
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()

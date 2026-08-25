@@ -89,7 +89,7 @@ The refined-Fugu z20 p1 direct solve completed all 82 RHS, but its matrix remain
 
 ## Completion limits
 
-These improvements optimize execution and evidence reuse. They do not relax p2→p3, h, outer-domain, material, independent-review, or measurement requirements, and they cannot promote diagnostic evidence to `physical_model_validated`.
+These improvements optimize execution and evidence reuse. They do not relax the revised through-thickness h, outer-domain, material, independent-review, or measurement requirements, and they cannot promote diagnostic evidence to `physical_model_validated`. The frozen-mesh p2→p3 ladder remains useful diagnostic history but is superseded as a physical convergence gate.
 
 ## 2026-08-25 addendum — simple-hb p3 disposition
 
@@ -114,8 +114,7 @@ geometrically at ratio ≈ 0.2. This is monotone convergence from above
 consistent with under-resolved thin-copper edge singularities dominating the
 electrostatic energy. Extrapolating the observed decay, p3 remains ~20–25%
 above the limit and the 2% successive-rung criterion would not be met before
-roughly p5–p6, which is not resource-feasible. Conclusion: the current mesh
-family cannot pass the p-ladder as specified; the next admissible moves are
-edge-targeted h-refinement (bounded by the known conditioning ceiling), a
-principled revision of the convergence-evidence design, or both. No gate was
-weakened; p3 remains diagnostic evidence under the borrowed-stackup ceiling.
+roughly p5–p6, which is not resource-feasible. Conclusion: the current mesh family cannot pass the p-ladder as specified.
+The accepted replacement is a `max_vertical_step_m` ladder at fixed low order,
+with planar refinement retained only as a control. No gate was weakened; p3
+remains diagnostic evidence under the borrowed-stackup ceiling.

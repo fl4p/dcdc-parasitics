@@ -105,8 +105,10 @@ silently mapped to SPICE `0`.
 
 Each fixture and physical model must pass three independent convergence axes:
 
-1. an `h` ladder using successively finer conformal tetrahedral meshes;
-2. a finite-element `p` cross-check at orders 2 and 3 on a declared mesh;
+1. a through-thickness `h` ladder varying `max_vertical_step_m` at fixed low
+   order, with a planar-refinement control where geometry warrants it;
+2. a finite-element `p` cross-check on analytic fixtures only, as a solver and
+   implementation diagnostic rather than physical PCB convergence evidence;
 3. an outer-domain expansion ladder with fixed local conductor/interface mesh
    controls.
 

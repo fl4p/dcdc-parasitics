@@ -18,13 +18,13 @@ warning-free, convergence-laddered matrix may be called physical capacitance.
 
 ## The struggle in one paragraph
 
-Small models solve; the real board does not. Every refined Fugu mesh stalls
-in BoomerAMG-preconditioned CG at an average residual reduction factor of
-~0.974–0.982 per iteration, independent of MPI rank count, refinement
-direction, aggressive-coarsening setting, or Krylov method (CG vs restarted
-GMRES). Memory is *not* the limit (peaks 10–14.6 GB inside a 24 GiB
-profile). This is a preconditioner quality problem on thin-layer PCB
-extrusion meshes, and we have exhausted the cheap knobs.
+The original BoomerAMG path stalled on refined PCB meshes, but direct SuperLU
+subsequently completed the 82-terminal z20 Fugu solve. That matrix remains
+rejected because a mesh-independent +35.8 pF Bat+↔Net-(D11-A) entry exposes a
+conductor-extraction defect. Separate simple-hb experiments established that
+physical convergence evidence must vary through-thickness resolution with
+`max_vertical_step_m` at fixed low order; the frozen-mesh p-ladder measured
+under-resolution and conditioning rather than an admissible convergence axis.
 
 ## Chronology of evidence (all under `out/palace-qualification/`)
 
@@ -38,7 +38,9 @@ extrusion meshes, and we have exhausted the cheap knobs.
    matrix is reciprocal, positive definite, sole defect +0.298 aF symmetric
    positive mutual (numerical noise; gate correctly rejects, we did NOT
    weaken it). But p1→p2 convergence FAILS: 224/324 entries move more than
-   2% + 1 fF. So p-convergence is real and p3 is mandatory.
+   2% + 1 fF. Under the then-current policy p3 was mandatory; the later
+   through-thickness experiments superseded that frozen-mesh p-ladder as a
+   physical convergence gate.
 3. **simple-hb p3 probe** (`simple-hb-p3-mpi4-probe-v1`): zero RHS
    checkpoints in 300 s at 4 ranks — slow, but PCG was still reducing, not
    stalled.
@@ -58,9 +60,9 @@ extrusion meshes, and we have exhausted the cheap knobs.
 4. **Fugu full board** (mesh v13, 540,828 nodes / 2.14 M tets / 82
    terminals, `geometry_complete`): coarse p1 completes numerically but the
    matrix is unphysical — 71 positive off-diagonals, worst +35.8 pF
-   (`Bat+` ↔ `Net-(D11-A)`). Treated as a discretization defect needing
-   refinement.
-5. **Refined Fugu attempts — ALL fail RHS 1 at the iteration cap**:
+   (`Bat+` ↔ `Net-(D11-A)`). Later z20 agreement proved the dominant entry is
+   a conductor-extraction defect, not a discretization artifact.
+5. **Initial iterative refined-Fugu attempts failed RHS 1 at the iteration cap**:
    - planar midpoint mesh (2.11 M nodes / 11.06 M tets), 1 and 4 ranks:
      reduction factor 0.974, residual ~1.8e-6 after 500 its
      (`fugu2-p3-ladder/mid-p1-outer2-er3p3-v1`).
@@ -94,21 +96,20 @@ extrusion meshes, and we have exhausted the cheap knobs.
 - The reduced patch shows the conditioning penalty exists even at tiny
   scale but is *surmountable* there (residual reaches 1e-12 territory);
   the full board is the same disease at lethal dose.
-- Positive off-diagonals on coarse Fugu p1 are a discretization artifact;
-  the reduced patch at p2 has none, supporting the refinement hypothesis —
-  but refinement is exactly what the solver cannot currently deliver.
+- The dominant +35.8 pF Fugu positive off-diagonal is mesh-independent and
+  identifies a conductor-extraction defect. The direct solver can deliver
+  refined solutions; extraction repair must precede further qualification.
 
 ## Decision state
 
-- **Gate ordering (user-corrected)**: simple-hb must pass p2→p3 BEFORE any
-  further Fugu qualification. Resuming Fugu earlier was a mistake; the
-  reduced patch is explicitly diagnostic-only and advances no lifecycle
-  state (see memory `simple_hb_palace_intermediate_only`).
-- **Currently running**: bg job "simple-hb p3 checkpointed campaign"
-  (`out/palace-qualification/simple-hb-p3-v1/campaign.py`): order 3,
-  `Tol=1e-12`, `VerificationTol=1e-10`, max 1250 its, 4 ranks, 1800-s
-  attempts with native per-RHS checkpoint/resume, fail-closed on
-  no-forward-progress attempts, ≤12 attempts.
+- **Current gate ordering**: repair and revalidate the Fugu conductor
+  extraction, then establish PCB convergence with a fixed-low-order
+  `max_vertical_step_m` ladder before outer-domain and material ladders.
+  simple-hb p2/p3 remains diagnostic history under its borrowed stackup and
+  advances no physical lifecycle state.
+- **Completed**: the checkpointed simple-hb p3 campaign and direct-solver
+  controls completed; the frozen-mesh p-ladder failed and is superseded as a
+  physical convergence design.
 - **Explicitly rejected next steps** (no new hypothesis → no more compute):
   more CG iterations on refined Fugu, MPI rank variation,
   aggressive-coarsening toggles, restarted GMRES.

@@ -507,8 +507,9 @@ def test_palace_matrix_access_capability_cannot_be_forged():
     with pytest.raises(ValueError, match="capability is invalid"):
         PalaceMatrixAccess(
             campaign_sha256="a" * 64, head_sha256="b" * 64,
-            config_sha256="c" * 64, terminal_names=("A",),
-            matrices=(), _ledger=object(), _nonce=object(),
+            config_sha256="c" * 64, terminal_names=("A",), matrices=(),
+            execution_witness=("/run.json", "d" * 64),
+            _ledger=object(), _nonce=object(),
         )
 
 
@@ -520,8 +521,9 @@ def test_matrix_capability_rejects_ledger_subclasses():
     with pytest.raises(ValueError, match="capability is invalid"):
         PalaceMatrixAccess(
             campaign_sha256="a" * 64, head_sha256="b" * 64,
-            config_sha256="c" * 64, terminal_names=("A",),
-            matrices=(), _ledger=forged, _nonce=object(),
+            config_sha256="c" * 64, terminal_names=("A",), matrices=(),
+            execution_witness=("/run.json", "d" * 64),
+            _ledger=forged, _nonce=object(),
         )
     with pytest.raises(ValueError, match="canonical v2 ledger"):
         checkpoint_matrix_access(

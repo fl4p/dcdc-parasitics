@@ -16,13 +16,15 @@ if __package__:
     from .palace_matrix_gates import matrix_gate_failures as _matrix_gate_failures
     from .palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
-        read_attested_matrix as _read_attested_matrix)
+        read_attested_matrix as _read_attested_matrix,
+        validate_matrix_access as _validate_matrix_access)
     from .palace_completion import (
         completed_observation_validator as _completed_observation_validator,
         validate_completion_metadata as _validate_completion_metadata_impl,
     )
     from .palace_ledger_v2 import (
         CanonicalLedgerPublicationV2, abort_campaign_attempt_on_error,
+        bind_campaign_abort_checkpoint_root,
     )
     from .palace_runtime import (
         native_campaign_digest as _native_campaign_digest,
@@ -66,13 +68,15 @@ else:
     from palace_matrix_gates import matrix_gate_failures as _matrix_gate_failures
     from palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
-        read_attested_matrix as _read_attested_matrix)
+        read_attested_matrix as _read_attested_matrix,
+        validate_matrix_access as _validate_matrix_access)
     from palace_completion import (
         completed_observation_validator as _completed_observation_validator,
         validate_completion_metadata as _validate_completion_metadata_impl,
     )
     from palace_ledger_v2 import (
         CanonicalLedgerPublicationV2, abort_campaign_attempt_on_error,
+        bind_campaign_abort_checkpoint_root,
     )
     from palace_runtime import (
         native_campaign_digest as _native_campaign_digest,
@@ -1098,6 +1102,9 @@ def validate_palace_run_manifest(path, *, matrix_access=None):
         if matrix_access is not None:
             raise ValueError("ordinary Palace run does not accept campaign matrix access")
         return validated
+    _validate_matrix_access(
+        matrix_access, manifest, run_manifest_path=path,
+    )
     snapshot_root = Path(validated["raw"]["execution_snapshot"]["root"])
     output = snapshot_root / manifest.output_directory.name
     validated["raw_matrix"] = parse_palace_matrix_csv(
@@ -1184,6 +1191,7 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     if (campaign_ledger is None) != (attempt_id is None):
         raise ValueError("Palace campaign ledger and attempt ID must be supplied together")
     if manifest.checkpoint is not None:
+        bind_campaign_abort_checkpoint_root(manifest.checkpoint["path"])
         if (resource_decision is None
                 or type(campaign_ledger) is not CanonicalLedgerPublicationV2):
             raise ValueError(

@@ -25,6 +25,7 @@ class PalaceMatrixAccess:
     config_sha256: str
     terminal_names: tuple[str, ...]
     matrices: tuple[tuple[str, str, str], ...]
+    execution_witness: tuple[str, str]
     _ledger: CanonicalLedgerPublicationV2
     _nonce: object
 
@@ -40,7 +41,8 @@ def _validate_record(record):
     if (not isinstance(record, dict) or set(record) != {
             "format", "campaign_sha256", "head_sha256", "workload_sha256",
             "config_sha256", "config_manifest_sha256", "ordered_terminals",
-            "final_attempt_sha256", "matrices", "content_sha256"}
+            "final_attempt_sha256", "execution_witness", "matrices",
+            "content_sha256"}
             or record["format"] != "palace-checkpoint-matrix-access-record-v2"
             or digest != canonical_sha256(unsigned)):
         raise ValueError("Palace matrix access record is invalid")
@@ -104,18 +106,22 @@ def checkpoint_matrix_access(ledger, manifest, *, raw_path, standard_path):
                 or file_sha256(path) != identity["sha256"]):
             raise ValueError("Palace matrix capability artifact identity mismatch")
         matrices.append((role, str(path), identity["sha256"]))
+    witness = record["execution_witness"]
+    if (not isinstance(witness, dict) or set(witness) != {"path", "sha256"}):
+        raise ValueError("Palace matrix capability execution witness is invalid")
     return PalaceMatrixAccess(
         campaign_sha256=record["campaign_sha256"],
         head_sha256=record["head_sha256"],
         config_sha256=canonical_sha256(manifest.raw),
         terminal_names=terminal_names,
         matrices=tuple(matrices),
+        execution_witness=(witness["path"], witness["sha256"]),
         _ledger=ledger,
         _nonce=_MATRIX_ACCESS_NONCE,
     )
 
 
-def validate_matrix_access(access, manifest):
+def validate_matrix_access(access, manifest, *, run_manifest_path=None):
     if (type(access) is not PalaceMatrixAccess
             or type(access._ledger) is not CanonicalLedgerPublicationV2):
         raise ValueError("Palace matrix access capability is invalid")
@@ -131,11 +137,21 @@ def validate_matrix_access(access, manifest):
             or record["head_sha256"] != access.head_sha256
             or canonical_sha256(manifest.raw) != access.config_sha256
             or terminal_names != access.terminal_names
+            or record["execution_witness"] != {
+                "path": access.execution_witness[0],
+                "sha256": access.execution_witness[1],
+            }
             or record["matrices"] != {
                 "raw_matrix": expected_matrices.get("raw"),
                 "standard_matrix": expected_matrices.get("standard"),
             }):
         raise ValueError("Palace matrix access capability is stale")
+    if run_manifest_path is not None:
+        path = Path(run_manifest_path)
+        if (path.is_symlink() or not path.is_file()
+                or str(path.resolve()) != access.execution_witness[0]
+                or file_sha256(path) != access.execution_witness[1]):
+            raise ValueError("Palace run differs from the attested execution witness")
     return access
 
 

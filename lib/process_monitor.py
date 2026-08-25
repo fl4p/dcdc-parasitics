@@ -397,76 +397,131 @@ def run_monitored_process(
     for thread in threads:
         thread.start()
 
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    stream_events = []
-    resource_samples = []
-    scan_tails = {"stdout": "", "stderr": ""}
-    active_readers = len(threads)
-    last_disk_check = started
-    peak_rss = 0
-    directory_growth = 0
-    max_panels = 0
-    max_gmres = 0
-    gmres_seen = False
-    failures = []
-    tracked_descendants = {}
-    monitor_process = psutil.Process(os.getpid())
+    try:
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        stream_events = []
+        resource_samples = []
+        scan_tails = {"stdout": "", "stderr": ""}
+        active_readers = len(threads)
+        last_disk_check = started
+        peak_rss = 0
+        directory_growth = 0
+        max_panels = 0
+        max_gmres = 0
+        gmres_seen = False
+        failures = []
+        tracked_descendants = {}
+        monitor_process = psutil.Process(os.getpid())
 
-    while _tree_alive(process, tracked_descendants, token) or active_readers:
-        now = time.monotonic()
-        try:
-            source, byte_offset, received_ns, content = messages.get(timeout=0.02)
-            if content is None:
-                active_readers -= 1
-            else:
-                if byte_offset != len(buffers[source]):
-                    raise RuntimeError("process stream chunk offset is not contiguous")
-                stream_events.append({
-                    "source": source,
-                    "byte_offset": byte_offset,
-                    "byte_count": len(content),
-                    "monotonic_ns": received_ns,
-                    "sha256": hashlib.sha256(content).hexdigest(),
-                })
-                buffers[source].extend(content)
-                decoded = content.decode("utf-8", errors="replace")
-                scan_text = scan_tails[source] + decoded
-                panels = re.findall(
-                    r"Number of panels after refinement:\s*(\d+)", scan_text,
-                    re.IGNORECASE,
-                )
-                if panels:
-                    max_panels = max(max_panels, *(int(value) for value in panels))
-                for values in re.findall(
-                        r"GMRES Iteration:\s*([^\n\r]+)", scan_text,
-                        re.IGNORECASE):
-                    numbers = [int(value) for value in re.findall(r"\d+", values)]
-                    if numbers:
-                        gmres_seen = True
-                        max_gmres = max(max_gmres, max(numbers))
-                scan_tails[source] = scan_text[-8192:]
-        except queue.Empty:
-            pass
+        while _tree_alive(process, tracked_descendants, token) or active_readers:
+            now = time.monotonic()
+            try:
+                source, byte_offset, received_ns, content = messages.get(timeout=0.02)
+                if content is None:
+                    active_readers -= 1
+                else:
+                    if byte_offset != len(buffers[source]):
+                        raise RuntimeError("process stream chunk offset is not contiguous")
+                    stream_events.append({
+                        "source": source,
+                        "byte_offset": byte_offset,
+                        "byte_count": len(content),
+                        "monotonic_ns": received_ns,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    })
+                    buffers[source].extend(content)
+                    decoded = content.decode("utf-8", errors="replace")
+                    scan_text = scan_tails[source] + decoded
+                    panels = re.findall(
+                        r"Number of panels after refinement:\s*(\d+)", scan_text,
+                        re.IGNORECASE,
+                    )
+                    if panels:
+                        max_panels = max(max_panels, *(int(value) for value in panels))
+                    for values in re.findall(
+                            r"GMRES Iteration:\s*([^\n\r]+)", scan_text,
+                            re.IGNORECASE):
+                        numbers = [int(value) for value in re.findall(r"\d+", values)]
+                        if numbers:
+                            gmres_seen = True
+                            max_gmres = max(max_gmres, max(numbers))
+                    scan_tails[source] = scan_text[-8192:]
+            except queue.Empty:
+                pass
 
-        rss = _tree_rss(
-            process, leader_created, tracked_descendants, token
-        )
-        try:
-            rss += monitor_process.memory_info().rss
-        except (psutil.Error, ProcessLookupError):
-            pass
-        peak_rss = max(peak_rss, rss)
-        output_size = len(buffers["stdout"]) + len(buffers["stderr"])
-        if now - last_disk_check >= 0.25:
-            directory_growth = max(
-                directory_growth,
-                max(0, sum(_directory_size(path) for path in output_roots)
-                    - baseline_size),
+            rss = _tree_rss(
+                process, leader_created, tracked_descendants, token
             )
-            last_disk_check = now
+            try:
+                rss += monitor_process.memory_info().rss
+            except (psutil.Error, ProcessLookupError):
+                pass
+            peak_rss = max(peak_rss, rss)
+            output_size = len(buffers["stdout"]) + len(buffers["stderr"])
+            if now - last_disk_check >= 0.25:
+                directory_growth = max(
+                    directory_growth,
+                    max(0, sum(_directory_size(path) for path in output_roots)
+                        - baseline_size),
+                )
+                last_disk_check = now
 
-        checks = (
-            (now - started > limits.wall_time_s,
+            checks = (
+                (now - started > limits.wall_time_s,
+                 f"wall time exceeded {limits.wall_time_s:g}s"),
+                (peak_rss > limits.peak_rss_bytes,
+                 f"peak RSS exceeded {limits.peak_rss_bytes} bytes"),
+                (output_size + directory_growth > limits.output_bytes,
+                 f"output exceeded {limits.output_bytes} bytes"),
+                (max_panels > limits.refined_panels,
+                 f"refined panels exceeded {limits.refined_panels}"),
+                (gmres_seen and max_gmres + 1
+                 >= limits.gmres_iterations_per_rhs,
+                 "GMRES iteration limit reached "
+                 f"{limits.gmres_iterations_per_rhs}"),
+            )
+            sample = {
+                "monotonic_ns": time.monotonic_ns() - started_ns,
+                "peak_rss_bytes": peak_rss,
+                "output_bytes": output_size,
+                "directory_growth_bytes": directory_growth,
+                "max_refined_panels": max_panels,
+                "max_gmres_iteration": max_gmres,
+            }
+            if not resource_samples or any(
+                    sample[key] != resource_samples[-1][key]
+                    for key in sample if key != "monotonic_ns"):
+                resource_samples.append(sample)
+
+            triggered = [message for condition, message in checks if condition]
+            if triggered and not failures:
+                failures.extend(triggered)
+                monitor_events.append({
+                    "event": "limit_detected",
+                    "monotonic_ns": time.monotonic_ns() - started_ns,
+                    "detail": "; ".join(triggered),
+                })
+                monitor_events.append({
+                    "event": "kill_initiated",
+                    "monotonic_ns": time.monotonic_ns() - started_ns,
+                    "detail": None,
+                })
+            if failures:
+                _kill_tree(
+                    process, leader_created, tracked_descendants, token,
+                )
+
+        for thread in threads:
+            thread.join(timeout=1)
+        directory_growth = max(
+            directory_growth,
+            max(0, sum(_directory_size(path) for path in output_roots)
+                - baseline_size),
+        )
+        output_size = len(buffers["stdout"]) + len(buffers["stderr"])
+        elapsed_for_checks = (time.monotonic_ns() - started_ns) / 1e9
+        final_checks = (
+            (elapsed_for_checks > limits.wall_time_s,
              f"wall time exceeded {limits.wall_time_s:g}s"),
             (peak_rss > limits.peak_rss_bytes,
              f"peak RSS exceeded {limits.peak_rss_bytes} bytes"),
@@ -479,7 +534,12 @@ def run_monitored_process(
              "GMRES iteration limit reached "
              f"{limits.gmres_iterations_per_rhs}"),
         )
-        sample = {
+        postexit_failures = []
+        for condition, message in final_checks:
+            if condition and message not in failures:
+                failures.append(message)
+                postexit_failures.append(message)
+        final_sample = {
             "monotonic_ns": time.monotonic_ns() - started_ns,
             "peak_rss_bytes": peak_rss,
             "output_bytes": output_size,
@@ -487,95 +547,59 @@ def run_monitored_process(
             "max_refined_panels": max_panels,
             "max_gmres_iteration": max_gmres,
         }
-        if not resource_samples or any(
-                sample[key] != resource_samples[-1][key]
-                for key in sample if key != "monotonic_ns"):
-            resource_samples.append(sample)
-
-        triggered = [message for condition, message in checks if condition]
-        if triggered and not failures:
-            failures.extend(triggered)
+        if not resource_samples or final_sample != resource_samples[-1]:
+            resource_samples.append(final_sample)
+        if postexit_failures:
             monitor_events.append({
-                "event": "limit_detected",
+                "event": "postexit_limit_detected",
                 "monotonic_ns": time.monotonic_ns() - started_ns,
-                "detail": "; ".join(triggered),
+                "detail": "; ".join(postexit_failures),
             })
-            monitor_events.append({
-                "event": "kill_initiated",
-                "monotonic_ns": time.monotonic_ns() - started_ns,
-                "detail": None,
-            })
-        if failures:
-            _kill_tree(
-                process, leader_created, tracked_descendants, token,
-            )
-
-    for thread in threads:
-        thread.join(timeout=1)
-    directory_growth = max(
-        directory_growth,
-        max(0, sum(_directory_size(path) for path in output_roots)
-            - baseline_size),
-    )
-    output_size = len(buffers["stdout"]) + len(buffers["stderr"])
-    elapsed_for_checks = (time.monotonic_ns() - started_ns) / 1e9
-    final_checks = (
-        (elapsed_for_checks > limits.wall_time_s,
-         f"wall time exceeded {limits.wall_time_s:g}s"),
-        (peak_rss > limits.peak_rss_bytes,
-         f"peak RSS exceeded {limits.peak_rss_bytes} bytes"),
-        (output_size + directory_growth > limits.output_bytes,
-         f"output exceeded {limits.output_bytes} bytes"),
-        (max_panels > limits.refined_panels,
-         f"refined panels exceeded {limits.refined_panels}"),
-        (gmres_seen and max_gmres + 1
-         >= limits.gmres_iterations_per_rhs,
-         "GMRES iteration limit reached "
-         f"{limits.gmres_iterations_per_rhs}"),
-    )
-    postexit_failures = []
-    for condition, message in final_checks:
-        if condition and message not in failures:
-            failures.append(message)
-            postexit_failures.append(message)
-    final_sample = {
-        "monotonic_ns": time.monotonic_ns() - started_ns,
-        "peak_rss_bytes": peak_rss,
-        "output_bytes": output_size,
-        "directory_growth_bytes": directory_growth,
-        "max_refined_panels": max_panels,
-        "max_gmres_iteration": max_gmres,
-    }
-    if not resource_samples or final_sample != resource_samples[-1]:
-        resource_samples.append(final_sample)
-    if postexit_failures:
+        exited_ns = time.monotonic_ns() - started_ns
         monitor_events.append({
-            "event": "postexit_limit_detected",
-            "monotonic_ns": time.monotonic_ns() - started_ns,
-            "detail": "; ".join(postexit_failures),
+            "event": "process_exited",
+            "monotonic_ns": exited_ns,
+            "detail": str(process.returncode),
         })
-    exited_ns = time.monotonic_ns() - started_ns
-    monitor_events.append({
-        "event": "process_exited",
-        "monotonic_ns": exited_ns,
-        "detail": str(process.returncode),
-    })
-    elapsed = exited_ns / 1e9
-    return ProcessExecution(
-        command=command,
-        cwd=cwd,
-        returncode=process.returncode,
-        stdout=bytes(buffers["stdout"]),
-        stderr=bytes(buffers["stderr"]),
-        elapsed_s=elapsed,
-        peak_rss_bytes=peak_rss,
-        output_bytes=output_size,
-        directory_growth_bytes=directory_growth,
-        max_refined_panels=max_panels,
-        max_gmres_iteration=max_gmres,
-        limit_failures=tuple(failures),
-        limits=limits,
-        stream_events=tuple(stream_events),
-        monitor_events=tuple(monitor_events),
-        resource_samples=tuple(resource_samples),
-    )
+        elapsed = exited_ns / 1e9
+        return ProcessExecution(
+            command=command,
+            cwd=cwd,
+            returncode=process.returncode,
+            stdout=bytes(buffers["stdout"]),
+            stderr=bytes(buffers["stderr"]),
+            elapsed_s=elapsed,
+            peak_rss_bytes=peak_rss,
+            output_bytes=output_size,
+            directory_growth_bytes=directory_growth,
+            max_refined_panels=max_panels,
+            max_gmres_iteration=max_gmres,
+            limit_failures=tuple(failures),
+            limits=limits,
+            stream_events=tuple(stream_events),
+            monitor_events=tuple(monitor_events),
+            resource_samples=tuple(resource_samples),
+        )
+    except BaseException as error:
+        deadline = time.monotonic() + 5.0
+        while _tree_alive(process, tracked_descendants, token):
+            _kill_tree(process, leader_created, tracked_descendants, token)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+        for thread in threads:
+            thread.join(timeout=1)
+        if _tree_alive(process, tracked_descendants, token):
+            raise RuntimeError(
+                "process monitor could not establish exceptional cleanup"
+            ) from error
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired as cleanup_error:
+            raise RuntimeError(
+                "process monitor could not reap exceptional process"
+            ) from cleanup_error
+        raise
