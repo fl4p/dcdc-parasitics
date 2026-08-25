@@ -980,6 +980,26 @@ class CanonicalLedgerPublicationV2:
                     raise ValueError(
                         "campaign v2 registration recovery lacks trusted derivation"
                     )
+            elif entry["event"] == "attempt_aborted":
+                reconciliation = entry["reconciliation"]
+                partition = self.campaign["checkpoint_partition"]
+                inventory = validate_native_checkpoint(
+                    reconciliation["checkpoint_root"],
+                    campaign_identity=self.campaign["native_campaign_identity"],
+                    ordered_terminal_indices=(
+                        item["index"]
+                        for item in self.campaign["ordered_terminals"]),
+                    process_count=partition["process_count"],
+                    global_true_dofs=partition["global_true_dofs"],
+                    partition=partition["local_true_dofs"],
+                )
+                if not canonical_equal(
+                        inventory, reconciliation["checkpoint_inventory"]):
+                    raise ValueError(
+                        "campaign v2 pending abort checkpoint is stale")
+                if expected_registration is not None:
+                    raise ValueError(
+                        "campaign v2 abort recovery rejects registration inputs")
             elif expected_registration is not None:
                 raise ValueError(
                     "campaign v2 completion recovery rejects registration inputs"

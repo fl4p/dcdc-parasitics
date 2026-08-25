@@ -44,6 +44,19 @@ def test_completed_observation_validator_supplies_matrix_capability(tmp_path):
     assert paths == (path,)
     assert validator(path) == "validated"
     assert calls == [(path, capability)]
+    with pytest.raises(ValueError, match="count differs"):
+        completed_observation_validator(
+            (path,), (), validate_run=validate,
+        )
+    with pytest.raises(ValueError, match="must be unique"):
+        completed_observation_validator(
+            (path, path), (None, None), validate_run=validate,
+        )
+    _, validator = completed_observation_validator(
+        (path,), (capability,), validate_run=validate,
+    )
+    with pytest.raises(ValueError, match="not authorized"):
+        validator(tmp_path / "other.json")
 
 
 def test_single_level_runtime_hierarchy_requires_only_finest_space(tmp_path):

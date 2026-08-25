@@ -349,6 +349,33 @@ def _platform_command(command, *, platform_name=None):
     return (sys.executable, str(runner), json.dumps(command))
 
 
+def _cleanup_exceptional_process(
+        process, leader_created, tracked_descendants, token, threads):
+    try:
+        process.kill()
+    except (OSError, ProcessLookupError):
+        pass
+    deadline = time.monotonic() + 5.0
+    while _tree_alive(process, tracked_descendants, token):
+        _kill_tree(process, leader_created, tracked_descendants, token)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()
+    for thread in threads:
+        thread.join(timeout=1)
+    if _tree_alive(process, tracked_descendants, token):
+        raise ProcessCleanupError(
+            "process monitor could not establish exceptional cleanup")
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired as error:
+        raise ProcessCleanupError(
+            "process monitor could not reap exceptional process") from error
+
+
 def run_monitored_process(
         command, *, cwd, limits, environment=None, additional_output_paths=()):
     """Run a process, killing its tree immediately when a resource gate fails."""
@@ -587,30 +614,19 @@ def run_monitored_process(
             monitor_events=tuple(monitor_events),
             resource_samples=tuple(resource_samples),
         )
-    except BaseException as error:
+    except BaseException:
         try:
-            process.kill()
-        except (OSError, ProcessLookupError):
-            pass
-        deadline = time.monotonic() + 5.0
-        while _tree_alive(process, tracked_descendants, token):
-            _kill_tree(process, leader_created, tracked_descendants, token)
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.01)
-        for stream in (process.stdout, process.stderr):
-            if stream is not None:
-                stream.close()
-        for thread in threads:
-            thread.join(timeout=1)
-        if _tree_alive(process, tracked_descendants, token):
-            raise ProcessCleanupError(
-                "process monitor could not establish exceptional cleanup"
-            ) from error
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired as cleanup_error:
-            raise ProcessCleanupError(
-                "process monitor could not reap exceptional process"
-            ) from cleanup_error
+            _cleanup_exceptional_process(
+                process, leader_created, tracked_descendants, token, threads)
+        except BaseException as cleanup_error:
+            try:
+                survivor = _tree_alive(process, tracked_descendants, token)
+            except BaseException:
+                survivor = True
+            if survivor:
+                raise ProcessCleanupError(
+                    "process monitor cleanup was interrupted before tree death"
+                ) from cleanup_error
+            if isinstance(cleanup_error, ProcessCleanupError):
+                raise
         raise
