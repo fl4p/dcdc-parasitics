@@ -9,18 +9,10 @@ import stat
 if __package__:
     from .palace_campaign import _validate_accounting
     from .palace_resources import validate_palace_resource_decision, validate_palace_workload
-    from .palace_workflow import (
-        validate_prelaunch_resource_authority,
-        validate_privileged_execution_snapshot_authority,
-    )
     from .provenance import canonical_sha256
 else:
     from palace_campaign import _validate_accounting
     from palace_resources import validate_palace_resource_decision, validate_palace_workload
-    from palace_workflow import (
-        validate_prelaunch_resource_authority,
-        validate_privileged_execution_snapshot_authority,
-    )
     from provenance import canonical_sha256
 
 
@@ -72,8 +64,17 @@ def derive_attempt_reservation(
         trusted_validator_sha256=trusted_policy["validator_sha256"],
         trusted_minimum_headroom_ratio=trusted_policy["minimum_headroom_ratio"],
     )
-    validate_prelaunch_resource_authority(decision, trusted_policy)
-    validate_privileged_execution_snapshot_authority(snapshot, workload)
+    if (not isinstance(snapshot, dict) or set(snapshot) != {
+            "format", "root", "workload_sha256", "inputs", "content_sha256"}):
+        raise ValueError("Palace reservation snapshot schema mismatch")
+    unsigned_snapshot = dict(snapshot)
+    snapshot_digest = unsigned_snapshot.pop("content_sha256")
+    if (snapshot["format"] != "palace-execution-snapshot-v1"
+            or snapshot_digest != canonical_sha256(unsigned_snapshot)
+            or snapshot["workload_sha256"] != workload["content_sha256"]
+            or not isinstance(snapshot["inputs"], list)
+            or not snapshot["inputs"]):
+        raise ValueError("Palace reservation snapshot identity mismatch")
     expected_hashes = [
         workload["config_sha256"],
         workload["mesh_sha256"],

@@ -17,6 +17,7 @@ import secrets
 import stat
 
 if __package__:
+    from .palace_head_authority import CanonicalHeadAuthority
     from .palace_attempt import validate_palace_execution_witness
     from .palace_checkpoint import validate_native_checkpoint
     from .provenance import (
@@ -24,6 +25,7 @@ if __package__:
     )
     from .palace_resources import validate_palace_workload
 else:
+    from palace_head_authority import CanonicalHeadAuthority
     from palace_attempt import validate_palace_execution_witness
     from palace_checkpoint import validate_native_checkpoint
     from provenance import (
@@ -179,7 +181,11 @@ def build_campaign_identity_v2(
             or sum(checkpoint_partition["local_true_dofs"])
             != checkpoint_partition["global_true_dofs"]):
         raise ValueError("checkpoint campaign v2 partition identity is invalid")
-    authority = getattr(canonical_head_authority, "identity", None)
+    if type(canonical_head_authority) is not CanonicalHeadAuthority:
+        raise ValueError("checkpoint campaign v2 canonical authority is invalid")
+    authority = CanonicalHeadAuthority.identity.__get__(
+        canonical_head_authority, CanonicalHeadAuthority,
+    )
     if (not isinstance(authority, dict) or set(authority) != {
             "authority_id", "root", "root_sha256", "instance_sha256",
             "key_fingerprint", "client_uid"}):

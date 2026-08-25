@@ -71,6 +71,19 @@ def _validate_root_boundary(root, client_uid):
 
 
 class CanonicalHeadAuthority:
+    __slots__ = (
+        "root", "authority_id", "client_uid", "_key", "key_fingerprint",
+        "_root_fd", "_root_identity", "_instance", "_sealed",
+    )
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            if name == "_root_fd" and value is None:
+                object.__setattr__(self, name, value)
+                return
+            raise AttributeError("canonical head authority instances are immutable")
+        object.__setattr__(self, name, value)
+
     def __init__(self, root, *, authority_id, authority_key, client_uid):
         if fcntl is None or os.name != "posix":
             raise ValueError("canonical head authority requires POSIX flock semantics")
@@ -100,13 +113,14 @@ class CanonicalHeadAuthority:
             os.close(self._root_fd)
             raise ValueError("canonical head authority root is invalid")
         self._root_identity = (root_metadata.st_dev, root_metadata.st_ino)
-        self._instance = self._load_or_create_instance()
+        self._instance = CanonicalHeadAuthority._load_or_create_instance(self)
+        self._sealed = True
 
     def close(self):
         descriptor = getattr(self, "_root_fd", None)
         if descriptor is not None:
             os.close(descriptor)
-            self._root_fd = None
+            object.__setattr__(self, "_root_fd", None)
 
     def __del__(self):
         try:
