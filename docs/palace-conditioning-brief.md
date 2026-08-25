@@ -261,13 +261,37 @@ extrusion meshes, and we have exhausted the cheap knobs.
     which is why p1 sits ~9x above the extrapolated limit and why the error
     decays so slowly under p-refinement. A p-ladder on a degenerate mesh
     measures mesh quality, not discretization convergence.
-18. **Recommended redesign**: get convergence evidence from h-refinement
-    with element-quality control (bounded `kappa`) at fixed low order,
-    where each rung is cheap and full-direct solvable, instead of p-refining
-    a mesh with 1e7 aspect ratios. This requires mesher work in
-    `lib/palace_plc_mesh.py` (quality-driven TetGen constraints), and it
-    supersedes the p4/p5 plan in item 12. Do not weaken the 2% + 1 fF gate
-    to make the existing ladder pass.
+18. **Root cause is through-thickness (z) resolution, and the control
+    already exists.** Three experiments separate the variables:
+      - p-refinement on the frozen mesh (22526 nodes): +781% -> +34.5%
+        across p1..p4, needing ~p7 for the 2% gate;
+      - lateral h-refinement at p1 (`max_planar_area_m2=2e-6`, 55143 nodes,
+        2.4x the nodes): +781% -> +646%, essentially no convergence;
+      - z-refinement at p1 (`max_vertical_step_m=4e-4`, 548137 nodes):
+        +781% -> **+16.4%**, better than p4 on the frozen mesh and obtained
+        in 79 s at order 1 with zero positive off-diagonals and reciprocity
+        4.5e-27 F.
+    Both meshes in the first two rows share an identical z-level set, which
+    is why lateral refinement did nothing and why p-refinement appeared to
+    work: raising the order is the only way the frozen ladder improved the
+    through-thickness field. The extrusion mesher placed 9 z-levels across
+    a 90 mm box, one element layer through the 1.51 mm core, and air
+    elements spanning millimetres immediately above the 35 um copper where
+    the fringing field decays over ~100 um. Setting `max_vertical_step_m`
+    also fixes conditioning as a side effect: `kappa` median 76.5 -> 21.8
+    and max 1.36e7 -> 1.23e5.
+19. **Revised convergence-evidence design**: build the ladder from
+    `max_vertical_step_m` at fixed low order, not from `Solver.Order` on a
+    frozen mesh. `generate_palace_plc_mesh` already exposes
+    `max_planar_area_m2` and `max_vertical_step_m`; the frozen canary simply
+    left both at `None`, so Triangle emitted the minimal constrained
+    triangulation of the outline (80 nodes and 180 tets for the whole
+    dielectric, against 97758 tets of air). No mesher work is required --
+    this supersedes the p4/p5 plan in item 12 and the earlier suggestion
+    that quality-driven mesher changes were needed. Each rung is cheap and
+    full-direct solvable, and the discretization is linear, so the rungs
+    should converge at the normal h-rate rather than demanding p7. Do not
+    weaken the 2% + 1 fF gate to make the frozen ladder pass.
 
 ## Hard constraints for any successor
 
