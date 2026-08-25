@@ -99,7 +99,8 @@ def _load_stream(config_path, identity, source):
     return content
 
 
-def _reconstruct_workload(identity, config_manifest, workload):
+def _reconstruct_workload(
+        identity, config_manifest, workload, *, allow_invalid_snapshot=False):
     if __package__:
         from . import palace as palace_module
     else:
@@ -141,14 +142,34 @@ def _reconstruct_workload(identity, config_manifest, workload):
         palace_file=Path(__file__).with_name("palace.py"),
         validate_build=palace_module.validate_palace_build_manifest,
     )
-    validate_execution_snapshot(
-        snapshot,
-        manifest,
-        workload,
-        executable=inputs["executable"],
-        binaries=tuple(inputs["binaries"]),
-        mpi_launcher=inputs["mpi_launcher"],
-    )
+    try:
+        validate_execution_snapshot(
+            snapshot,
+            manifest,
+            workload,
+            executable=inputs["executable"],
+            binaries=tuple(inputs["binaries"]),
+            mpi_launcher=inputs["mpi_launcher"],
+        )
+    except (OSError, ValueError):
+        if not allow_invalid_snapshot:
+            raise
+        payload = {key: value for key, value in snapshot.items()
+                   if key != "content_sha256"}
+        base_name = (
+            f".{manifest.config_path.name}.execution.{workload['content_sha256']}"
+        )
+        snapshot_root = Path(snapshot.get("root", "")).resolve()
+        if (set(snapshot) != {
+                "format", "root", "workload_sha256", "inputs", "content_sha256"}
+                or snapshot.get("format") != "palace-execution-snapshot-v1"
+                or snapshot.get("content_sha256") != canonical_sha256(payload)
+                or snapshot.get("workload_sha256") != workload["content_sha256"]
+                or snapshot_root.parent != manifest.config_path.parent.resolve()
+                or (snapshot_root.name != base_name
+                    and not (snapshot_root.name.startswith(f"{base_name}.attempt.")
+                             and len(snapshot_root.name) == len(base_name) + 73))):
+            raise ValueError("rejected Palace snapshot record identity is invalid")
     if (not canonical_equal(inputs["workload"], workload)
             or identity.get("build_manifest_sha256")
             != file_sha256(inputs["build_manifest_path"])
@@ -253,14 +274,15 @@ def _attempt_projection(
         "solves": solves,
         "bytes_written": (
             execution["output_bytes"] + execution["directory_growth_bytes"]
-            + checkpoint_written
         ),
         "bytes_read": input_read_bytes + checkpoint_read,
         "stdout_bytes": stdout_bytes,
         "stderr_bytes": stderr_bytes,
         "checkpoint_write_bytes": checkpoint_written,
         "checkpoint_read_bytes": checkpoint_read,
-        "retained_output_bytes": execution["directory_growth_bytes"],
+        "retained_output_bytes": max(
+            0, execution["directory_growth_bytes"] - checkpoint_written,
+        ),
         "retained_checkpoint_bytes": checkpoint_retained,
         "peak_rss_bytes": execution["peak_rss_bytes"],
     }
@@ -303,9 +325,12 @@ def _attempt_projection(
             "content_sha256": raw["content_sha256"],
         },
         "workload_sha256": workload_sha256,
-        "resource_decision_sha256": _load_json(
-            raw["resource_decision"], "resource decision",
-        )["content_sha256"],
+        "resource_decision_sha256": (
+            _load_json(raw["resource_decision"], "resource decision")[
+                "content_sha256"
+            ]
+            if raw["resource_decision"] is not None else None
+        ),
         "ordered_terminals": [asdict(terminal) for terminal in terminals],
         "checkpoint_enabled": bool(setup_start["checkpoint_enabled"]),
         "checkpoint": checkpoint,
@@ -328,7 +353,8 @@ def _attempt_projection(
     }
 
 
-def _validate_partial_progress(events, terminals):
+def _validate_partial_progress(
+        events, terminals, *, checkpoint_expected, campaign_digest=None):
     terminal_indices = [terminal.index for terminal in terminals]
     terminal_count = len(terminal_indices)
     if len(events) < 3 or [event["event"] for event in events[:3]] != [
@@ -341,6 +367,9 @@ def _validate_partial_progress(events, terminals):
     if (not canonical_equal(setup_start, {
             "solver": "electrostatic", "checkpoint_enabled": checkpoint_enabled})
             or checkpoint_enabled not in (0, 1)
+            or bool(checkpoint_enabled) != checkpoint_expected
+            or (campaign_digest is not None
+                and setup_end.get("campaign_digest") != campaign_digest)
             or type(prefix_before) is not int or not 0 <= prefix_before <= terminal_count
             or set(setup_end) != {
                 "campaign_digest", "prefix_before", "loaded_rhs", "new_rhs"}
@@ -457,7 +486,7 @@ def validate_palace_execution_witness(path):
             from . import palace as palace_module
         else:
             import palace as palace_module
-        accepted = palace_module.validate_palace_run_manifest(
+        accepted = palace_module._validate_palace_run_manifest_unattested(
             path, _document=(raw, manifest_sha256),
         )
         return _attempt_projection(
@@ -538,6 +567,10 @@ def validate_palace_attempt_manifest(path, *, _document=None):
     workload = validate_palace_workload(_load_json(workload_path, "workload"))
     workload, manifest, inputs, palace_module = _reconstruct_workload(
         identity, config_manifest, workload,
+        allow_invalid_snapshot=any(
+            failure.startswith("execution_snapshot:")
+            for failure in identity["failures"]
+        ),
     )
     resource_class = identity.get("resource_class")
     if resource_class not in palace_module.RESOURCE_LIMITS:
@@ -555,38 +588,57 @@ def validate_palace_attempt_manifest(path, *, _document=None):
     }
     if (not canonical_equal(identity.get("resource_limits"), expected_limits)
             or identity.get("resource_enforcement")
-            != "portable_monitor_not_native_containment"
+            != "portable_process_limits"
             or not isinstance(execution, dict)
             or set(execution) != expected_execution_keys
             or not canonical_equal(
                 execution.get("limits"), asdict(
                     palace_module.RESOURCE_LIMITS[resource_class]))):
         raise ValueError("rejected Palace attempt resource identity mismatch")
-    decision_path = Path(identity.get("resource_decision", "")).resolve()
-    if (not decision_path.is_file() or decision_path.is_symlink()
-            or identity.get("resource_decision_sha256")
-            != file_sha256(decision_path)):
-        raise ValueError("rejected Palace attempt resource decision is invalid")
-    policy = palace_module._trusted_resource_policy()
-    palace_module.validate_bound_resource_decision(
-        _load_json(decision_path, "resource decision"),
-        run_path=path,
-        expected_workload=workload,
-        policy=policy,
-        resource_class=resource_class,
-        decision_path=decision_path,
-        config_path=manifest.config_path,
-    )
+    decision_value = identity.get("resource_decision")
+    decision_digest = identity.get("resource_decision_sha256")
+    if (decision_value is None) != (decision_digest is None):
+        raise ValueError("rejected Palace attempt resource decision identity is partial")
+    decision_path = None
+    if decision_value is not None:
+        decision_path = Path(decision_value).resolve()
+        if (not decision_path.is_file() or decision_path.is_symlink()
+                or decision_digest != file_sha256(decision_path)):
+            raise ValueError("rejected Palace attempt resource decision is invalid")
+        policy = palace_module._trusted_resource_policy()
+        palace_module.validate_bound_resource_decision(
+            _load_json(decision_path, "resource decision"),
+            run_path=path,
+            expected_workload=workload,
+            policy=policy,
+            resource_class=resource_class,
+            decision_path=decision_path,
+            config_path=manifest.config_path,
+        )
+    if manifest.checkpoint is not None and decision_path is None:
+        raise ValueError("checkpointed Palace attempt lacks a resource decision")
     stdout_digest = identity["stdout_sha256"]
     stderr_digest = identity["stderr_sha256"]
     required_artifacts = {
         manifest.config_path, manifest.mesh_path, manifest.mesh_manifest_path,
-        workload_path, decision_path,
+        workload_path,
         config_path.with_name(f"{config_path.name}.stdout.{stdout_digest}.bin"),
         config_path.with_name(f"{config_path.name}.stderr.{stderr_digest}.bin"),
-        *(Path(item["snapshot"])
-          for item in identity["execution_snapshot"]["inputs"]),
     }
+    if decision_path is not None:
+        required_artifacts.add(decision_path)
+    snapshot_artifacts = {
+        Path(item["snapshot"])
+        for item in identity["execution_snapshot"]["inputs"]
+    }
+    missing_snapshot_artifacts = {
+        candidate for candidate in snapshot_artifacts if not candidate.is_file()
+    }
+    if (missing_snapshot_artifacts
+            and not any(failure.startswith("execution_snapshot:")
+                        for failure in identity["failures"])):
+        raise ValueError("rejected Palace attempt lost an unreported snapshot input")
+    required_artifacts.update(snapshot_artifacts - missing_snapshot_artifacts)
     optional_artifacts = {
         manifest.output_directory / "palace.json",
         manifest.output_directory / "config_resolved.json",
@@ -597,9 +649,11 @@ def validate_palace_attempt_manifest(path, *, _document=None):
     )
     for directory in (manifest.output_directory, snapshot_output):
         if directory.is_dir() and not directory.is_symlink():
-            optional_artifacts.update(
-                (directory / ".quarantine").glob("terminal-C*.quarantined")
-            )
+            for quarantine in directory.glob(".quarantine*"):
+                if quarantine.is_dir() and not quarantine.is_symlink():
+                    optional_artifacts.update(
+                        quarantine.glob("terminal-C*.quarantined")
+                    )
     expected_artifacts = {
         str(candidate.resolve()): _safe_sha256(candidate, "bound artifact")
         for candidate in required_artifacts | optional_artifacts
@@ -634,6 +688,11 @@ def validate_palace_attempt_manifest(path, *, _document=None):
         raise ValueError("rejected Palace attempt contains an unknown milestone")
     prefix_before, accepted_prefix = _validate_partial_progress(
         expected_progress, manifest.terminals,
+        checkpoint_expected=manifest.checkpoint is not None,
+        campaign_digest=(
+            bytes_sha256(manifest.checkpoint["native_campaign_identity"].encode())
+            if manifest.checkpoint is not None else "disabled"
+        ),
     )
     rhs_ordinals = [
         event["rhs_ordinal"] for event in expected_progress
@@ -664,7 +723,7 @@ def validate_palace_attempt_manifest(path, *, _document=None):
         if failure.startswith((
             "solver_diagnostic:", "progress_validation:",
             "stream_encoding:", "execution_snapshot:",
-            "output_publication:",
+            "output_publication:", "matrix_quarantine:",
         ))
     ]
     incomplete_artifact_names = {
