@@ -18,7 +18,7 @@ _MATRIX_ACCESS_NONCE = object()
 _MATRIX_LIMIT = 64 * 1024 * 1024
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PalaceMatrixAccess:
     campaign_sha256: str
     head_sha256: str
@@ -30,7 +30,7 @@ class PalaceMatrixAccess:
 
     def __post_init__(self):
         if (self._nonce is not _MATRIX_ACCESS_NONCE
-                or not isinstance(self._ledger, CanonicalLedgerPublicationV2)):
+                or type(self._ledger) is not CanonicalLedgerPublicationV2):
             raise ValueError("Palace matrix access capability is invalid")
 
 
@@ -75,9 +75,11 @@ def _manifest_identity(record, manifest):
 
 
 def checkpoint_matrix_access(ledger, manifest, *, raw_path, standard_path):
-    if not isinstance(ledger, CanonicalLedgerPublicationV2):
+    if type(ledger) is not CanonicalLedgerPublicationV2:
         raise ValueError("Palace matrix access requires a canonical v2 ledger")
-    record = _validate_record(ledger.matrix_access_record())
+    record = _validate_record(
+        CanonicalLedgerPublicationV2.matrix_access_record(ledger)
+    )
     terminal_names = _manifest_identity(record, manifest)
     requested = {
         "raw": (Path(raw_path), record["matrices"]["raw_matrix"]),
@@ -114,9 +116,12 @@ def checkpoint_matrix_access(ledger, manifest, *, raw_path, standard_path):
 
 
 def validate_matrix_access(access, manifest):
-    if not isinstance(access, PalaceMatrixAccess):
+    if (type(access) is not PalaceMatrixAccess
+            or type(access._ledger) is not CanonicalLedgerPublicationV2):
         raise ValueError("Palace matrix access capability is invalid")
-    record = _validate_record(access._ledger.matrix_access_record())
+    record = _validate_record(
+        CanonicalLedgerPublicationV2.matrix_access_record(access._ledger)
+    )
     terminal_names = _manifest_identity(record, manifest)
     expected_matrices = {
         role: {"path": path, "sha256": digest}

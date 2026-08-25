@@ -17,6 +17,7 @@ if __package__:
         reconcile_campaign_attempt_v2,
         validate_campaign_identity_v2,
     )
+    from .palace_head_authority import CanonicalHeadAuthority
     from .palace_reservation import derive_attempt_reservation
     from .provenance import canonical_equal, canonical_sha256, exclusive_publish_json
 else:
@@ -28,6 +29,7 @@ else:
         reconcile_campaign_attempt_v2,
         validate_campaign_identity_v2,
     )
+    from palace_head_authority import CanonicalHeadAuthority
     from palace_reservation import derive_attempt_reservation
     from provenance import canonical_equal, canonical_sha256, exclusive_publish_json
 
@@ -40,6 +42,16 @@ except ImportError:  # pragma: no cover - intentionally POSIX-only
 HEAD_FORMAT = "palace-checkpoint-campaign-head-v2"
 PENDING_FORMAT = "palace-checkpoint-campaign-pending-v2"
 ENTRY_FORMAT = "palace-checkpoint-campaign-entry-v2"
+
+
+def _authority_identity(authority):
+    if type(authority) is not CanonicalHeadAuthority:
+        raise ValueError("campaign v2 canonical authority type is invalid")
+    return CanonicalHeadAuthority.identity.__get__(
+        authority, CanonicalHeadAuthority,
+    )
+
+
 PUBLICATION_TEMP_RE = re.compile(r"^\..+\.tmp\.[0-9a-f]{32}$")
 
 
@@ -225,6 +237,20 @@ def _validate_pending(value, campaign):
 
 
 class CanonicalLedgerPublicationV2:
+    __slots__ = (
+        "campaign", "expected_workload", "root", "entries", "head_path",
+        "pending_path", "next_head_path", "lock_path", "authority",
+        "_lock_fd", "_sealed",
+    )
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            if name == "_lock_fd" and value is None:
+                object.__setattr__(self, name, value)
+                return
+            raise AttributeError("canonical ledger instances are immutable")
+        object.__setattr__(self, name, value)
+
     def __init__(self, root, campaign, *, authority, expected_campaign_sha256,
                  expected_workload):
         if fcntl is None or os.name != "posix":
@@ -233,7 +259,7 @@ class CanonicalLedgerPublicationV2:
             campaign,
             expected_campaign_sha256=expected_campaign_sha256,
             expected_workload=expected_workload,
-            expected_authority_identity=authority.identity,
+            expected_authority_identity=_authority_identity(authority),
         )
         self.expected_workload = deepcopy(expected_workload)
         supplied = Path(root)
@@ -251,9 +277,10 @@ class CanonicalLedgerPublicationV2:
         if not stat.S_ISREG(os.fstat(self._lock_fd).st_mode):
             os.close(self._lock_fd)
             raise ValueError("campaign v2 writer lock is invalid")
-        with self._lock():
-            self._remove_stale_publication_temps()
-            self._validate_local_state()
+        with CanonicalLedgerPublicationV2._lock(self):
+            CanonicalLedgerPublicationV2._remove_stale_publication_temps(self)
+            CanonicalLedgerPublicationV2._validate_local_state(self)
+        self._sealed = True
 
     @classmethod
     def _ensure_initial_local_state(cls, root, campaign):
@@ -337,16 +364,22 @@ class CanonicalLedgerPublicationV2:
     @classmethod
     def create(cls, root, campaign, *, authority, expected_campaign_sha256,
                expected_workload):
+        if cls is not CanonicalLedgerPublicationV2:
+            raise ValueError("campaign v2 ledger subclasses are not authorized")
         campaign = validate_campaign_identity_v2(
             campaign,
             expected_campaign_sha256=expected_campaign_sha256,
             expected_workload=expected_workload,
-            expected_authority_identity=authority.identity,
+            expected_authority_identity=_authority_identity(authority),
         )
         root = Path(root)
-        head = cls._ensure_initial_local_state(root, campaign)
-        authority.ensure_registered(campaign["content_sha256"], head["content_sha256"])
-        return cls(
+        head = CanonicalLedgerPublicationV2._ensure_initial_local_state(
+            root, campaign,
+        )
+        CanonicalHeadAuthority.ensure_registered(
+            authority, campaign["content_sha256"], head["content_sha256"],
+        )
+        return CanonicalLedgerPublicationV2(
             root, campaign, authority=authority,
             expected_campaign_sha256=expected_campaign_sha256,
             expected_workload=expected_workload,
@@ -356,7 +389,7 @@ class CanonicalLedgerPublicationV2:
         descriptor = getattr(self, "_lock_fd", None)
         if descriptor is not None:
             os.close(descriptor)
-            self._lock_fd = None
+            object.__setattr__(self, "_lock_fd", None)
 
     @contextmanager
     def _lock(self):
@@ -428,7 +461,7 @@ class CanonicalLedgerPublicationV2:
             self.campaign,
             expected_campaign_sha256=self.campaign["content_sha256"],
             expected_workload=self.expected_workload,
-            expected_authority_identity=self.authority.identity,
+            expected_authority_identity=_authority_identity(self.authority),
             run_manifest_path=reconciliation["execution_witness"]["path"],
             checkpoint_root=reconciliation["checkpoint_root"],
         )
@@ -563,7 +596,7 @@ class CanonicalLedgerPublicationV2:
         )
         if not canonical_equal(replay, expected_replay):
             raise ValueError("campaign v2 local head differs from entry replay")
-        external = self.authority.read(self.campaign["content_sha256"])
+        external = CanonicalHeadAuthority.read(self.authority, (self.campaign["content_sha256"]))
         allowed_external = {head["content_sha256"]}
         if pending is not None:
             allowed_external.update({
@@ -583,7 +616,7 @@ class CanonicalLedgerPublicationV2:
         }
 
     def _external_matches(self, head):
-        record = self.authority.read(self.campaign["content_sha256"])
+        record = CanonicalHeadAuthority.read(self.authority, (self.campaign["content_sha256"]))
         if (record["head_sha256"] != head["content_sha256"]
                 or record["sequence"] != head["sequence"]
                 or record["entry_sha256"] != head["entry_sha256"]):
@@ -601,7 +634,6 @@ class CanonicalLedgerPublicationV2:
             attempt_id,
             resource_decision_sha256=receipt["decision_sha256"],
             resource_reservation=receipt["reservation"],
-            _allow_existing=True,
         )
 
     def _register_attempt(self, attempt_id, *, resource_decision_sha256,
@@ -611,15 +643,17 @@ class CanonicalLedgerPublicationV2:
             state = self._validate_local_state()
             predecessor = state["head"]
             existing = state["active_registration"]
-            if _allow_existing and existing is not None:
-                if (existing["attempt_id"] != attempt_id
-                        or existing["resource_decision_sha256"]
-                        != resource_decision_sha256
-                        or existing["resource_reservation"] != reservation):
-                    raise ValueError(
-                        "campaign v2 active registration differs from retry"
-                    )
-                return deepcopy(existing)
+            if existing is not None:
+                if _allow_existing:
+                    if (existing["attempt_id"] != attempt_id
+                            or existing["resource_decision_sha256"]
+                            != resource_decision_sha256
+                            or existing["resource_reservation"] != reservation):
+                        raise ValueError(
+                            "campaign v2 active registration differs from retry"
+                        )
+                    return deepcopy(existing)
+                raise ValueError("campaign v2 already has an active attempt")
             payload = {
                 "format": ENTRY_FORMAT,
                 "campaign_sha256": self.campaign["content_sha256"],
@@ -648,7 +682,7 @@ class CanonicalLedgerPublicationV2:
                 self.campaign,
                 expected_campaign_sha256=self.campaign["content_sha256"],
                 expected_workload=self.expected_workload,
-                expected_authority_identity=self.authority.identity,
+                expected_authority_identity=_authority_identity(self.authority),
                 run_manifest_path=run_manifest_path,
                 checkpoint_root=checkpoint_root,
             )
@@ -829,10 +863,10 @@ class CanonicalLedgerPublicationV2:
                 raise ValueError("campaign v2 pending next head differs from successor")
         else:
             exclusive_publish_json(self.next_head_path, successor)
-        external = self.authority.read(self.campaign["content_sha256"])
+        external = CanonicalHeadAuthority.read(self.authority, (self.campaign["content_sha256"]))
         if external["head_sha256"] == predecessor_digest:
-            external = self.authority.compare_and_swap(
-                self.campaign["content_sha256"],
+            external = CanonicalHeadAuthority.compare_and_swap(
+                self.authority, self.campaign["content_sha256"],
                 expected_head_sha256=predecessor_digest,
                 successor_head_sha256=successor["content_sha256"],
                 successor_sequence=successor["sequence"],
