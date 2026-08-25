@@ -176,23 +176,31 @@ def test_canonical_head_rejects_lock_replacement_during_acquisition(
         value.register(CAMPAIGN, HEAD0)
 
 
+def test_canonical_head_exact_instance_rejects_helper_override(tmp_path):
+    value = authority(tmp_path)
+    with pytest.raises(AttributeError, match="immutable"):
+        value._read = lambda *_args: {"head_sha256": "f" * 64}
+    with pytest.raises(AttributeError, match="immutable"):
+        value._publish = lambda *_args, **_kwargs: None
+
+
 def test_canonical_head_registration_recovers_after_interrupted_publication(
         tmp_path, monkeypatch):
     value = authority(tmp_path)
-    original_publish = value._publish
+    original_publish = CanonicalHeadAuthority._publish
     interrupted = False
 
-    def interrupt(record_name, record, *, exclusive):
+    def interrupt(self, record_name, record, *, exclusive):
         nonlocal interrupted
         if record_name.endswith(".head.json") and not interrupted:
             interrupted = True
             raise OSError("injected interruption")
-        return original_publish(record_name, record, exclusive=exclusive)
+        return original_publish(self, record_name, record, exclusive=exclusive)
 
-    monkeypatch.setattr(value, "_publish", interrupt)
+    monkeypatch.setattr(CanonicalHeadAuthority, "_publish", interrupt)
     with pytest.raises(OSError, match="injected interruption"):
         value.register(CAMPAIGN, HEAD0)
-    monkeypatch.setattr(value, "_publish", original_publish)
+    monkeypatch.setattr(CanonicalHeadAuthority, "_publish", original_publish)
     assert value.register(CAMPAIGN, HEAD0)["sequence"] == 0
 
 
