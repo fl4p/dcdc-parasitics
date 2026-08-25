@@ -102,6 +102,23 @@ def test_pending_abort_recovery_revalidates_checkpoint(
         )
     assert ledger.pending_path.exists()
     monkeypatch.setattr(palace_ledger_v2, "exclusive_publish_json", publish)
+    inventory["prefix"] = 2
+    with pytest.raises(
+            ValueError, match="pending abort checkpoint is stale"):
+        ledger.recover_pending_attempt()
+    inventory["prefix"] = 1
+    monkeypatch.setattr(
+        palace_ledger_v2, "derive_attempt_reservation",
+        lambda *args, **kwargs: {
+            "decision_sha256": "d" * 64,
+            "reservation": _zero_accounting(),
+        },
+    )
+    with pytest.raises(
+            ValueError, match="abort recovery rejects registration inputs"):
+        ledger.recover_pending_attempt(
+            resource_decision={}, execution_snapshot={}, trusted_policy={},
+        )
     head = ledger.recover_pending_attempt()
     assert head["prefix"] == 1
     assert ledger._validate_local_state()["active_registration"] is None
