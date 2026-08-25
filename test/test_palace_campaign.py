@@ -950,7 +950,7 @@ def test_campaign_v2_rejects_reused_execution_witness_before_publication(
         checkpoint_root=tmp_path / "checkpoint",
     )
     second = ledger_reconciliation(
-        campaign, tmp_path, outcome="wall_timeout", before=1, after=1,
+        campaign, tmp_path, outcome="completed", before=1, after=2,
         witness="cd",
     )
     second["execution_witness"]["sha256"] = first["execution_witness"]["sha256"]
@@ -1051,7 +1051,7 @@ def test_campaign_v2_pending_completion_rejects_reused_execution_witness(
         resource_reservation=_zero_accounting(),
     )
     second = ledger_reconciliation(
-        campaign, tmp_path, outcome="wall_timeout", before=1, after=1,
+        campaign, tmp_path, outcome="completed", before=1, after=2,
         witness="cd",
     )
     second["execution_witness"]["sha256"] = first["execution_witness"]["sha256"]

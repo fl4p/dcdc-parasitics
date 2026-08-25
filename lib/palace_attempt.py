@@ -740,7 +740,12 @@ def validate_palace_attempt_manifest(path, *, _document=None):
         failure for failure in limit_failures
         if failure.startswith("wall time exceeded ")
     ]
-    wall_limit = len(wall_causes) == 1 and len(limit_failures) == 1
+    monitor_names = [event["event"] for event in execution["monitor_events"]]
+    wall_limit = (
+        len(wall_causes) == 1 and len(limit_failures) == 1
+        and "limit_detected" in monitor_names
+        and "kill_initiated" in monitor_names
+    )
     causal_outcome = (
         "wall_timeout"
         if wall_limit and not diagnostic_failures and not unexpected_final_artifact

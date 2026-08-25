@@ -66,6 +66,47 @@ def test_abort_clears_active_registration_and_allows_fresh_attempt(
     ] == "attempt-2"
 
 
+def test_pending_abort_recovery_revalidates_checkpoint(
+        tmp_path, monkeypatch):
+    campaign, workload, authority = campaign_v2(tmp_path)
+    ledger = CanonicalLedgerPublicationV2.create(
+        tmp_path / "ledger", campaign, authority=authority,
+        expected_campaign_sha256=campaign["content_sha256"],
+        expected_workload=workload,
+    )
+    expected = {
+        "resource_decision_sha256": "d" * 64,
+        "resource_reservation": _zero_accounting(),
+    }
+    ledger._register_attempt("attempt-1", **expected)
+    inventory = {"prefix": 1}
+    monkeypatch.setattr(
+        palace_ledger_v2, "validate_native_checkpoint",
+        lambda *args, **kwargs: deepcopy(inventory),
+    )
+    publish = palace_ledger_v2.exclusive_publish_json
+
+    def interrupt_entry(path, value):
+        if Path(path).parent == ledger.entries:
+            raise OSError("injected abort publication crash")
+        return publish(path, value)
+
+    monkeypatch.setattr(
+        palace_ledger_v2, "exclusive_publish_json", interrupt_entry,
+    )
+    with pytest.raises(OSError, match="abort publication crash"):
+        ledger.abort_attempt_if_active(
+            "attempt-1", reason="launch failed",
+            checkpoint_root=tmp_path / "checkpoint",
+            expected_registration=expected,
+        )
+    assert ledger.pending_path.exists()
+    monkeypatch.setattr(palace_ledger_v2, "exclusive_publish_json", publish)
+    head = ledger.recover_pending_attempt()
+    assert head["prefix"] == 1
+    assert ledger._validate_local_state()["active_registration"] is None
+
+
 def test_cleanup_failure_keeps_canonical_attempt_active(tmp_path):
     campaign, workload, authority = campaign_v2(tmp_path)
     ledger = CanonicalLedgerPublicationV2.create(

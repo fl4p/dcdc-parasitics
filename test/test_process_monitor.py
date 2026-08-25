@@ -63,6 +63,28 @@ def test_monitor_exception_kills_and_reaps_started_process(tmp_path, monkeypatch
         assert not psutil.pid_exists(int(pid_path.read_text()))
 
 
+def test_secondary_cleanup_interrupt_is_tagged_while_process_survives(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        process_monitor, "_tree_rss",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("monitor failed")),
+    )
+    monkeypatch.setattr(
+        process_monitor, "_cleanup_exceptional_process",
+        lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(process_monitor, "_tree_alive", lambda *args: True)
+    with pytest.raises(
+            process_monitor.ProcessCleanupError,
+            match="interrupted before tree death"):
+        run_monitored_process(
+            [sys.executable, "-c", "import time; time.sleep(0.1)"],
+            cwd=tmp_path,
+            limits=_limits(),
+        )
+
+
 def test_additional_output_path_is_included_in_disk_limit(tmp_path):
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()

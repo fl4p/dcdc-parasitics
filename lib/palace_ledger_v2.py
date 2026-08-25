@@ -331,6 +331,11 @@ class CanonicalLedgerPublicationV2:
 
     @classmethod
     def _ensure_initial_local_state(cls, root, campaign):
+        encoded = (json.dumps(
+            campaign, indent=2, sort_keys=True, allow_nan=False,
+        ) + "\n").encode()
+        if len(encoded) > 1024 * 1024:
+            raise ValueError("campaign v2 identity exceeds publication limit")
         root = Path(root)
         if root.is_symlink():
             raise ValueError("campaign v2 ledger root must not be a symlink")
@@ -530,6 +535,9 @@ class CanonicalLedgerPublicationV2:
         outcome = reconciliation["outcome"]
         if outcome not in {"wall_timeout", "completed", "terminal_failure"}:
             raise ValueError("campaign v2 completion outcome is invalid")
+        if (outcome == "wall_timeout"
+                and reconciliation["prefix_after"] <= predecessor["prefix"]):
+            raise ValueError("campaign v2 wall timeout made no prefix progress")
         accounting = _accumulate_accounting([
             predecessor["accounting"], charged,
         ])
@@ -1012,8 +1020,16 @@ class CanonicalLedgerPublicationV2:
         successor = pending["successor_head"]
         entry = pending["entry"]
         self._reject_candidate_reuse(entry, state)
+        external = CanonicalHeadAuthority.read(
+            self.authority, self.campaign["content_sha256"])
+        external_is_successor = (
+            external["head_sha256"] == successor["content_sha256"]
+            and external["sequence"] == successor["sequence"]
+            and external["entry_sha256"] == entry["content_sha256"]
+        )
         derived, _ = self._entry_successor(
-            predecessor, entry, state["last_registration"], verify_live=True,
+            predecessor, entry, state["last_registration"],
+            verify_live=not external_is_successor,
         )
         if not canonical_equal(derived, successor):
             raise ValueError("campaign v2 pending successor is not derived")
@@ -1033,7 +1049,6 @@ class CanonicalLedgerPublicationV2:
                 raise ValueError("campaign v2 pending next head differs from successor")
         else:
             exclusive_publish_json(self.next_head_path, successor)
-        external = CanonicalHeadAuthority.read(self.authority, (self.campaign["content_sha256"]))
         if external["head_sha256"] == predecessor_digest:
             external = CanonicalHeadAuthority.compare_and_swap(
                 self.authority, self.campaign["content_sha256"],
@@ -1042,9 +1057,7 @@ class CanonicalLedgerPublicationV2:
                 successor_sequence=successor["sequence"],
                 successor_entry_sha256=entry["content_sha256"],
             )
-        elif (external["head_sha256"] != successor["content_sha256"]
-              or external["sequence"] != successor["sequence"]
-              or external["entry_sha256"] != entry["content_sha256"]):
+        elif not external_is_successor:
             raise ValueError("campaign v2 pending successor lost canonical authority")
         local = self._head()
         if local["content_sha256"] == predecessor_digest:
