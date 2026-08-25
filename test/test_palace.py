@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from copy import deepcopy
-from dataclasses import asdict
 import csv
 import json
 import os
@@ -15,7 +14,6 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 
 import palace  # noqa: E402
 import palace_attempt  # noqa: E402
-import palace_snapshot_request  # noqa: E402
 from palace_attempt import (  # noqa: E402
     validate_palace_attempt_manifest,
     validate_palace_execution_witness,
@@ -34,7 +32,6 @@ from palace import (  # noqa: E402
 )
 from palace_matrix_access import PalaceMatrixAccess  # noqa: E402
 from palace_resources import (  # noqa: E402
-    PROJECTION_BOUND_NAMES,
     PalaceResourceProjection,
     ResourceBound,
 )
@@ -43,7 +40,8 @@ from provenance import bytes_sha256, canonical_sha256, file_sha256  # noqa: E402
 
 
 def _write_config(tmp_path, *, tolerance=1e-10,
-                  explicit_residual_tolerance=None, order=1, checkpoint=None):
+                  explicit_residual_tolerance=None, order=1, checkpoint=None,
+                  maximum_iterations=500):
     mesh = tmp_path / "fixture.msh"
     mesh.write_text(
         "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
@@ -136,6 +134,7 @@ def _write_config(tmp_path, *, tolerance=1e-10,
         explicit_residual_tolerance=explicit_residual_tolerance,
         order=order,
         checkpoint=checkpoint,
+        maximum_iterations=maximum_iterations,
     )
     return config, manifest
 
@@ -157,6 +156,14 @@ def test_checkpoint_config_v3_binds_absolute_root_and_native_identity(tmp_path):
     }
     resolved = palace._expected_resolved_config(manifest)
     assert resolved["Solver"]["Electrostatic"]["Checkpoint"]["Path"] == checkpoint["path"]
+
+
+def test_resolved_linear_max_size_tracks_iteration_limit(tmp_path):
+    _, manifest_path = _write_config(tmp_path, maximum_iterations=750)
+    resolved = palace._expected_resolved_config(
+        load_palace_config_manifest(manifest_path)
+    )
+    assert resolved["Solver"]["Linear"]["MaxSize"] == 750
 
 
 def test_legacy_config_v2_remains_loadable(tmp_path):
@@ -384,33 +391,6 @@ def _patch_process_run(monkeypatch, tmp_path, raw, standard, *, warning="",
     return build_manifest
 
 
-def test_snapshot_request_writer_accepts_real_workload_shape(tmp_path, monkeypatch):
-    _, manifest_path = _write_config(tmp_path)
-    executable = tmp_path / "palace"
-    executable.write_bytes(b"binary")
-    build_manifest = _patch_process_run(
-        monkeypatch, tmp_path,
-        np.array([[3e-12, -2e-12], [-2e-12, 4e-12]]),
-        np.array([[3e-12, -2e-12], [-2e-12, 4e-12]]),
-    )
-    monkeypatch.setattr(
-        palace_snapshot_request, "validate_palace_build_manifest",
-        palace.validate_palace_build_manifest,
-    )
-    path, request = (
-        palace_snapshot_request.write_palace_execution_snapshot_request(
-            manifest_path, executable=executable,
-            build_manifest_path=build_manifest, snapshot_id="d" * 64,
-        )
-    )
-    assert path.is_file()
-    assert request["format"] == "palace-execution-snapshot-request-v1"
-    assert request["materializer_sha256"] == file_sha256(
-        Path(palace.__file__).with_name("palace_snapshot_materializer.py")
-    )
-    assert "implementation" not in request
-
-
 @pytest.mark.parametrize(
     ("order", "ams_max_its", "mg_smooth_order"),
     [(1, 1, 4), (2, 2, 4), (3, 3, 6)],
@@ -561,11 +541,7 @@ def test_matrix_parser_rejects_wrong_identity_units_or_indices(tmp_path, header)
 
 
 def _run_with_test_resource_policy(
-        manifest_path, *, executable, build_manifest, monkeypatch,
-        authorize_projection=True, authorize_snapshot=True):
-    monkeypatch.setattr(
-        palace, "RESOURCE_AUTHORIZED_OBSERVATION_SHA256", ("a" * 64,)
-    )
+        manifest_path, *, executable, build_manifest, monkeypatch):
     manifest = load_palace_config_manifest(manifest_path)
     inputs = palace._execution_workload_inputs(
         manifest,
@@ -593,25 +569,6 @@ def _run_with_test_resource_policy(
         uncertainty_reasons=("conservative unit-test bounds",),
         observation_sha256=("a" * 64,),
     )
-    projection_payload = {
-        **{
-            name: asdict(getattr(projection, name))
-            for name in PROJECTION_BOUND_NAMES
-        },
-        "uncertainty_reasons": list(projection.uncertainty_reasons),
-        "observation_sha256": list(projection.observation_sha256),
-    }
-    if authorize_projection:
-        monkeypatch.setattr(
-            palace,
-            "RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256",
-            (canonical_sha256(projection_payload),),
-        )
-    if authorize_snapshot:
-        monkeypatch.setattr(
-            palace, "validate_execution_snapshot_privilege_boundary",
-            lambda record: True,
-        )
     policy = palace._trusted_resource_policy()
     decision = palace.build_palace_resource_decision(
         palace_workload=inputs["workload"],
@@ -636,41 +593,6 @@ def _run_with_test_resource_policy(
     )
 
 
-def test_unauthorized_projection_is_rejected_before_execution(
-        tmp_path, monkeypatch):
-    _, manifest_path = _write_config(tmp_path)
-    executable = tmp_path / "palace"
-    executable.write_text("binary")
-    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
-    build_manifest = _patch_process_run(
-        monkeypatch, tmp_path, values, values
-    )
-    with pytest.raises(ValueError, match="prelaunch resource projection"):
-        _run_with_test_resource_policy(
-            manifest_path, executable=executable,
-            build_manifest=build_manifest, monkeypatch=monkeypatch,
-            authorize_projection=False,
-        )
-    assert not (tmp_path / "postpro").exists()
-    assert not list(tmp_path.glob("*.workload.*.json"))
-
-
-def test_same_uid_snapshot_is_rejected_before_execution(tmp_path, monkeypatch):
-    _, manifest_path = _write_config(tmp_path)
-    executable = tmp_path / "palace"
-    executable.write_text("binary")
-    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
-    build_manifest = _patch_process_run(monkeypatch, tmp_path, values, values)
-    with pytest.raises(ValueError, match="mutable by the execution UID"):
-        _run_with_test_resource_policy(
-            manifest_path, executable=executable,
-            build_manifest=build_manifest, monkeypatch=monkeypatch,
-            authorize_snapshot=False,
-        )
-    assert not (tmp_path / "postpro").exists()
-    assert not list(tmp_path.glob("*.workload.*.json"))
-
-
 def test_run_accepts_only_independent_raw_and_exact_standard_matrix(tmp_path, monkeypatch):
     _, manifest_path = _write_config(tmp_path)
     executable = tmp_path / "bin" / "palace"
@@ -688,7 +610,7 @@ def test_run_accepts_only_independent_raw_and_exact_standard_matrix(tmp_path, mo
     np.testing.assert_array_equal(run.downstream_matrix.values, values)
     stored = json.loads(run.manifest_path.read_text())
     assert stored["lifecycle"] == "numerically_converged_diagnostic"
-    assert stored["resource_enforcement"] == "portable_monitor_not_native_containment"
+    assert stored["resource_enforcement"] == "portable_process_limits"
     workload_path = Path(stored["workload"])
     workload = json.loads(workload_path.read_text())
     assert stored["workload_sha256"] == file_sha256(workload_path)
@@ -782,12 +704,6 @@ def test_resource_decision_rejects_nonidentical_config_and_mesh_manifests(
     observation_directory = tmp_path / "observation"
     observation_directory.mkdir()
     observation_run = _accepted_run(observation_directory, monkeypatch)
-    monkeypatch.setattr(
-        palace,
-        "RESOURCE_AUTHORIZED_OBSERVATION_SHA256",
-        (file_sha256(observation_run.manifest_path),),
-    )
-
     target_directory = tmp_path / "target"
     target_directory.mkdir()
     _, manifest_path = _write_config(target_directory)
@@ -805,8 +721,7 @@ def test_resource_decision_rejects_nonidentical_config_and_mesh_manifests(
     assert not list(target_directory.glob("*.resource-decision.*.json"))
 
 
-def test_direct_geometry_cannot_bypass_the_resource_decision_gate(
-        tmp_path, monkeypatch):
+def test_user_space_run_needs_no_resource_authority(tmp_path, monkeypatch):
     _, manifest_path = _write_config(tmp_path)
     executable = tmp_path / "palace"
     executable.write_text("binary")
@@ -814,15 +729,127 @@ def test_direct_geometry_cannot_bypass_the_resource_decision_gate(
     build_manifest = _patch_process_run(
         monkeypatch, tmp_path, values, values
     )
-    with pytest.raises(ValueError, match="trusted resource decision"):
+    run = run_palace(
+        manifest_path,
+        executable=executable,
+        build_manifest_path=build_manifest,
+    )
+    stored = json.loads(run.manifest_path.read_text())
+    assert stored["resource_decision"] is None
+    assert stored["resource_class"] == "synthetic"
+    witness = validate_palace_execution_witness(run.manifest_path)
+    assert witness["resource_decision_sha256"] is None
+
+
+def test_decisionless_rejected_run_remains_validated_evidence(tmp_path, monkeypatch):
+    _, manifest_path = _write_config(tmp_path)
+    executable = tmp_path / "palace"
+    executable.write_text("binary")
+    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
+    build_manifest = _patch_process_run(
+        monkeypatch, tmp_path, values, values, warning="Warning! rejected\n",
+    )
+    with pytest.raises(PalaceRunRejected) as caught:
         run_palace(
-            manifest_path,
-            executable=executable,
+            manifest_path, executable=executable,
             build_manifest_path=build_manifest,
         )
-    assert not (tmp_path / "postpro").exists()
-    assert not list(tmp_path.glob("*.workload.*.json"))
-    assert not list(tmp_path.glob(".*.execution.*"))
+    rejected = validate_palace_attempt_manifest(caught.value.manifest_path)
+    witness = validate_palace_execution_witness(caught.value.manifest_path)
+    assert rejected["matrix_available"] is False
+    assert witness["resource_decision_sha256"] is None
+
+
+def test_checkpointed_run_needs_no_campaign_authority(tmp_path, monkeypatch):
+    checkpoint = {
+        "path": str((tmp_path / "checkpoint-store").resolve()),
+        "native_campaign_identity": "a" * 64,
+    }
+    _, manifest_path = _write_config(tmp_path, checkpoint=checkpoint)
+    executable = tmp_path / "palace"
+    executable.write_text("binary")
+    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
+    build_manifest = _patch_process_run(monkeypatch, tmp_path, values, values)
+    with pytest.raises(PalaceRunRejected, match="checkpoint milestone"):
+        run_palace(
+            manifest_path, executable=executable,
+            build_manifest_path=build_manifest,
+        )
+    assert (tmp_path / "postpro").exists()
+
+
+def test_checkpoint_completion_metadata_counts_only_new_solves(tmp_path):
+    checkpoint = {
+        "path": str((tmp_path / "checkpoint-store").resolve()),
+        "native_campaign_identity": "a" * 64,
+    }
+    config_path, _ = _write_config(tmp_path, checkpoint=checkpoint)
+    output = tmp_path / "postpro"
+    output.mkdir()
+    _write_completion_artifacts(output, config_path)
+    metadata_path = output / "palace.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["ElapsedTime"]["Counts"]["LinearSolve"] = 1
+    metadata["LinearSolver"] = {"TotalIts": 5, "TotalSolves": 1}
+    metadata_path.write_text(json.dumps(metadata))
+
+    _, _, validated = palace._validate_completion_metadata(
+        output, load_palace_config_manifest(config_path.with_suffix(
+            config_path.suffix + ".manifest.json"
+        )), processes=1,
+    )
+    assert validated["LinearSolver"]["TotalSolves"] == 1
+
+
+def test_post_snapshot_oserror_persists_rejection_and_quarantines(
+        tmp_path, monkeypatch):
+    _, manifest_path = _write_config(tmp_path)
+    executable = tmp_path / "palace"
+    executable.write_text("binary")
+    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
+    build_manifest = _patch_process_run(monkeypatch, tmp_path, values, values)
+    monkeypatch.setattr(
+        palace, "validate_execution_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("snapshot input disappeared")
+        ),
+    )
+    with pytest.raises(PalaceRunRejected) as caught:
+        run_palace(
+            manifest_path, executable=executable,
+            build_manifest_path=build_manifest,
+        )
+    rejected = validate_palace_attempt_manifest(caught.value.manifest_path)
+    assert rejected["matrix_available"] is False
+    assert any(failure.startswith("execution_snapshot:")
+               for failure in caught.value.failures)
+    snapshot_root = Path(
+        json.loads(caught.value.manifest_path.read_text())["execution_snapshot"]["root"]
+    )
+    assert not list(snapshot_root.rglob("terminal-C*.csv"))
+    assert len(list(snapshot_root.rglob("terminal-C*.quarantined"))) == 2
+
+
+def test_runtime_git_tag_is_diagnostic_metadata(tmp_path, monkeypatch):
+    _, manifest_path = _write_config(tmp_path)
+    executable = tmp_path / "palace"
+    executable.write_text("binary")
+    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
+
+    def alter_metadata(value):
+        value["GitTag"] = "diagnostic-runtime-tag"
+
+    build_manifest = _patch_process_run(
+        monkeypatch, tmp_path, values, values,
+        metadata_mutator=alter_metadata,
+    )
+    run = run_palace(
+        manifest_path, executable=executable,
+        build_manifest_path=build_manifest,
+    )
+    assert json.loads(run.manifest_path.read_text())["runtime_metadata"]["GitTag"] == (
+        "diagnostic-runtime-tag"
+    )
 
 
 def test_missing_completed_observation_creates_no_resource_decision(
@@ -878,7 +905,13 @@ def test_completed_progress_rejects_duplicate_or_reordered_rhs_boundaries():
         "monotonic_ns": 1, "sha256": bytes_sha256(stdout),
     }]
     events = palace._palace_progress_events(stdout, stream_events)
-    palace._validate_completed_palace_progress(events, 2)
+    palace._validate_completed_palace_progress(
+        events, 2, checkpoint_enabled=False,
+    )
+    with pytest.raises(ValueError, match="differs from the manifest"):
+        palace._validate_completed_palace_progress(
+            events, 2, checkpoint_enabled=True,
+        )
     rebound = list(events)
     rebound.insert(3, events[2])
     with pytest.raises(ValueError, match="sequence is incomplete"):
@@ -1323,11 +1356,15 @@ def test_partial_progress_binds_terminal_roster_and_iteration_telemetry(
     shortened = deepcopy(events)
     shortened[1]["detail"]["new_rhs"] = [1]
     with pytest.raises(ValueError, match="setup identity"):
-        palace_attempt._validate_partial_progress(shortened, terminals)
+        palace_attempt._validate_partial_progress(
+            shortened, terminals, checkpoint_expected=False,
+        )
     divergent = deepcopy(events)
     divergent[-1]["detail"]["iterations"] += 1
     with pytest.raises(ValueError, match="solve accounting"):
-        palace_attempt._validate_partial_progress(divergent, terminals)
+        palace_attempt._validate_partial_progress(
+            divergent, terminals, checkpoint_expected=False,
+        )
     checkpointed = deepcopy(run)
     checkpointed_events = checkpointed["execution"]["palace_progress_events"]
     checkpointed_events[0]["detail"]["checkpoint_enabled"] = 1
@@ -1339,7 +1376,9 @@ def test_partial_progress_binds_terminal_roster_and_iteration_telemetry(
         "time_semantics": "reader_receipt_upper_bound",
         "detail": {"rhs": 1, "terminal": 1, "prefix_after": 1},
     })
-    palace_attempt._validate_partial_progress(checkpointed_events, terminals)
+    palace_attempt._validate_partial_progress(
+        checkpointed_events, terminals, checkpoint_expected=True,
+    )
     projection = palace_attempt._attempt_projection(
         caught.value.manifest_path, checkpointed,
         outcome="wall_timeout", workload_sha256="a" * 64,

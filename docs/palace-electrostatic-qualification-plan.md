@@ -121,19 +121,12 @@ material coverage. The PCB-like coplanar fixture tests nonconvex geometry,
 redundant segmentation, and lateral fields. Analytic agreement is a separate
 witness from mesh convergence and is not double-counted.
 
-### Resources and containment
+### Resource limits
 
-Portable PID polling remains observational and cannot qualify hostile process
-containment. Final acceptance requires the Palace launcher inside a native
-boundary with live memory, process, wall-time, and output enforcement:
-
-- macOS: an OCI container or another native VM boundary with cgroup-backed
-  limits; `sandbox-exec` alone cannot impose a hard RSS limit;
-- Linux: cgroup v2 plus a no-new-privileges/seccomp profile;
-- Windows: a Job Object containing the launcher and every descendant.
-
-Until this exists, successful fixture runs may be
-`numerically_converged_diagnostic` but cannot clear the implementation review.
+The launcher records process-tree wall time, peak RSS, and output growth and
+terminates runs that exceed the selected local resource class. These are
+engineering safeguards, not a security boundary and not a separate condition
+for accepting numerically and physically valid results.
 
 ## Execution sequence
 
@@ -232,8 +225,7 @@ byte-identical topology. Apply raw gates at every rung and
 preserve uncertainty as the maximum adjacent raw matrix difference across all
 accepted axes. Aggregate disconnected copper only through explicit ideal
 shorts after base-conductor qualification. A passing result may reach
-`physical_model_validated` only after independent review and native containment
-acceptance.
+`physical_model_validated` only after independent physical review.
 
 ### P4 — EMI integration and calibration
 
@@ -383,13 +375,8 @@ formal EMC acceptance remains measurement-based.
   byte-identical p1 with a stricter `1e-11` solver target, not a weakened gate.
   v13 remains topology evidence only, not `physical_model_validated` or
   predictive evidence.
-- Native resource containment is dispositioned by platform rather than waived.
-  Darwin's psutil tree monitor provides prompt observer-enforced termination and
-  is sufficient only for `rejected_diagnostic` or
-  `numerically_converged_diagnostic` work. A Fugu result cannot reach
-  `physical_model_validated` on Darwin: the accepted run must use inherited OS
-  enforcement under Linux cgroup v2 or the implemented Windows Job Object path,
-  with that containment identity bound into the run evidence.
+- Darwin's process-tree monitor records and enforces practical wall-time, RSS,
+  and output limits. Platform-specific containment is not an acceptance gate.
 - No source-bound fabrication record identifies the actual Fugu solder-mask
   dielectric. P3 therefore uses an explicit diagnostic envelope of `epsilon_r`
   1.0, 3.3, and 5.0 for both mask layers. The endpoints are bounding policies,

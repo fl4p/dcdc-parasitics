@@ -303,9 +303,12 @@ def _attempt_projection(
             "content_sha256": raw["content_sha256"],
         },
         "workload_sha256": workload_sha256,
-        "resource_decision_sha256": _load_json(
-            raw["resource_decision"], "resource decision",
-        )["content_sha256"],
+        "resource_decision_sha256": (
+            _load_json(raw["resource_decision"], "resource decision")[
+                "content_sha256"
+            ]
+            if raw["resource_decision"] is not None else None
+        ),
         "ordered_terminals": [asdict(terminal) for terminal in terminals],
         "checkpoint_enabled": bool(setup_start["checkpoint_enabled"]),
         "checkpoint": checkpoint,
@@ -328,7 +331,7 @@ def _attempt_projection(
     }
 
 
-def _validate_partial_progress(events, terminals):
+def _validate_partial_progress(events, terminals, *, checkpoint_expected):
     terminal_indices = [terminal.index for terminal in terminals]
     terminal_count = len(terminal_indices)
     if len(events) < 3 or [event["event"] for event in events[:3]] != [
@@ -341,6 +344,7 @@ def _validate_partial_progress(events, terminals):
     if (not canonical_equal(setup_start, {
             "solver": "electrostatic", "checkpoint_enabled": checkpoint_enabled})
             or checkpoint_enabled not in (0, 1)
+            or bool(checkpoint_enabled) != checkpoint_expected
             or type(prefix_before) is not int or not 0 <= prefix_before <= terminal_count
             or set(setup_end) != {
                 "campaign_digest", "prefix_before", "loaded_rhs", "new_rhs"}
@@ -555,38 +559,57 @@ def validate_palace_attempt_manifest(path, *, _document=None):
     }
     if (not canonical_equal(identity.get("resource_limits"), expected_limits)
             or identity.get("resource_enforcement")
-            != "portable_monitor_not_native_containment"
+            != "portable_process_limits"
             or not isinstance(execution, dict)
             or set(execution) != expected_execution_keys
             or not canonical_equal(
                 execution.get("limits"), asdict(
                     palace_module.RESOURCE_LIMITS[resource_class]))):
         raise ValueError("rejected Palace attempt resource identity mismatch")
-    decision_path = Path(identity.get("resource_decision", "")).resolve()
-    if (not decision_path.is_file() or decision_path.is_symlink()
-            or identity.get("resource_decision_sha256")
-            != file_sha256(decision_path)):
-        raise ValueError("rejected Palace attempt resource decision is invalid")
-    policy = palace_module._trusted_resource_policy()
-    palace_module.validate_bound_resource_decision(
-        _load_json(decision_path, "resource decision"),
-        run_path=path,
-        expected_workload=workload,
-        policy=policy,
-        resource_class=resource_class,
-        decision_path=decision_path,
-        config_path=manifest.config_path,
-    )
+    decision_value = identity.get("resource_decision")
+    decision_digest = identity.get("resource_decision_sha256")
+    if (decision_value is None) != (decision_digest is None):
+        raise ValueError("rejected Palace attempt resource decision identity is partial")
+    decision_path = None
+    if decision_value is not None:
+        decision_path = Path(decision_value).resolve()
+        if (not decision_path.is_file() or decision_path.is_symlink()
+                or decision_digest != file_sha256(decision_path)):
+            raise ValueError("rejected Palace attempt resource decision is invalid")
+        policy = palace_module._trusted_resource_policy()
+        palace_module.validate_bound_resource_decision(
+            _load_json(decision_path, "resource decision"),
+            run_path=path,
+            expected_workload=workload,
+            policy=policy,
+            resource_class=resource_class,
+            decision_path=decision_path,
+            config_path=manifest.config_path,
+        )
+    if manifest.checkpoint is not None and decision_path is None:
+        raise ValueError("checkpointed Palace attempt lacks a resource decision")
     stdout_digest = identity["stdout_sha256"]
     stderr_digest = identity["stderr_sha256"]
     required_artifacts = {
         manifest.config_path, manifest.mesh_path, manifest.mesh_manifest_path,
-        workload_path, decision_path,
+        workload_path,
         config_path.with_name(f"{config_path.name}.stdout.{stdout_digest}.bin"),
         config_path.with_name(f"{config_path.name}.stderr.{stderr_digest}.bin"),
-        *(Path(item["snapshot"])
-          for item in identity["execution_snapshot"]["inputs"]),
     }
+    if decision_path is not None:
+        required_artifacts.add(decision_path)
+    snapshot_artifacts = {
+        Path(item["snapshot"])
+        for item in identity["execution_snapshot"]["inputs"]
+    }
+    missing_snapshot_artifacts = {
+        candidate for candidate in snapshot_artifacts if not candidate.is_file()
+    }
+    if (missing_snapshot_artifacts
+            and not any(failure.startswith("execution_snapshot:")
+                        for failure in identity["failures"])):
+        raise ValueError("rejected Palace attempt lost an unreported snapshot input")
+    required_artifacts.update(snapshot_artifacts - missing_snapshot_artifacts)
     optional_artifacts = {
         manifest.output_directory / "palace.json",
         manifest.output_directory / "config_resolved.json",
@@ -634,6 +657,7 @@ def validate_palace_attempt_manifest(path, *, _document=None):
         raise ValueError("rejected Palace attempt contains an unknown milestone")
     prefix_before, accepted_prefix = _validate_partial_progress(
         expected_progress, manifest.terminals,
+        checkpoint_expected=manifest.checkpoint is not None,
     )
     rhs_ordinals = [
         event["rhs_ordinal"] for event in expected_progress

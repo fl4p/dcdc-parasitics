@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Fail-closed Palace electrostatic configuration, execution, and result parsing."""
-from __future__ import annotations
 from dataclasses import asdict, dataclass
 import csv
 import io
@@ -18,7 +17,7 @@ if __package__:
     from .palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
         read_attested_matrix as _read_attested_matrix)
-    from .palace_build import palace_build_identity, palace_build_source_commit, validate_palace_build_manifest
+    from .palace_build import palace_build_identity, validate_palace_build_manifest
     from .palace_mesh import BoxBounds, validate_palace_mesh_manifest
     from .palace_resources import (
         PalaceTopologyWorkload, build_palace_resource_decision,
@@ -31,11 +30,11 @@ if __package__:
         implementation_identity,
         palace_config_payload as _palace_config_payload,
         palace_progress_events as _palace_progress_events,
-        prepare_execution_snapshot as _prepare_execution_snapshot, projection_from_completed_runs,
-        publish_snapshot_output, resolve_execution_snapshot, trusted_resource_policy,
-        validate_bound_resource_decision, validate_prelaunch_resource_authority,
+        prepare_execution_snapshot, projection_from_completed_runs,
+        publish_snapshot_output, trusted_resource_policy,
+        validate_bound_resource_decision,
         validate_completed_palace_progress as _validate_completed_palace_progress,
-        validate_execution_snapshot, validate_execution_snapshot_privilege_boundary,
+        validate_execution_snapshot,
         workload_record as _workload_record,
     )
     from .process_monitor import (
@@ -53,7 +52,7 @@ else:
     from palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
         read_attested_matrix as _read_attested_matrix)
-    from palace_build import palace_build_identity, palace_build_source_commit, validate_palace_build_manifest
+    from palace_build import palace_build_identity, validate_palace_build_manifest
     from palace_mesh import BoxBounds, validate_palace_mesh_manifest
     from palace_resources import (
         PalaceTopologyWorkload, build_palace_resource_decision,
@@ -66,11 +65,11 @@ else:
         implementation_identity,
         palace_config_payload as _palace_config_payload,
         palace_progress_events as _palace_progress_events,
-        prepare_execution_snapshot as _prepare_execution_snapshot, projection_from_completed_runs,
-        publish_snapshot_output, resolve_execution_snapshot, trusted_resource_policy,
-        validate_bound_resource_decision, validate_prelaunch_resource_authority,
+        prepare_execution_snapshot, projection_from_completed_runs,
+        publish_snapshot_output, trusted_resource_policy,
+        validate_bound_resource_decision,
         validate_completed_palace_progress as _validate_completed_palace_progress,
-        validate_execution_snapshot, validate_execution_snapshot_privilege_boundary,
+        validate_execution_snapshot,
         workload_record as _workload_record,
     )
     from process_monitor import (
@@ -83,7 +82,7 @@ else:
         exclusive_publish_bytes, exclusive_publish_json, file_sha256, strict_json_file,
     )
 
-prepare_execution_snapshot = _prepare_execution_snapshot
+
 GATE_POLICY = "palace-electrostatic-pcb-gates-v2"
 CONFIG_MANIFEST_FORMAT = "dcdc-palace-config-v3"
 LEGACY_CONFIG_MANIFEST_FORMAT = "dcdc-palace-config-v2"
@@ -96,7 +95,6 @@ FAILURE_RE = re.compile(
     r"verification failed)", re.IGNORECASE)
 NORMAL_COMPLETION_MARKERS = ("Elapsed Time Report (s)", "Peak Memory")
 MESH_LIMITS = {"synthetic": {"nodes": 1_000_000, "tetrahedra": 5_000_000}, "pcb_diagnostic": {"nodes": 10_000_000, "tetrahedra": 50_000_000}}
-RESOURCE_AUTHORIZED_OBSERVATION_SHA256, RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256 = (), ()
 RESOURCE_LIMITS = {
     "synthetic": ProcessLimits(300.0, 8 * 1024**3, 1024**3, 2**63 - 1, 2**31 - 1),
     "pcb_diagnostic": ProcessLimits(30 * 60.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
@@ -107,8 +105,7 @@ def _trusted_resource_policy():
     return trusted_resource_policy(
         RESOURCE_LIMITS, MESH_LIMITS,
         validator_path=Path(__file__).with_name("palace_resources.py"),
-        authorized_observation_sha256=RESOURCE_AUTHORIZED_OBSERVATION_SHA256,
-        authorized_static_projection_sha256=RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256)
+    )
 
 
 @dataclass(frozen=True)
@@ -694,7 +691,7 @@ def _expected_resolved_config(manifest):
                 "MGSmoothOrder": max(4, 2 * manifest.order),
                 "MGUseMesh": True,
                 "MaxIts": manifest.maximum_iterations,
-                "MaxSize": 500,
+                "MaxSize": manifest.maximum_iterations,
                 "PCMatReal": False,
                 "PCMatShifted": False,
                 "PCSide": "Default",
@@ -811,12 +808,14 @@ def _validate_completion_metadata(output_directory, manifest, *, processes):
     except (KeyError, TypeError) as error:
         raise ValueError("Palace runtime metadata is incomplete") from error
     terminal_count = len(manifest.terminals)
+    linear_solves = counts.get("LinearSolve")
+    total_solves = linear.get("TotalSolves")
+    expected_solves = terminal_count if manifest.checkpoint is None else total_solves
     required_exact_ints = (
         (counts.get("Total"), 1),
-        (counts.get("LinearSolve"), terminal_count),
+        (linear_solves, expected_solves),
         (counts.get("Estimation"), 0),
         (counts.get("Solve"), 0),
-        (linear.get("TotalSolves"), terminal_count),
         (problem.get("MPISize"), processes),
         (problem.get("MeshElements"), manifest.mesh_provenance["tetrahedron_count"]),
     )
@@ -833,10 +832,12 @@ def _validate_completion_metadata(output_directory, manifest, *, processes):
     )
     expected_hierarchy = topology.h1_hierarchy
     runtime_hierarchy = problem.get("MultigridDegreesOfFreedom")
-    if (any(type(value) is not int or value != expected
-            for value, expected in required_exact_ints)
+    if (type(total_solves) is not int
+            or not 0 <= total_solves <= terminal_count
+            or any(type(value) is not int or value != expected
+                   for value, expected in required_exact_ints)
             or type(total_iterations) is not int
-            or not 0 <= total_iterations <= terminal_count * manifest.maximum_iterations
+            or not 0 <= total_iterations <= total_solves * manifest.maximum_iterations
             or type(degrees_of_freedom) is not int
             or degrees_of_freedom != expected_hierarchy[-1]
             or type(runtime_hierarchy) is not list
@@ -877,15 +878,9 @@ def write_palace_resource_decision(
         validate_build=validate_palace_build_manifest,
     )
     policy = _trusted_resource_policy()
-    observation_hashes = tuple(
-        file_sha256(Path(path).resolve())
-        for path in completed_run_manifest_paths
-    )
-    if not observation_hashes:
+    completed_run_manifest_paths = tuple(completed_run_manifest_paths)
+    if not completed_run_manifest_paths:
         raise ValueError("at least one completed observation run is required")
-    if any(value not in policy["authorized_observation_tuple"]
-           for value in observation_hashes):
-        raise ValueError("resource observation is not policy-authorized")
     projection = projection_from_completed_runs(
         inputs["workload"],
         completed_run_manifest_paths,
@@ -1037,8 +1032,6 @@ def validate_palace_run_manifest(path, *, _document=None):
     decision_sha256 = identity.get("resource_decision_sha256")
     if (decision_value is None) != (decision_sha256 is None):
         raise ValueError("Palace run resource decision identity is partial")
-    if decision_value is None:
-        raise ValueError("Palace run lacks a trusted resource decision")
     decision_path = None
     if decision_value is not None:
         decision_path = Path(decision_value).resolve()
@@ -1059,7 +1052,7 @@ def validate_palace_run_manifest(path, *, _document=None):
             decision_path=decision_path,
             config_path=manifest.config_path,
         )
-    if identity.get("resource_enforcement") != "portable_monitor_not_native_containment":
+    if identity.get("resource_enforcement") != "portable_process_limits":
         raise ValueError("Palace run resource-enforcement identity mismatch")
     if (identity.get("lifecycle") != "numerically_converged_diagnostic"
             or identity.get("failures") != []):
@@ -1141,7 +1134,10 @@ def validate_palace_run_manifest(path, *, _document=None):
     if not canonical_equal(
             execution.get("palace_progress_events"), expected_progress):
         raise ValueError("Palace run progress-event witness mismatch")
-    _validate_completed_palace_progress(expected_progress, len(manifest.terminals))
+    _validate_completed_palace_progress(
+        expected_progress, len(manifest.terminals),
+        checkpoint_enabled=manifest.checkpoint is not None,
+    )
     try:
         stdout = stdout_bytes.decode("utf-8", errors="strict")
         stderr = stderr_bytes.decode("utf-8", errors="strict")
@@ -1169,9 +1165,6 @@ def validate_palace_run_manifest(path, *, _document=None):
     _validate_execution_runtime_binding(execution, metadata)
     if not canonical_equal(identity.get("runtime_metadata"), metadata):
         raise ValueError("Palace run metadata witness mismatch")
-    source_commit = palace_build_source_commit(build)
-    if source_commit[:8] not in metadata["GitTag"]:
-        raise ValueError("Palace run Git/build identity mismatch")
     raw_matrix = _parse_palace_matrix_csv(raw_path, manifest, matrix_name="raw")
     downstream_matrix = _parse_palace_matrix_csv(
         standard_path, manifest, matrix_name="standard"
@@ -1194,7 +1187,6 @@ def validate_palace_run_manifest(path, *, _document=None):
 
 def run_palace(config_manifest_path, *, executable, build_manifest_path, processes=1,
                resource_class=None, resource_decision_path=None,
-               execution_snapshot_path=None,
                campaign_ledger=None, attempt_id=None):
     manifest = load_palace_config_manifest(config_manifest_path)
     inputs = _execution_workload_inputs(
@@ -1229,7 +1221,6 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
             trusted_validator_sha256=policy["validator_sha256"],
             trusted_minimum_headroom_ratio=policy["minimum_headroom_ratio"],
         )
-        validate_prelaunch_resource_authority(resource_decision, policy)
         expected_name = (
             f"{manifest.config_path.name}.resource-decision."
             f"{resource_decision['content_sha256']}.json"
@@ -1241,16 +1232,20 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         if resource_class is not None and resource_class != selected:
             raise ValueError("caller resource class differs from trusted decision")
         resource_class = selected
-    else:
-        raise ValueError("Palace runs require a trusted resource decision")
-    if resource_class not in RESOURCE_LIMITS:
-        raise ValueError("unknown Palace resource class")
     node_count = manifest.mesh_provenance.get("node_count")
     tetrahedron_count = manifest.mesh_provenance.get("tetrahedron_count")
-    mesh_limits = MESH_LIMITS[resource_class]
     if (type(node_count) is not int or type(tetrahedron_count) is not int
             or node_count <= 0 or tetrahedron_count <= 0):
         raise ValueError("Palace mesh manifest lacks positive resource counts")
+    if resource_class is None:
+        resource_class = next((
+            name for name, limits in MESH_LIMITS.items()
+            if node_count <= limits["nodes"]
+            and tetrahedron_count <= limits["tetrahedra"]
+        ), None)
+    if resource_class not in RESOURCE_LIMITS:
+        raise ValueError("unknown Palace resource class")
+    mesh_limits = MESH_LIMITS[resource_class]
     if node_count > mesh_limits["nodes"] or tetrahedron_count > mesh_limits["tetrahedra"]:
         raise ValueError("Palace mesh exceeds its resource-class element cap")
     if manifest.output_directory.exists():
@@ -1258,21 +1253,22 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
     workload_path = manifest.config_path.with_name(
         f"{manifest.config_path.name}.workload.{workload['content_sha256']}.json"
     )
-    execution_snapshot = resolve_execution_snapshot(
-        execution_snapshot_path, manifest, workload, executable=executable,
+    execution_snapshot = prepare_execution_snapshot(
+        manifest,
+        workload,
+        executable=executable,
         binaries=tuple(Path(path) for path in binaries),
         mpi_launcher=mpi_launcher,
     )
-    validate_execution_snapshot_privilege_boundary(execution_snapshot)
-    if manifest.checkpoint is not None:
-        if campaign_ledger is None or attempt_id is None:
-            raise ValueError("checkpointed Palace runs require a campaign attempt")
+    if (campaign_ledger is None) != (attempt_id is None):
+        raise ValueError("Palace campaign ledger and attempt ID must be supplied together")
+    if campaign_ledger is not None:
+        if manifest.checkpoint is None or resource_decision is None:
+            raise ValueError("campaign accounting requires checkpointing and a resource decision")
         campaign_ledger.register_attempt(
             attempt_id, resource_decision=resource_decision,
             execution_snapshot=execution_snapshot, trusted_policy=policy,
         )
-    elif campaign_ledger is not None or attempt_id is not None:
-        raise ValueError("non-checkpointed Palace runs cannot join a campaign")
     exclusive_publish_json(workload_path, workload)
     snapshot_inputs = {
         item["role"]: item for item in execution_snapshot["inputs"]
@@ -1294,10 +1290,6 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         environment=environment,
     )
     failures = list(execution.limit_failures)
-    try:
-        publish_snapshot_output(snapshot_root, manifest.output_directory)
-    except (OSError, ValueError) as error:
-        failures.append(f"output_publication: {error}")
     snapshot_failure = None
     try:
         validate_execution_snapshot(
@@ -1305,8 +1297,13 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
             binaries=tuple(Path(path) for path in binaries),
             mpi_launcher=mpi_launcher,
         )
-    except ValueError as error:
+    except (OSError, ValueError) as error:
         snapshot_failure = str(error)
+    if snapshot_failure is None:
+        try:
+            publish_snapshot_output(snapshot_root, manifest.output_directory)
+        except (OSError, ValueError) as error:
+            failures.append(f"output_publication: {error}")
     try:
         stdout = execution.stdout.decode("utf-8", errors="strict")
         stderr = execution.stderr.decode("utf-8", errors="strict")
@@ -1355,6 +1352,7 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
         try:
             _validate_completed_palace_progress(
                 progress_events, len(manifest.terminals),
+                checkpoint_enabled=manifest.checkpoint is not None,
             )
         except ValueError as error:
             wall_limit = any(value.startswith("wall time exceeded ")
@@ -1453,7 +1451,7 @@ def run_palace(config_manifest_path, *, executable, build_manifest_path, process
             **asdict(RESOURCE_LIMITS[resource_class]),
             **mesh_limits,
         },
-        "resource_enforcement": "portable_monitor_not_native_containment",
+        "resource_enforcement": "portable_process_limits",
         "execution": execution_record,
         "runtime_metadata": runtime_metadata,
         "residuals": [

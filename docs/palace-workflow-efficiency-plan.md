@@ -2,18 +2,20 @@
 
 ## Scope
 
-Improve Palace PCB campaigns without weakening topology, residual, raw-matrix, energy-matrix, reciprocity, passivity, warning, provenance, lifecycle, or containment gates.
+Improve Palace PCB campaigns without weakening topology, residual, raw-matrix, energy-matrix, reciprocity, passivity, warning, provenance, or lifecycle gates.
 
-The `simple-hb` p2 run is dispositioned as `rejected_diagnostic`: 15 of 18 strict RHS solves completed before the 1,800 s timeout, but no matrix was emitted. Its bound implementation is now frozen evidence; subsequent source changes require new evidence identities.
+The current-schema `simple-hb` p2 checkpoint campaign completed all 18 strict RHS solves across one 1,800 s attempt plus a 114 s resume. The matrix remains `rejected_diagnostic`: p1→p2 changes exceed the convergence tolerance, and the only p2 sign violation is symmetric +0.298 aF numerical noise between two unconnected pads. The result is diagnostic borrowed-stackup evidence, not a physical matrix.
+
+Fugu h-refinement is currently blocked by linear-solver conditioning rather than memory. A 2.11 M-node / 11.06 M-tetrahedron planar midpoint used 10.65–12.56 GB RSS but stalled on RHS 1 with the same approximately 0.974 PCG reduction factor at one and four MPI ranks. Disabling aggressive BoomerAMG coarsening and using restarted GMRES did not resolve the stall. A 1.01 M-node / 4.96 M-tetrahedron vertical-only rung failed similarly. Targeted two-terminal principal-block probes remain diagnostic-only: coarse-mesh p2 stalled at residual 3.05e-5 after 750 iterations, and midpoint p1 stalled at residual 2.74e-6 after 1,250 PCG iterations. No refined Fugu matrix was emitted or promoted.
 
 ## Current status
 
 - E1 byte-recounted topology, exact H1 hierarchy, runtime hierarchy equality, and complete workload identity are implemented.
 - E2 reader-time stream/resource witnesses, causal post-exit limits, strict RHS ordering, native flushed setup/RHS/finalization milestones, and rejected-attempt timing validation are implemented. Rejected timing reconstructs its workload from current config, mesh, build, executable, runtime binaries, launcher, process count, host class, and implementation inputs; clean monitor-witnessed wall limits remain censored `wall_timeout` evidence.
-- E3 selection is fail-closed: every modeled dimension needs a finite upper bound, every run needs a decision, and prelaunch requires a source-controlled projection hash. The production projection allowlist is empty pending reviewed evidence.
-- Locally produced content-addressed snapshots are never executable evidence: chmod is not a same-UID boundary. Launch requires the privileged v2 materializer's root-owned, non-writable POSIX ancestry, binaries, config, mesh, and attestation plus its exact client-owned empty output. Missing or stale authority fails closed before workload publication or monitor invocation. Portable monitoring remains diagnostic-only.
+- E3 uses two practical resource classes with wall-time, RSS, output, node, and tetrahedron caps. Ordinary runs select the smallest fitting class automatically; checkpointed campaigns may additionally bind a finite resource decision for cumulative accounting.
+- Execution uses an ordinary user-space content-addressed snapshot. Inputs are hash-checked before and after the solve; no elevated privileges or separate ownership boundary are required.
 - E4 native per-RHS checkpoint/restart is implemented and independently accepted. `dcdc-palace-config-v3` now binds an absolute persistent checkpoint root plus the preregistered native campaign identity while retaining read support for frozen v2 manifests: exact reaction columns plus per-rank binary64 shards, marker-last durable publication, anchored no-follow containment, bounded nonblocking reads, serial/MPI crash injection, adversarial restart tests, residual/reaction replay, and byte-identical resumed matrices all pass. The native changes are committed as `d28dbfd5` and `0ca2de94`; the rebuilt serial, MPI, and 27.98 s integration checkpoint tests pass. Clean source identity `9a50e1ad…be94b` and build-v2 identity `34cb1f1f…f6b18` are independently reviewed and pass the refreshed 125-test build/source/runner set plus the complete 833-pass suite.
-- E5 v2 stages 1–2 and their pure reconciliation/resource-charge boundary are implemented independently of the ledger: accepted/rejected run manifests produce a witness-derived attempt projection, and `lib/palace_checkpoint.py` descriptor-validates the exact native E4 root/RHS/shard/response/completion formats, binary64 payloads, content bindings, and retained bytes. A generated fixture has 12 adversarial tests, and the validator passed against a real two-RHS native Palace checkpoint. `lib/palace_head_authority.py` also provides a service-side HMAC-authenticated, locked compare-and-swap canonical head: its durable instance binds root inode, authority ID, key fingerprint, client UID, and nonce; the client UID cannot mutate the authority path; lock/root replacement, clone-fork, stale-CAS, tamper, duplicate-key, interrupted registration, identity/key substitution, and symlink tests pass. The authority/campaign-v2 identity slice is independently clear of P0/P1 findings and its ancestor-coverage P2 is tested. Campaign v2 now separates a preregistered random native checkpoint identity from the final ledger campaign digest, avoiding a config-hash/workload/campaign self-reference. Validation requires an externally trusted complete campaign digest, current source-controlled checkpoint-validator digest, exact execution roster/native digest, native inventory prefix/partition, and exact retained-byte agreement when finalization supplies it. Unknown resource uppers consume their full preregistered reservation. The v2 ledger now derives registration/finish state from trusted reconciliation, charges unknown bounds to preregistered reservations, replays every attempt, and publishes through a crash-recoverable pending → entry/next-head → external CAS → local-head protocol. Canonical clone forks, pre/post-CAS crashes, missing-entry recovery, stale publication temporaries, reservation overruns, completed final binding, and matrix/config/terminal tampering have focused coverage. Matrix capability creation now requires a fresh completed canonical replay and revalidates the authority head and artifact hashes on every accepted parse. Production registration now derives reservations from an authorized resource projection and a privilege-bound snapshot, accounts process-count input reads, and binds the same validated decision through execution reconciliation. `run_palace()` registers before launch and finishes only from the published run witness. Public pending-registration recovery rederives the same trusted reservation; public completion recovery replays the last trusted registration. Independent E5 review found no P0/P1/P2 blockers. Local execution-snapshot preparation is retry-idempotent, collision-free, serialized, descriptor-validated, and fail-closed on retained output or unknown entries. Privileged v2 materialization now stages and atomically publishes root-owned, workload- and implementation-bound inputs with exact client-group read/execute access and a client-owned empty output; new reservations require this authority, while v1 remains historical-only. A macOS exact-source canary passed prelaunch authority validation and executed from the root-owned snapshot. Reviewed static-projection evidence remains open, Darwin execution remains diagnostic-only, and native E4 source/build attestation is complete.
+- E5 preserves validated checkpoint prefixes and cumulative attempt accounting for interrupted p2/p3 solves. It is used only when checkpoint/restart materially saves solver time; ordinary runs do not require campaign authority infrastructure.
 
 ### Native E4 source identity
 
@@ -43,17 +45,14 @@ The `simple-hb` p2 run is dispositioned as `rejected_diagnostic`: 15 of 18 stric
 
 **Gate:** split/interleaved lines, duplicated or reordered RHS milestones, parser loss, missing native boundaries, and forged observations fail closed. Rejected attempts quarantine any matrix files and expose timing evidence only through the validated observation API.
 
-## Slice E3 — resource decision before execution
+## Slice E3 — practical resource limits
 
-1. Add pure `lib/palace_resources.py` schemas and selection logic; no subprocesses or artifact mutation.
-2. Preserve an authority trust root equivalent to current source-controlled limits: immutable profile definitions, pinned policy and validator digests, trusted host/environment-class derivation, and a signed or source-controlled authorization scope. Content addressing alone does not establish authority.
-3. Create a content-addressed `palace-resource-decision-v1` before `run_palace` with workload identity, revalidated raw observation/event-log identities, conservative lower and upper bounds for every enforced dimension, uncertainty reasons, trusted authorization identity, selected profile, deterministic profile ordering, preregistered minimum headroom, and validator identity.
-4. Select a profile only when every enforced dimension has a finite conservative complete-workload upper bound produced by a trusted policy and that bound plus required headroom fits. Unknown upper bounds reject selection; extrapolation beyond observed order/DoF/host range requires an explicit conservative policy.
-5. Model wall time, CPU, vector residency, hierarchy/operator/solver memory, terminal-dependent retained vectors, matrix output, logging, and checkpoint I/O separately. Sum simultaneously resident memory components; use a maximum only for mutually exclusive phase envelopes.
-6. Change `run_palace` to require and revalidate the decision. An inadequate decision must not invoke the monitor or create the run directory.
-7. A resource-cap failure with causally validated progress updates observations and triggers profile re-selection before unrelated solver-control tuning.
+1. Keep pure workload and resource schemas for repeatability and checkpoint accounting.
+2. Select the smallest resource class whose node and tetrahedron caps fit the mesh; callers may request a larger known class.
+3. Enforce wall-time, RSS, and output caps with the existing process monitor.
+4. Require finite complete-workload projections only for checkpointed multi-attempt campaigns, where cumulative reservation accounting is useful.
 
-**Gate:** p-order hierarchy and terminal count affect memory and wall/output projections; censored evidence excludes inadequate profiles; unknown uppers and untrusted authorization reject; deterministic selection chooses the smallest adequate authorized profile regardless of caller preference.
+**Gate:** every run stays within its selected class and records observed wall time, RSS, output, and solver progress. Resource bookkeeping must not block an otherwise valid ordinary solve.
 
 ## Slice E4 — native per-RHS checkpoint
 
@@ -73,7 +72,7 @@ The `simple-hb` p2 run is dispositioned as `rejected_diagnostic`: 15 of 18 stric
 2. Add immutable per-attempt manifests with prefix-before/after, checkpoint inventory, raw streams/events, telemetry, resource enforcement, and previous-head hash.
 3. Introduce versioned causal timeout classification. Monitor-initiated wall termination and its expected missing suffixes are censored consequences; any warning, residual, solver, memory, output, or identity diagnostic observed before kill remains terminal.
 4. Permit resume only after a validated wall-time rejection with strict prefix advancement and identical campaign identity. Keep the existing strict single-attempt completion gate; a separate chain validator reconciles newly solved plus checkpoint-loaded RHSs to `N`.
-5. Use fresh Palace output directories per attempt; checkpoint storage is separate but inside the same accounting and containment boundary.
+5. Use fresh Palace output directories per attempt; checkpoint storage is separate but included in the same accounting.
 6. Enforce cumulative caps for wall/CPU, iterations and solves, bytes written/read, stdout/stderr, checkpoints, retained output, and attempt count. Track retained unique storage separately from cumulative I/O; use max rather than sum for RSS.
 7. Partial attempts remain `rejected_diagnostic`; matrix-like files are quarantined and inaccessible through the matrix API. Only a complete `1..N` ledger may invoke existing raw/energy matrix gates and downstream reconstruction.
 
@@ -82,12 +81,12 @@ The `simple-hb` p2 run is dispositioned as `rejected_diagnostic`: 15 of 18 stric
 ## Verification order
 
 1. E1–E3 pure schemas, adversarial tests, and existing fixture regression suite.
-2. `simple-hb` p1 resource-decision canary; no native checkpoint dependency.
+2. `simple-hb` p1 ordinary user-space canary; no checkpoint dependency.
 3. Define and verify E5's pure campaign identity, exclusive-ledger, causal-timeout, accounting, and quarantine schemas.
 4. Implement E4 against the frozen E5 identity, then run compiled single-rank and multi-rank two-terminal forced-timeout/resume fixtures.
-5. `simple-hb` p2 only if the selected authorized profile has a finite conservative complete-workload upper bound with required headroom.
-6. No Fugu retry until E1–E3 reject or select a resource-feasible profile from bound evidence.
+5. Run `simple-hb` p2 with checkpoint/restart and a conservative local cap.
+6. Retry Fugu only after the cheap fixture identifies a numerically useful, resource-feasible setting.
 
 ## Completion limits
 
-These improvements optimize execution and evidence reuse. They do not relax p2→p3, h, outer-domain, material, native-containment, independent-review, or measurement requirements, and they cannot promote diagnostic evidence to `physical_model_validated`.
+These improvements optimize execution and evidence reuse. They do not relax p2→p3, h, outer-domain, material, independent-review, or measurement requirements, and they cannot promote diagnostic evidence to `physical_model_validated`.

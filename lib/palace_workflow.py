@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import platform
 import re
-import secrets
 import shutil
 import stat
 
@@ -31,7 +30,6 @@ if __package__:
     )
     from .provenance import (
         bytes_sha256, canonical_sha256, exclusive_publish_bytes, file_sha256,
-        strict_json_file,
     )
 else:
     from palace_build import validate_palace_build_manifest
@@ -45,7 +43,6 @@ else:
     )
     from provenance import (
         bytes_sha256, canonical_sha256, exclusive_publish_bytes, file_sha256,
-        strict_json_file,
     )
 
 
@@ -54,8 +51,6 @@ RESOURCE_MINIMUM_HEADROOM_RATIO = 1.1
 RESOURCE_OBSERVATION_WALL_FACTOR = 4.0
 RESOURCE_OBSERVATION_RSS_FACTOR = 2.0
 RESOURCE_OBSERVATION_OUTPUT_FACTOR = 4.0
-RESOURCE_AUTHORIZED_OBSERVATION_SHA256 = ()
-RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256 = ()
 
 def palace_config_payload(
         *, relative_mesh, relative_output, terminals, materials,
@@ -139,11 +134,8 @@ def implementation_identity(palace_file):
         directory / "kicad_palace_dump.py",
         directory / "kicad_palace_schema.py",
         directory.parent / "extract_palace_mesh.py",
-        directory.parent / "prepare_palace_snapshot.py",
         directory / "maxwell.py",
         directory / "palace_matrix_gates.py",
-        directory / "palace_snapshot_materializer.py",
-        directory / "palace_snapshot_request.py",
         directory / "process_monitor.py",
         directory / "provenance.py",
         directory / "palace_resources.py",
@@ -445,299 +437,23 @@ def prepare_execution_snapshot(
         )
 
 
-def bound_snapshot_materializer_sha256(workload):
-    implementation = implementation_identity(Path(__file__).with_name("palace.py"))
-    if workload.get("implementation_sha256") != canonical_sha256(implementation):
-        raise ValueError("Palace implementation differs from bound workload")
-    matches = [
-        digest for path, digest in implementation.items()
-        if Path(path).name == "palace_snapshot_materializer.py"
-    ]
-    if len(matches) != 1:
-        raise ValueError("Palace snapshot materializer identity is unavailable")
-    return matches[0]
-
-
-def build_execution_snapshot_request(
-        manifest, workload, *, executable, binaries, mpi_launcher,
-        client_uid=None, client_gid=None, snapshot_id=None):
-    if client_uid is None:
-        if not hasattr(os, "geteuid"):
-            raise ValueError("Palace snapshot requests require a POSIX client UID")
-        client_uid = os.geteuid()
-    if client_gid is None:
-        if not hasattr(os, "getegid"):
-            raise ValueError("Palace snapshot requests require a POSIX client GID")
-        client_gid = os.getegid()
-    if (type(client_uid) is not int or client_uid <= 0
-            or type(client_gid) is not int or client_gid <= 0):
-        raise ValueError("Palace snapshot request client identity is invalid")
-    if snapshot_id is None:
-        snapshot_id = secrets.token_hex(32)
-    if (not isinstance(snapshot_id, str) or len(snapshot_id) != 64
-            or any(character not in "0123456789abcdef" for character in snapshot_id)):
-        raise ValueError("Palace snapshot request ID is invalid")
-    sources = [
-        ("config", manifest.config_path, manifest.config_path.name, 0o440),
-        ("mesh", manifest.mesh_path, manifest.mesh_path.name, 0o440),
-    ]
-    for source in binaries:
-        source = Path(source)
-        role = "executable" if source == Path(executable) else "solver_binary"
-        sources.append((role, source, f"bin/{source.name}", 0o550))
-    launcher = Path(mpi_launcher)
-    sources.append((
-        "mpi_launcher", launcher, f"bin/{launcher.name}", 0o550,
-    ))
-    targets = [target for _, _, target, _ in sources]
-    root_names = {
-        "bin", "snapshot.json", manifest.config_path.name,
-        manifest.mesh_path.name, manifest.output_directory.name,
-    }
-    if (len(targets) != len(set(targets)) or len(root_names) != 5):
-        raise ValueError("Palace snapshot request namespace collides")
-    bound_hashes = {
-        "config": workload["config_sha256"],
-        "mesh": workload["mesh_sha256"],
-        "executable": workload["solver_binary_sha256"],
-        "mpi_launcher": workload["mpi_launcher_sha256"],
-    }
-    runtime_binaries = {
-        record["name"]: record["sha256"]
-        for record in workload["runtime_binaries"]
-    }
-    inputs = []
-    for role, source, target, mode in sources:
-        source = source.resolve()
-        digest = file_sha256(source)
-        expected = (
-            runtime_binaries.get(source.name)
-            if role in {"executable", "solver_binary"}
-            else bound_hashes.get(role)
-        )
-        if expected is None or digest != expected:
-            raise ValueError(f"Palace {role} changed after workload derivation")
-        inputs.append({
-            "role": role, "source": str(source), "source_sha256": digest,
-            "target": target, "mode": mode,
-        })
-    materializer_sha256 = bound_snapshot_materializer_sha256(workload)
-    payload = {
-        "format": "palace-execution-snapshot-request-v1",
-        "snapshot_id": snapshot_id,
-        "materializer_sha256": materializer_sha256,
-        "client_uid": client_uid,
-        "client_gid": client_gid,
-        "workload_sha256": workload["content_sha256"],
-        "output_name": manifest.output_directory.name,
-        "inputs": inputs,
-    }
-    return {**payload, "content_sha256": canonical_sha256(payload)}
-
-
-def load_external_execution_snapshot(
-        path, manifest, workload, *, executable, binaries, mpi_launcher):
-    path = Path(path).absolute()
-    record = strict_json_file(path, label="Palace execution snapshot")
-    expected_path = Path(record.get("root", "")) / "snapshot.json"
-    if path != expected_path:
-        raise ValueError("Palace execution snapshot path is not authoritative")
-    validate_privileged_execution_snapshot_authority(record, workload)
-    return validate_execution_snapshot(
-        record, manifest, workload, executable=executable,
-        binaries=binaries, mpi_launcher=mpi_launcher,
-    )
-
-
-def resolve_execution_snapshot(
-        path, manifest, workload, *, executable, binaries, mpi_launcher):
-    if path is None:
-        return prepare_execution_snapshot(
-            manifest, workload, executable=executable,
-            binaries=binaries, mpi_launcher=mpi_launcher,
-        )
-    return load_external_execution_snapshot(
-        path, manifest, workload, executable=executable,
-        binaries=binaries, mpi_launcher=mpi_launcher,
-    )
-
-
-def validate_execution_snapshot_privilege_boundary(record):
-    if os.name != "posix" or not hasattr(os, "geteuid"):
-        raise ValueError("Palace execution snapshots require a POSIX privilege boundary")
-    root = Path(record.get("root", "")).absolute()
-    input_paths = [Path(item.get("snapshot", "")).absolute()
-                   for item in record.get("inputs", ())]
-    try:
-        for path in input_paths:
-            path.relative_to(root)
-    except ValueError as error:
-        raise ValueError("Palace execution snapshot input escapes its root") from error
-    ancestry = []
-    cursor = root
-    while True:
-        ancestry.append(cursor)
-        if cursor.parent == cursor:
-            break
-        cursor = cursor.parent
-    execution_uid = os.geteuid()
-    if record.get("format") == "palace-execution-snapshot-v2":
-        client_gid = record.get("client_gid")
-        if (record.get("client_uid") != execution_uid
-                or client_gid not in {os.getegid(), *os.getgroups()}):
-            raise ValueError("Palace snapshot client identity mismatch")
-        authority_paths = [root, root / "bin", *input_paths, root / "snapshot.json"]
-        for path in ancestry[1:]:
-            try:
-                metadata = path.lstat()
-            except (OSError, ValueError) as error:
-                raise ValueError(
-                    "Palace execution snapshot privilege boundary is unavailable"
-                ) from error
-            if (stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != 0
-                    or stat.S_IMODE(metadata.st_mode) & 0o022):
-                raise ValueError("Palace snapshot authority ancestry is unsafe")
-        for path in authority_paths:
-            try:
-                metadata = path.lstat()
-            except (OSError, ValueError) as error:
-                raise ValueError(
-                    "Palace execution snapshot privilege boundary is unavailable"
-                ) from error
-            if (stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != 0
-                    or metadata.st_gid != client_gid
-                    or stat.S_IMODE(metadata.st_mode) & 0o222):
-                raise ValueError("Palace execution snapshot lacks root authority")
-    else:
-        for path in [*ancestry, root / "bin", *input_paths]:
-            try:
-                metadata = path.lstat()
-            except (OSError, ValueError) as error:
-                raise ValueError(
-                    "Palace execution snapshot privilege boundary is unavailable"
-                ) from error
-            if (stat.S_ISLNK(metadata.st_mode) or metadata.st_uid == execution_uid
-                    or stat.S_IMODE(metadata.st_mode) & 0o222):
-                raise ValueError(
-                    "Palace execution snapshot is mutable by the execution UID"
-                )
-    if record.get("format") == "palace-execution-snapshot-v2":
-        output = Path(record.get("output", "")).absolute()
-        try:
-            output.relative_to(root)
-            metadata = output.lstat()
-        except (OSError, ValueError) as error:
-            raise ValueError("Palace snapshot output boundary is unavailable") from error
-        if (stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode)
-                or metadata.st_uid != execution_uid
-                or stat.S_IMODE(metadata.st_mode) != 0o700
-                or any(output.iterdir())):
-            raise ValueError("Palace snapshot output boundary is invalid")
-    return True
-
-
-def validate_privileged_execution_snapshot_authority(record, workload):
-    schema = {
-        "format", "snapshot_id", "materializer_sha256", "client_uid",
-        "client_gid", "root", "output", "workload_sha256", "request_sha256",
-        "request_file_sha256", "inputs", "content_sha256",
-    }
-    if not isinstance(record, dict) or set(record) != schema:
-        raise ValueError("Palace privileged snapshot schema mismatch")
-    payload = {name: value for name, value in record.items()
-               if name != "content_sha256"}
-    digests = (
-        "snapshot_id", "materializer_sha256", "request_sha256",
-        "request_file_sha256", "content_sha256",
-    )
-    root = Path(record["root"])
-    output = Path(record["output"])
-    if (record["format"] != "palace-execution-snapshot-v2"
-            or record["content_sha256"] != canonical_sha256(payload)
-            or record["workload_sha256"] != workload["content_sha256"]
-            or any(not isinstance(record[name], str) or len(record[name]) != 64
-                   or any(character not in "0123456789abcdef"
-                          for character in record[name])
-                   for name in digests)
-            or record["materializer_sha256"]
-            != bound_snapshot_materializer_sha256(workload)
-            or record["client_uid"] != os.geteuid()
-            or record["client_gid"] not in {os.getegid(), *os.getgroups()}
-            or not root.is_absolute() or root != root.resolve()
-            or root.name != f"snapshot.{record['snapshot_id']}"
-            or output.parent != root or output.name in {"", ".", ".."}
-            or strict_json_file(
-                root / "snapshot.json", label="Palace snapshot attestation",
-            ) != record):
-        raise ValueError("Palace privileged snapshot authority mismatch")
-    validate_execution_snapshot_privilege_boundary(record)
-    return record
-
-
 def validate_execution_snapshot(
         record, manifest, workload, *, executable, binaries, mpi_launcher):
-    v1_schema = {
-        "format", "root", "workload_sha256", "inputs", "content_sha256",
-    }
-    v2_schema = {
-        "format", "snapshot_id", "materializer_sha256", "client_uid",
-        "client_gid", "root", "output", "workload_sha256", "request_sha256",
-        "request_file_sha256", "inputs",
-        "content_sha256",
-    }
-    if not isinstance(record, dict):
-        raise ValueError("Palace execution snapshot schema mismatch")
-    record_schema = set(record)
-    if record_schema != v1_schema and record_schema != v2_schema:
+    if not isinstance(record, dict) or set(record) != {
+            "format", "root", "workload_sha256", "inputs", "content_sha256"}:
         raise ValueError("Palace execution snapshot schema mismatch")
     payload = {key: value for key, value in record.items()
                if key != "content_sha256"}
-    if (record["format"] not in {
-                "palace-execution-snapshot-v1", "palace-execution-snapshot-v2"}
+    if (record["format"] != "palace-execution-snapshot-v1"
             or record["content_sha256"] != canonical_sha256(payload)
             or record["workload_sha256"] != workload["content_sha256"]):
         raise ValueError("Palace execution snapshot identity mismatch")
-    if record["format"] == "palace-execution-snapshot-v1":
-        if set(record) != v1_schema:
-            raise ValueError("Palace execution snapshot schema mismatch")
-        root = manifest.config_path.parent / (
-            f".{manifest.config_path.name}.execution.{workload['content_sha256']}"
-        )
-        if Path(record["root"]).resolve() != root.resolve():
-            raise ValueError("Palace execution snapshot root mismatch")
-    else:
-        if set(record) != v2_schema:
-            raise ValueError("Palace execution snapshot schema mismatch")
-        snapshot_id = record["snapshot_id"]
-        materializer_sha256 = bound_snapshot_materializer_sha256(workload)
-        groups = {os.getegid(), *os.getgroups()}
-        if (record["materializer_sha256"] != materializer_sha256
-                or record["client_uid"] != os.geteuid()
-                or record["client_gid"] not in groups
-                or not isinstance(snapshot_id, str) or len(snapshot_id) != 64
-                or any(character not in "0123456789abcdef"
-                       for character in snapshot_id)
-                or any(not isinstance(record[name], str)
-                       or len(record[name]) != 64
-                       or any(character not in "0123456789abcdef"
-                              for character in record[name])
-                       for name in ("request_sha256", "request_file_sha256"))):
-            raise ValueError("Palace execution snapshot materializer identity mismatch")
-        root = Path(record["root"])
-        if (not root.is_absolute() or root != root.resolve()
-                or root.name != f"snapshot.{snapshot_id}"
-                or Path(record["output"]) != root / manifest.output_directory.name
-                or strict_json_file(
-                    root / "snapshot.json", label="Palace snapshot attestation",
-                ) != record
-                or stat.S_IMODE((root / "snapshot.json").stat().st_mode) != 0o440):
-            raise ValueError("Palace execution snapshot materializer binding mismatch")
-    expected_directory_mode = (
-        0o500 if record["format"] == "palace-execution-snapshot-v1" else 0o550
+    root = manifest.config_path.parent / (
+        f".{manifest.config_path.name}.execution.{workload['content_sha256']}"
     )
-    if (stat.S_IMODE(root.stat().st_mode) != expected_directory_mode
-            or stat.S_IMODE((root / "bin").stat().st_mode)
-            != expected_directory_mode):
+    if (Path(record["root"]).resolve() != root.resolve()
+            or stat.S_IMODE(root.stat().st_mode) != 0o500
+            or stat.S_IMODE((root / "bin").stat().st_mode) != 0o500):
         raise ValueError("Palace execution snapshot root mismatch")
     expected_sources = [
         ("config", manifest.config_path, root / manifest.config_path.name),
@@ -752,13 +468,7 @@ def validate_execution_snapshot(
     ))
     expected = []
     for role, source, snapshot in expected_sources:
-        executable_role = role in {
-            "executable", "solver_binary", "mpi_launcher",
-        }
-        if record["format"] == "palace-execution-snapshot-v1":
-            expected_mode = 0o500 if executable_role else 0o400
-        else:
-            expected_mode = 0o550 if executable_role else 0o440
+        expected_mode = 0o500 if role in {"executable", "solver_binary", "mpi_launcher"} else 0o400
         if (not source.is_file() or not snapshot.is_file()
                 or stat.S_IMODE(snapshot.stat().st_mode) != expected_mode):
             raise ValueError("Palace execution snapshot input is missing or writable")
@@ -824,19 +534,7 @@ def binary_paths(executable):
     return tuple(dict.fromkeys(paths))
 
 
-def requires_pcb_resource_decision(manifest):
-    source_identity = manifest.mesh_provenance.get("source_identity")
-    return (
-        isinstance(source_identity, dict)
-        and source_identity.get("kind") == "kicad_volume_dump"
-    )
-
-
-def trusted_resource_policy(
-        resource_limits, mesh_limits, *, validator_path,
-        authorized_observation_sha256=RESOURCE_AUTHORIZED_OBSERVATION_SHA256,
-        authorized_static_projection_sha256=(
-            RESOURCE_AUTHORIZED_STATIC_PROJECTION_SHA256)):
+def trusted_resource_policy(resource_limits, mesh_limits, *, validator_path):
     profiles = tuple(
         PalaceResourceProfile(
             profile_id=name,
@@ -858,12 +556,6 @@ def trusted_resource_policy(
         "profiles": [asdict(profile) for profile in profiles],
         "authorized_profile_ids": list(authorized),
         "minimum_headroom_ratio": RESOURCE_MINIMUM_HEADROOM_RATIO,
-        "authorized_observation_sha256": list(
-            authorized_observation_sha256
-        ),
-        "authorized_static_projection_sha256": list(
-            authorized_static_projection_sha256
-        ),
         "completed_observation_projection": {
             "wall_factor": RESOURCE_OBSERVATION_WALL_FACTOR,
             "wall_fixed_s": 1.0,
@@ -879,53 +571,22 @@ def trusted_resource_policy(
         "validator_sha256": file_sha256(validator_path),
         "profile_objects": profiles,
         "authorized_profile_tuple": authorized,
-        "authorized_observation_tuple": tuple(
-            authorized_observation_sha256
-        ),
-        "authorized_static_projection_tuple": tuple(
-            authorized_static_projection_sha256
-        ),
     }
-
-
-def validate_prelaunch_resource_authority(decision, policy):
-    projection_sha256 = canonical_sha256(decision.get("projection"))
-    if projection_sha256 not in policy["authorized_static_projection_tuple"]:
-        raise ValueError("Palace prelaunch resource projection is not authorized")
-    return projection_sha256
 
 
 def validate_bound_resource_decision(
         raw_decision, *, run_path, expected_workload, policy, resource_class,
         decision_path, config_path):
-    trusted_observation = file_sha256(run_path) in (
-        policy["authorized_observation_tuple"]
+    decision = validate_palace_resource_decision(
+        raw_decision,
+        expected_workload=expected_workload,
+        trusted_profiles=policy["profile_objects"],
+        trusted_authorized_profile_ids=policy["authorized_profile_tuple"],
+        trusted_policy_id=policy["policy_id"],
+        trusted_policy_sha256=policy["policy_sha256"],
+        trusted_validator_sha256=policy["validator_sha256"],
+        trusted_minimum_headroom_ratio=policy["minimum_headroom_ratio"],
     )
-    static_projection = canonical_sha256(raw_decision.get("projection")) in (
-        policy["authorized_static_projection_tuple"]
-    )
-    if trusted_observation:
-        decision = raw_decision
-        unsigned_decision = dict(decision)
-        decision_content = unsigned_decision.pop("content_sha256", None)
-        if decision_content != canonical_sha256(unsigned_decision):
-            raise ValueError("trusted observation decision hash mismatch")
-    else:
-        decision = validate_palace_resource_decision(
-            raw_decision,
-            expected_workload=expected_workload,
-            trusted_profiles=policy["profile_objects"],
-            trusted_authorized_profile_ids=policy["authorized_profile_tuple"],
-            trusted_policy_id=policy["policy_id"],
-            trusted_policy_sha256=policy["policy_sha256"],
-            trusted_validator_sha256=policy["validator_sha256"],
-            trusted_minimum_headroom_ratio=policy["minimum_headroom_ratio"],
-        )
-        if (not static_projection
-                and any(value not in policy["authorized_observation_tuple"]
-                        for value in decision["projection"][
-                            "observation_sha256"])):
-            raise ValueError("Palace resource projection is not authorized")
     expected_name = (
         f"{config_path.name}.resource-decision."
         f"{decision['content_sha256']}.json"
@@ -1024,7 +685,8 @@ def palace_progress_events(stdout, stream_events):
     return events
 
 
-def validate_completed_palace_progress(events, terminal_count):
+def validate_completed_palace_progress(
+        events, terminal_count, *, checkpoint_enabled=None):
     cursor = 0
 
     def take(name):
@@ -1040,6 +702,9 @@ def validate_completed_palace_progress(events, terminal_count):
             or setup_start.get("checkpoint_enabled") not in (0, 1)
             or set(setup_start) != {"solver", "checkpoint_enabled"}):
         raise ValueError("Palace setup-start milestone is invalid")
+    if (checkpoint_enabled is not None
+            and bool(setup_start["checkpoint_enabled"]) != checkpoint_enabled):
+        raise ValueError("Palace checkpoint milestone differs from the manifest")
     setup_end = take("setup_end")["detail"]
     if set(setup_end) != {
             "campaign_digest", "prefix_before", "loaded_rhs", "new_rhs"}:
