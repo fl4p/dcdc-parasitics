@@ -41,7 +41,8 @@ from provenance import bytes_sha256, canonical_sha256, file_sha256  # noqa: E402
 
 def _write_config(tmp_path, *, tolerance=1e-10,
                   explicit_residual_tolerance=None, order=1, checkpoint=None,
-                  maximum_iterations=500):
+                  maximum_iterations=500, linear_solver_type="BoomerAMG",
+                  multigrid_max_levels=None):
     mesh = tmp_path / "fixture.msh"
     mesh.write_text(
         "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
@@ -135,6 +136,8 @@ def _write_config(tmp_path, *, tolerance=1e-10,
         order=order,
         checkpoint=checkpoint,
         maximum_iterations=maximum_iterations,
+        linear_solver_type=linear_solver_type,
+        multigrid_max_levels=multigrid_max_levels,
     )
     return config, manifest
 
@@ -164,6 +167,67 @@ def test_resolved_linear_max_size_tracks_iteration_limit(tmp_path):
         load_palace_config_manifest(manifest_path)
     )
     assert resolved["Solver"]["Linear"]["MaxSize"] == 750
+
+
+def test_direct_linear_solver_type_round_trips(tmp_path):
+    config, manifest_path = _write_config(tmp_path, linear_solver_type="SuperLU")
+    manifest = load_palace_config_manifest(manifest_path)
+    assert manifest.linear_solver_type == "SuperLU"
+    assert json.loads(config.read_text())["Solver"]["Linear"]["Type"] == "SuperLU"
+    resolved = palace._expected_resolved_config(manifest)
+    assert resolved["Solver"]["Linear"]["Type"] == "SuperLU"
+    provenance = json.loads(manifest_path.read_text())["provenance"]
+    assert provenance["linear_solver_type"] == "SuperLU"
+
+
+def test_single_level_multigrid_round_trips(tmp_path):
+    config, manifest_path = _write_config(
+        tmp_path, linear_solver_type="SuperLU", multigrid_max_levels=1)
+    manifest = load_palace_config_manifest(manifest_path)
+    assert manifest.multigrid_max_levels == 1
+    assert json.loads(config.read_text())["Solver"]["Linear"]["MGMaxLevels"] == 1
+    resolved = palace._expected_resolved_config(manifest)
+    assert resolved["Solver"]["Linear"]["MGMaxLevels"] == 1
+
+
+def test_default_multigrid_emits_no_level_override(tmp_path):
+    config, manifest_path = _write_config(tmp_path)
+    assert "MGMaxLevels" not in json.loads(config.read_text())["Solver"]["Linear"]
+    manifest = load_palace_config_manifest(manifest_path)
+    assert manifest.multigrid_max_levels is None
+    resolved = palace._expected_resolved_config(manifest)
+    assert resolved["Solver"]["Linear"]["MGMaxLevels"] == 100
+
+
+@pytest.mark.parametrize("value", [0, 2, True, "1", 1.0])
+def test_multigrid_max_levels_rejects_invalid_values(tmp_path, value):
+    with pytest.raises(ValueError, match="multigrid max levels"):
+        _write_config(tmp_path, multigrid_max_levels=value)
+
+
+@pytest.mark.parametrize("value", ["GMRES", "boomeramg", "", None, True, 1])
+def test_linear_solver_type_rejects_unknown_values(tmp_path, value):
+    with pytest.raises(ValueError, match="linear solver type"):
+        _write_config(tmp_path, linear_solver_type=value)
+
+
+def test_manifest_without_linear_solver_key_defaults_to_boomeramg(tmp_path):
+    _, manifest_path = _write_config(tmp_path)
+    value = json.loads(manifest_path.read_text())
+    value["provenance"].pop("linear_solver_type")
+    value["provenance_sha256"] = canonical_sha256(value["provenance"])
+    manifest_path.write_text(json.dumps(value))
+    assert load_palace_config_manifest(manifest_path).linear_solver_type == "BoomerAMG"
+
+
+def test_manifest_rejects_solver_type_relabeling(tmp_path):
+    _, manifest_path = _write_config(tmp_path, linear_solver_type="SuperLU")
+    value = json.loads(manifest_path.read_text())
+    value["provenance"]["linear_solver_type"] = "MUMPS"
+    value["provenance_sha256"] = canonical_sha256(value["provenance"])
+    manifest_path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="semantics do not match"):
+        load_palace_config_manifest(manifest_path)
 
 
 def test_legacy_config_v2_remains_loadable(tmp_path):
@@ -799,6 +863,44 @@ def test_checkpoint_completion_metadata_counts_only_new_solves(tmp_path):
         )), processes=1,
     )
     assert validated["LinearSolver"]["TotalSolves"] == 1
+
+
+def test_completion_metadata_peak_node_memory_uses_node_semantics(tmp_path):
+    config_path, _ = _write_config(tmp_path)
+    output = tmp_path / "postpro"
+    output.mkdir()
+    _write_completion_artifacts(output, config_path)
+    manifest = load_palace_config_manifest(config_path.with_suffix(
+        config_path.suffix + ".manifest.json"
+    ))
+    metadata_path = output / "palace.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["Problem"]["MPISize"] = 4
+    metadata["PeakMemoryMegabytes"] = {
+        "Min": 0.0004, "Max": 0.0006, "Average": 0.0005, "Total": 0.002,
+    }
+    # All four ranks share one shared-memory node: the node aggregate
+    # equals the rank total and Average == Total (one node), not Total/4.
+    metadata["PeakNodeMemoryMegabytes"] = {
+        "Min": 0.002, "Max": 0.002, "Average": 0.002, "Total": 0.002,
+    }
+    metadata_path.write_text(json.dumps(metadata))
+
+    palace._validate_completion_metadata(output, manifest, processes=4)
+
+    for node_memory in (
+            # Node total contradicts the per-rank total.
+            {"Min": 0.001, "Max": 0.001, "Average": 0.001, "Total": 0.001},
+            # Implied node count Total/Average = 2.5 is not an integer.
+            {"Min": 0.0005, "Max": 0.001, "Average": 0.0008, "Total": 0.002},
+            # Implied node count 5 exceeds the rank count.
+            {"Min": 0.0004, "Max": 0.0005, "Average": 0.0004, "Total": 0.002},
+    ):
+        metadata["PeakNodeMemoryMegabytes"] = node_memory
+        metadata_path.write_text(json.dumps(metadata))
+        with pytest.raises(
+                ValueError, match="PeakNodeMemoryMegabytes MPI totals"):
+            palace._validate_completion_metadata(output, manifest, processes=4)
 
 
 def test_post_snapshot_oserror_persists_rejection_and_quarantines(

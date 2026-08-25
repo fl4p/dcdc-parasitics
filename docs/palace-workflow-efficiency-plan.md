@@ -90,3 +90,32 @@ Fugu h-refinement is currently blocked by linear-solver conditioning rather than
 ## Completion limits
 
 These improvements optimize execution and evidence reuse. They do not relax p2→p3, h, outer-domain, material, independent-review, or measurement requirements, and they cannot promote diagnostic evidence to `physical_model_validated`.
+
+## 2026-08-25 addendum — simple-hb p3 disposition
+
+The checkpointed p3 campaign (`out/palace-qualification/simple-hb-p3-v1`,
+native identity in `native-campaign-identity.json`) completed 18/18 RHS in
+four 4-rank attempts (~1.5 h wall) plus a 19 s replay attempt accepted as
+`numerically_converged_diagnostic`
+(`attempt-06/config.json.run.numerically_converged_diagnostic.052a4583….json`).
+The accepted p3 matrix is reciprocal (5.3e-23 F), positive definite, and has
+zero positive off-diagonals — the +0.298 aF p2 sign defect vanished at p3.
+Acceptance also required fixing `PeakNodeMemoryMegabytes` validation in
+`lib/palace.py`: Palace aggregates that field per shared-memory *node*
+(vendor `palace/utils/memoryreporting.cpp`), so `Total == Average ×
+node_count` with `node_count ∈ [1, ranks]` and node total equal to the
+per-rank total; the old `Average × ranks` expectation falsely rejected every
+multi-rank completion.
+
+p2→p3 convergence FAILS: 182/324 entries exceed 2% + 1 fF. The failure is
+systematic, not localized: every matrix entry, including all 18 diagonals,
+shrinks ~65% p1→p2 and ~44% p2→p3, with absolute rung deltas decaying
+geometrically at ratio ≈ 0.2. This is monotone convergence from above
+consistent with under-resolved thin-copper edge singularities dominating the
+electrostatic energy. Extrapolating the observed decay, p3 remains ~20–25%
+above the limit and the 2% successive-rung criterion would not be met before
+roughly p5–p6, which is not resource-feasible. Conclusion: the current mesh
+family cannot pass the p-ladder as specified; the next admissible moves are
+edge-targeted h-refinement (bounded by the known conditioning ceiling), a
+principled revision of the convergence-evidence design, or both. No gate was
+weakened; p3 remains diagnostic evidence under the borrowed-stackup ceiling.
