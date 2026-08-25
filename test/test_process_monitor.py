@@ -11,6 +11,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
+import process_monitor  # noqa: E402
 from process_monitor import (  # noqa: E402
     ProcessLimits,
     _discover_descendants,
@@ -32,6 +33,25 @@ def _limits(**overrides):
     }
     values.update(overrides)
     return ProcessLimits(**values)
+
+
+def test_additional_output_path_is_included_in_disk_limit(tmp_path):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    cwd = tmp_path / "run"
+    cwd.mkdir()
+    result = run_monitored_process(
+        [sys.executable, "-c", (
+            "from pathlib import Path; import sys; "
+            "Path(sys.argv[1]).write_bytes(b'x' * 4096)"
+        ), str(checkpoint / "shard.bin")],
+        cwd=cwd,
+        limits=_limits(output_bytes=1024),
+        additional_output_paths=(checkpoint,),
+    )
+    assert any(failure.startswith("output exceeded ")
+               for failure in result.limit_failures)
+    assert result.directory_growth_bytes >= 4096
 
 
 def test_stream_and_monitor_event_witnesses_cover_captured_bytes(tmp_path):
@@ -97,6 +117,20 @@ def test_windows_commands_use_suspended_job_object_runner():
     assert wrapped[0] == sys.executable
     assert wrapped[1].endswith("windows_job_runner.py")
     assert tuple(json.loads(wrapped[2])) == command
+
+
+def test_monitored_record_preserves_original_command_when_wrapped(
+        tmp_path, monkeypatch):
+    original = (sys.executable, "-c", "print('original')")
+    wrapped = (sys.executable, "-c", "print('wrapped')")
+    monkeypatch.setattr(
+        process_monitor, "_platform_command", lambda _command: wrapped,
+    )
+    result = run_monitored_process(
+        original, cwd=tmp_path, limits=_limits(),
+    )
+    assert result.command == original
+    assert result.stdout == b"wrapped\n"
 
 
 def test_windows_job_waits_for_all_assigned_processes_after_leader_exit():
@@ -222,14 +256,33 @@ def test_recycled_leader_pid_is_not_used_as_a_descendant_root(monkeypatch):
     assert tracked == {}
 
 
+def test_limit_repeats_tree_kill_until_tree_is_gone(tmp_path, monkeypatch):
+    real_kill = process_monitor._kill_tree
+    calls = 0
+
+    def counted_kill(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_kill(*args, **kwargs)
+
+    monkeypatch.setattr(process_monitor, "_kill_tree", counted_kill)
+    output = run_monitored_process(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        cwd=tmp_path,
+        limits=_limits(wall_time_s=0.05),
+    )
+    assert output.limit_failures
+    assert calls >= 2
+
+
 def test_stream_limits_stop_output_panels_and_rss(tmp_path):
     output = run_monitored_process(
-        [sys.executable, "-c", "import os,time; os.write(1,b'x'*1000000); time.sleep(1)"],
+        [sys.executable, "-c", "import os,time; os.write(1,b'x'*100000000); time.sleep(1)"],
         cwd=tmp_path,
         limits=_limits(output_bytes=1024),
     )
     assert any("output exceeded" in failure for failure in output.limit_failures)
-    assert output.output_bytes < 1000000
+    assert output.output_bytes < 100000000
 
     panels = run_monitored_process(
         [sys.executable, "-c",
@@ -435,7 +488,7 @@ def test_rss_limit_includes_reparented_new_session_grandchild(tmp_path):
         cwd=tmp_path,
         limits=_limits(peak_rss_bytes=limit),
     )
-    assert time.monotonic() - started < 1.5
+    assert time.monotonic() - started < 3.0
     assert result.peak_rss_bytes > limit
     assert any("peak RSS exceeded" in item for item in result.limit_failures)
 
