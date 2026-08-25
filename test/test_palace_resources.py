@@ -107,7 +107,7 @@ def test_complete_workload_rejects_unknown_rebound_and_derived_drift(mutation, m
 def test_complete_workload_rejects_unsupported_order_and_boolean_controls():
     topology = PalaceTopologyWorkload(
         node_count=4, edge_count=6, face_count=4, tetrahedron_count=1,
-        order=4, terminal_count=2, process_count=1,
+        order=6, terminal_count=2, process_count=1,
     ).record()
     arguments = {
         "topology_workload": topology,

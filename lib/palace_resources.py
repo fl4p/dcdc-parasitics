@@ -15,7 +15,7 @@ TOPOLOGY_WORKLOAD_FORMAT = "dcdc-palace-topology-workload-v1"
 RESOURCE_DECISION_FORMAT = "dcdc-palace-topology-resource-decision-v1"
 WORKLOAD_FORMAT = "palace-workload-v1"
 PALACE_RESOURCE_DECISION_FORMAT = "palace-resource-decision-v1"
-SUPPORTED_ORDERS = (1, 2, 3)
+SUPPORTED_ORDERS = (1, 2, 3, 4, 5)
 PROJECTION_BOUND_NAMES = (
     "wall_time_s", "cpu_time_s", "vector_residency_bytes",
     "hierarchy_operator_solver_bytes", "retained_terminal_vectors_bytes",
