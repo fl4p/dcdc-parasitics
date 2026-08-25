@@ -333,7 +333,7 @@ def _kill_tree(process, leader_created, tracked_descendants, token):
         except (psutil.Error, ProcessLookupError):
             pass
     if members:
-        psutil.wait_procs(members, timeout=5)
+        psutil.wait_procs(members, timeout=0.1)
 
 
 def _platform_command(command, *, platform_name=None):
@@ -345,10 +345,20 @@ def _platform_command(command, *, platform_name=None):
     return (sys.executable, str(runner), json.dumps(command))
 
 
-def run_monitored_process(command, *, cwd, limits, environment=None):
+def run_monitored_process(
+        command, *, cwd, limits, environment=None, additional_output_paths=()):
     """Run a process, killing its tree immediately when a resource gate fails."""
-    command = _platform_command(command)
+    command = tuple(str(value) for value in command)
+    launch_command = _platform_command(command)
     cwd = str(Path(cwd).resolve())
+    output_roots = (Path(cwd), *(Path(path).resolve()
+                                  for path in additional_output_paths))
+    if len(set(output_roots)) != len(output_roots):
+        raise ValueError("monitored output paths must be distinct")
+    for index, root in enumerate(output_roots):
+        for other in output_roots[index + 1:]:
+            if root in other.parents or other in root.parents:
+                raise ValueError("monitored output paths must not overlap")
     started_ns = time.monotonic_ns()
     started = started_ns / 1e9
     monitor_events = [{
@@ -356,12 +366,12 @@ def run_monitored_process(command, *, cwd, limits, environment=None):
         "monotonic_ns": 0,
         "detail": None,
     }]
-    baseline_size = _directory_size(cwd)
+    baseline_size = sum(_directory_size(path) for path in output_roots)
     token = uuid.uuid4().hex
     child_environment = dict(os.environ if environment is None else environment)
     child_environment[MONITOR_TOKEN_ENV] = token
     process = subprocess.Popen(
-        command,
+        launch_command,
         cwd=cwd,
         env=child_environment,
         stdin=subprocess.DEVNULL,
@@ -450,7 +460,8 @@ def run_monitored_process(command, *, cwd, limits, environment=None):
         if now - last_disk_check >= 0.25:
             directory_growth = max(
                 directory_growth,
-                max(0, _directory_size(cwd) - baseline_size),
+                max(0, sum(_directory_size(path) for path in output_roots)
+                    - baseline_size),
             )
             last_disk_check = now
 
@@ -494,15 +505,17 @@ def run_monitored_process(command, *, cwd, limits, environment=None):
                 "monotonic_ns": time.monotonic_ns() - started_ns,
                 "detail": None,
             })
+        if failures:
             _kill_tree(
-                process, leader_created, tracked_descendants, token
+                process, leader_created, tracked_descendants, token,
             )
 
     for thread in threads:
         thread.join(timeout=1)
     directory_growth = max(
         directory_growth,
-        max(0, _directory_size(cwd) - baseline_size),
+        max(0, sum(_directory_size(path) for path in output_roots)
+            - baseline_size),
     )
     output_size = len(buffers["stdout"]) + len(buffers["stderr"])
     elapsed_for_checks = (time.monotonic_ns() - started_ns) / 1e9
