@@ -446,7 +446,7 @@ def _write_bound_report(directory):
         "gate_policy": "palace-electrostatic-pcb-gates-v2",
         "resource_class": resource_class,
         "resource_limits": item["run_identity"]["resource_limits"],
-        "resource_enforcement": "portable_monitor_not_native_containment",
+        "resource_enforcement": "portable_process_limits",
         "resource_decision": str(decision_path),
         "resource_decision_sha256": file_sha256(decision_path),
         "config_manifest": str(config_manifest_path),
@@ -542,9 +542,6 @@ def _write_bound_report(directory):
 
 
 def _patch_test_build_validation(monkeypatch):
-    monkeypatch.setattr(
-        palace_module, "RESOURCE_AUTHORIZED_OBSERVATION_SHA256", ("a" * 64,)
-    )
     monkeypatch.setattr(
         palace_module,
         "validate_palace_build_manifest",

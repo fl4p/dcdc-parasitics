@@ -53,7 +53,7 @@ the producer can separate cap-side and switch-side copper without mixing gauges.
 ### Electrostatic foundation (Palace)
 
 Palace is the primary maintained electrostatic solver. The
-`palace-electrostatic-pcb-gates-v1` path uses conformal tetrahedral volume
+`palace-electrostatic-pcb-gates-v2` path uses conformal tetrahedral volume
 meshes, finite closed conductor terminals, explicit air/dielectric material
 volumes, and a declared outer Dirichlet boundary that approximates
 electrostatic infinity. That boundary is never treated as PE, chassis, a PCB
@@ -76,14 +76,12 @@ polynomial-order, and finite-domain ladders over the frozen air, enclosed-FR4,
 and PCB-like fixtures must pass before any Fugu run. See
 `docs/palace-electrostatic-qualification-plan.md`.
 
-Production launches use a separately owned execution boundary. Generate the
-content-addressed request with `prepare_palace_snapshot.py`, run an exact
-root-owned copy of `lib/palace_snapshot_materializer.py` against a root-owned
-authority directory, then pass its `snapshot.json` to `run_palace()` as
-`execution_snapshot_path`. The materializer hash is bound through the workload,
-request, attestation, reservation, and run validation. New campaign
-reservations accept only privileged v2 snapshots; same-UID local snapshots and
-historical v1 records cannot authorize a new launch.
+Production launches use a content-addressed user-space execution snapshot whose
+config, mesh, launcher, solver, and helper bytes are validated before and after
+the process. Ordinary runs select a bounded local resource class. Checkpointed
+runs additionally require a finite resource decision and a canonical E5 ledger
+attempt before launch; every attempt receives a fresh snapshot/output root, and
+matrices are consumable only through the terminal ledger capability.
 
 The complete 24-rung fixture ladder has passed. `extract_palace_mesh.py` runs
 the two-interpreter KiCad adapter, preserves every named net and flashed no-net
