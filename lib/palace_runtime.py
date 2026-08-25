@@ -288,10 +288,7 @@ def validate_runtime_metadata_schema(metadata):
 
 def validate_execution_runtime_binding(execution, metadata):
     runtime_s = metadata["ElapsedTime"]["Durations"]["Total"]
-    peak_memory_bytes = max(
-        metadata["PeakMemoryMegabytes"]["Max"],
-        metadata["PeakNodeMemoryMegabytes"]["Max"],
-    ) * 1024**2
+    peak_memory_bytes = metadata["PeakMemoryMegabytes"]["Max"] * 1024**2
     if execution["elapsed_s"] < runtime_s:
         raise ValueError("Palace execution elapsed time contradicts runtime metadata")
     if execution["peak_rss_bytes"] < peak_memory_bytes:

@@ -6,7 +6,7 @@ Improve Palace PCB campaigns without weakening topology, residual, raw-matrix, e
 
 The current-schema `simple-hb` p2 checkpoint campaign completed all 18 strict RHS solves across one 1,800 s attempt plus a 114 s resume. The matrix remains `rejected_diagnostic`: p1→p2 changes exceed the convergence tolerance, and the only p2 sign violation is symmetric +0.298 aF numerical noise between two unconnected pads. The result is diagnostic borrowed-stackup evidence, not a physical matrix.
 
-Fugu h-refinement is currently blocked by linear-solver conditioning rather than memory. A 2.11 M-node / 11.06 M-tetrahedron planar midpoint used 10.65–12.56 GB RSS but stalled on RHS 1 with the same approximately 0.974 PCG reduction factor at one and four MPI ranks. Disabling aggressive BoomerAMG coarsening and using restarted GMRES did not resolve the stall. A 1.01 M-node / 4.96 M-tetrahedron vertical-only rung failed similarly. Targeted two-terminal principal-block probes remain diagnostic-only: coarse-mesh p2 stalled at residual 3.05e-5 after 750 iterations, and midpoint p1 stalled at residual 2.74e-6 after 1,250 PCG iterations. No refined Fugu matrix was emitted or promoted.
+The refined-Fugu z20 p1 direct solve completed all 82 RHS, but its matrix remains rejected diagnostic evidence: a mesh-independent +35.8 pF Bat+↔Net-(D11-A) entry exposes an extraction defect. For simple-hb, the frozen-mesh p-ladder is superseded because through-thickness under-resolution and poor conditioning prevent useful convergence evidence; the next ladder varies `max_vertical_step_m` at fixed low order. The authoritative findings and quantitative evidence are recorded in `docs/palace-conditioning-brief.md`.
 
 ## Current status
 
@@ -85,8 +85,37 @@ Fugu h-refinement is currently blocked by linear-solver conditioning rather than
 3. Define and verify E5's pure campaign identity, exclusive-ledger, causal-timeout, accounting, and quarantine schemas.
 4. Implement E4 against the frozen E5 identity, then run compiled single-rank and multi-rank two-terminal forced-timeout/resume fixtures.
 5. Run `simple-hb` p2 with checkpoint/restart and a conservative local cap.
-6. Retry Fugu only after the cheap fixture identifies a numerically useful, resource-feasible setting.
+6. Fix the Fugu conductor-extraction defect before further Fugu qualification, and build simple-hb convergence evidence from a `max_vertical_step_m` ladder at fixed low order.
 
 ## Completion limits
 
 These improvements optimize execution and evidence reuse. They do not relax p2→p3, h, outer-domain, material, independent-review, or measurement requirements, and they cannot promote diagnostic evidence to `physical_model_validated`.
+
+## 2026-08-25 addendum — simple-hb p3 disposition
+
+The checkpointed p3 campaign (`out/palace-qualification/simple-hb-p3-v1`,
+native identity in `native-campaign-identity.json`) completed 18/18 RHS in
+four 4-rank attempts (~1.5 h wall) plus a 19 s replay attempt accepted as
+`numerically_converged_diagnostic`
+(`attempt-06/config.json.run.numerically_converged_diagnostic.052a4583….json`).
+The accepted p3 matrix is reciprocal (5.3e-23 F), positive definite, and has
+zero positive off-diagonals — the +0.298 aF p2 sign defect vanished at p3.
+Acceptance also required fixing `PeakNodeMemoryMegabytes` validation in
+`lib/palace.py`: Palace aggregates that field per shared-memory *node*
+(vendor `palace/utils/memoryreporting.cpp`), so `Total == Average ×
+node_count` with `node_count ∈ [1, ranks]`; its later sample must not be below
+the earlier per-rank total. The old `Average × ranks` expectation falsely rejected every
+multi-rank completion.
+
+p2→p3 convergence FAILS: 182/324 entries exceed 2% + 1 fF. The failure is
+systematic, not localized: every matrix entry, including all 18 diagonals,
+shrinks ~65% p1→p2 and ~44% p2→p3, with absolute rung deltas decaying
+geometrically at ratio ≈ 0.2. This is monotone convergence from above
+consistent with under-resolved thin-copper edge singularities dominating the
+electrostatic energy. Extrapolating the observed decay, p3 remains ~20–25%
+above the limit and the 2% successive-rung criterion would not be met before
+roughly p5–p6, which is not resource-feasible. Conclusion: the current mesh
+family cannot pass the p-ladder as specified; the next admissible moves are
+edge-targeted h-refinement (bounded by the known conditioning ceiling), a
+principled revision of the convergence-evidence design, or both. No gate was
+weakened; p3 remains diagnostic evidence under the borrowed-stackup ceiling.

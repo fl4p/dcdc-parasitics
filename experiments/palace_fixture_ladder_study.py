@@ -244,8 +244,7 @@ def _identity_schema_failures(item):
     expected_config_provenance = {
         "checkpoint", "config_sha256", "explicit_residual_tolerance",
         "finite_reference", "gate_policy", "ground_attribute",
-        "linear_tolerance", "materials",
-        "maximum_iterations",
+        "linear_tolerance", "materials", "maximum_iterations",
         "mesh_manifest_sha256", "mesh_sha256", "order", "terminals",
     }
     if isinstance(config_provenance, dict):

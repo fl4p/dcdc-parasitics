@@ -52,10 +52,19 @@ RESOURCE_OBSERVATION_WALL_FACTOR = 4.0
 RESOURCE_OBSERVATION_RSS_FACTOR = 2.0
 RESOURCE_OBSERVATION_OUTPUT_FACTOR = 4.0
 
+LINEAR_SOLVER_TYPES = ("BoomerAMG", "SuperLU", "STRUMPACK", "MUMPS")
+
+
 def palace_config_payload(
         *, relative_mesh, relative_output, terminals, materials,
         ground_attribute, order, linear_tolerance,
-        explicit_residual_tolerance, maximum_iterations, checkpoint=None):
+        explicit_residual_tolerance, maximum_iterations, checkpoint=None,
+        linear_solver_type="BoomerAMG", multigrid_max_levels=None):
+    if linear_solver_type not in LINEAR_SOLVER_TYPES:
+        raise ValueError("unsupported Palace linear solver type")
+    if not (multigrid_max_levels is None
+            or (type(multigrid_max_levels) is int and multigrid_max_levels == 1)):
+        raise ValueError("multigrid max levels supports only None or 1")
     electrostatic: dict[str, object] = {"Save": 0}
     if checkpoint is not None:
         electrostatic["Checkpoint"] = {
@@ -85,10 +94,12 @@ def palace_config_payload(
         "Solver": {
             "Order": order, "Device": "CPU", "Electrostatic": electrostatic,
             "Linear": {
-                "Type": "BoomerAMG", "KSPType": "CG",
+                "Type": linear_solver_type, "KSPType": "CG",
                 "Tol": linear_tolerance,
                 "VerificationTol": explicit_residual_tolerance,
                 "MaxIts": maximum_iterations,
+                **({} if multigrid_max_levels is None
+                   else {"MGMaxLevels": multigrid_max_levels}),
             },
         },
     }
@@ -106,10 +117,10 @@ PALACE_PROGRESS_PATTERNS = (
         re.MULTILINE,
     )),
     ("rhs_converged", re.compile(
-        rb"PCG solver converged in (?P<iterations>\d+) iterations"
+        rb"PCG solver converged in (?P<iterations>\d+) iterations?"
     )),
     ("rhs_not_converged", re.compile(
-        rb"PCG solver did NOT converge in (?P<iterations>\d+) iterations"
+        rb"PCG solver did NOT converge in (?P<iterations>\d+) iterations?"
     )),
     ("explicit_residual_completed", re.compile(
         rb"Explicit residual \|\|b-Ax\|\|/\|\|b\|\| = "
@@ -130,6 +141,7 @@ def implementation_identity(palace_file):
         directory / "palace_source_policy.py",
         directory / "palace_campaign.py",
         directory / "palace_checkpoint.py",
+        directory / "palace_completion.py",
         directory / "palace_head_authority.py",
         directory / "palace_ledger_v2.py",
         directory / "palace_matrix_access.py",

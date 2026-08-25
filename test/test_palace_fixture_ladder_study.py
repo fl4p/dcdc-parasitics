@@ -19,6 +19,7 @@ from experiments.palace_fixture_ladder_study import (  # noqa: E402
     _bound_artifact_failures,
     _entrywise_gate,
     _evaluate_fixture,
+    _identity_schema_failures,
     _outer_row_sum_gate,
     _p_shared_mesh_gate,
 )
@@ -175,6 +176,8 @@ def _report(name, matrix, fixture="parallel_plate_air"):
         "ground_attribute": 9999,
         "linear_tolerance": 1e-10,
         "explicit_residual_tolerance": 1e-10,
+        "linear_solver_type": "BoomerAMG",
+        "multigrid_max_levels": None,
         "materials": [
             {"name": material_name, "attributes": [attribute],
              "relative_permittivity": permittivity}
@@ -550,6 +553,13 @@ def _patch_test_build_validation(monkeypatch):
     monkeypatch.setattr(
         ladder_module, "validate_palace_mesh_content", lambda path, provenance: None
     )
+
+
+def test_fixture_identity_accepts_legacy_solver_provenance(tmp_path):
+    item = _write_bound_report(tmp_path / "legacy")
+    item["config_identity"]["provenance"].pop("linear_solver_type")
+    item["config_identity"]["provenance"].pop("multigrid_max_levels")
+    assert _identity_schema_failures(item) == []
 
 
 def test_bound_artifacts_reject_stale_or_tampered_files(tmp_path, monkeypatch):

@@ -43,7 +43,8 @@ from provenance import bytes_sha256, canonical_sha256, file_sha256  # noqa: E402
 
 def _write_config(tmp_path, *, tolerance=1e-10,
                   explicit_residual_tolerance=None, order=1, checkpoint=None,
-                  maximum_iterations=500):
+                  maximum_iterations=500, linear_solver_type="BoomerAMG",
+                  multigrid_max_levels=None):
     mesh = tmp_path / "fixture.msh"
     mesh.write_text(
         "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
@@ -137,6 +138,8 @@ def _write_config(tmp_path, *, tolerance=1e-10,
         order=order,
         checkpoint=checkpoint,
         maximum_iterations=maximum_iterations,
+        linear_solver_type=linear_solver_type,
+        multigrid_max_levels=multigrid_max_levels,
     )
     return config, manifest
 
@@ -172,7 +175,8 @@ def test_legacy_config_v2_remains_loadable(tmp_path):
     _, manifest_path = _write_config(tmp_path)
     value = json.loads(manifest_path.read_text())
     value["format"] = "dcdc-palace-config-v2"
-    value["provenance"].pop("checkpoint")
+    for key in ("checkpoint", "linear_solver_type", "multigrid_max_levels"):
+        value["provenance"].pop(key)
     value["provenance_sha256"] = canonical_sha256(value["provenance"])
     manifest_path.write_text(json.dumps(value))
     assert load_palace_config_manifest(manifest_path).checkpoint is None
@@ -213,6 +217,7 @@ def test_palace_identity_binds_complete_kicad_plc_producer():
         "kicad_palace.py",
         "kicad_palace_dump.py",
         "kicad_palace_schema.py",
+        "palace_completion.py",
         "palace_plc_mesh.py",
     } <= paths
 
@@ -1265,7 +1270,7 @@ def test_persisted_run_rejects_rebound_runtime_scalar_substitution(
 
 
 @pytest.mark.parametrize("contradiction", [
-    "growth_order", "count_duration", "mpi_total", "node_peak_rss",
+    "growth_order", "count_duration", "mpi_total", "rank_peak_rss",
 ])
 def test_persisted_run_rejects_rebound_runtime_contradiction(
         tmp_path, monkeypatch, contradiction):
@@ -1280,7 +1285,7 @@ def test_persisted_run_rejects_rebound_runtime_contradiction(
         value["PeakMemoryMegabytes"]["Total"] = 0.001
     else:
         for key in ("Average", "Max", "Min", "Total"):
-            value["PeakNodeMemoryMegabytes"][key] = 0.002
+            value["PeakMemoryMegabytes"][key] = 2.0
     metadata.write_text(json.dumps(value))
 
     def rebind(identity):

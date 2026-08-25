@@ -10,12 +10,47 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "test"))
 
 import palace_ledger_v2  # noqa: E402
-from palace_ledger_v2 import CanonicalLedgerPublicationV2  # noqa: E402
+from palace_ledger_v2 import (  # noqa: E402
+    CanonicalLedgerPublicationV2,
+    abort_campaign_attempt_on_error,
+)
 from test_palace_campaign import (  # noqa: E402
     _zero_accounting,
     campaign_v2,
     ledger_reconciliation,
 )
+
+
+def test_abort_clears_active_registration_and_allows_fresh_attempt(tmp_path):
+    campaign, workload, authority = campaign_v2(tmp_path)
+    ledger = CanonicalLedgerPublicationV2.create(
+        tmp_path / "ledger", campaign, authority=authority,
+        expected_campaign_sha256=campaign["content_sha256"],
+        expected_workload=workload,
+    )
+    @abort_campaign_attempt_on_error
+    def fail_after_registration(*, campaign_ledger, attempt_id):
+        campaign_ledger._register_attempt(
+            attempt_id, resource_decision_sha256="d" * 64,
+            resource_reservation=_zero_accounting(),
+        )
+        raise OSError("launch failed")
+
+    with pytest.raises(OSError, match="launch failed"):
+        fail_after_registration(
+            campaign_ledger=ledger, attempt_id="attempt-1",
+        )
+    state = ledger._validate_local_state()
+    assert state["active_registration"] is None
+    assert state["head"]["attempts_finished"] == 1
+    assert state["last_entry"]["event"] == "attempt_aborted"
+    ledger._register_attempt(
+        "attempt-2", resource_decision_sha256="e" * 64,
+        resource_reservation=_zero_accounting(),
+    )
+    assert ledger._validate_local_state()["active_registration"][
+        "attempt_id"
+    ] == "attempt-2"
 
 
 def test_public_recovery_completes_interrupted_completion_without_registration_inputs(

@@ -9,6 +9,63 @@ from test_palace import (
 )
 
 
+def test_unavailable_peak_memory_persists_rejected_evidence(
+        tmp_path, monkeypatch):
+    _, manifest_path = _write_config(tmp_path)
+    executable = tmp_path / "palace"
+    executable.write_text("binary")
+    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
+
+    def clear_memory(metadata):
+        zero = {name: 0.0 for name in ("Average", "Max", "Min", "Total")}
+        metadata["PeakMemoryMegabytes"] = zero
+        metadata["PeakNodeMemoryMegabytes"] = zero
+
+    build_manifest = _patch_process_run(
+        monkeypatch, tmp_path, values, values,
+        metadata_mutator=clear_memory,
+    )
+    with pytest.raises(PalaceRunRejected) as caught:
+        _run_with_test_resource_policy(
+            manifest_path, executable=executable,
+            build_manifest=build_manifest, monkeypatch=monkeypatch,
+        )
+    validate_palace_attempt_manifest(caught.value.manifest_path)
+    assert any("peak-memory collection" in failure
+               for failure in caught.value.failures)
+    assert not [path for path in tmp_path.rglob("terminal-C*.csv")
+                if path.is_file() or path.is_symlink()]
+
+
+def test_unbounded_derived_node_count_persists_rejected_evidence(
+        tmp_path, monkeypatch):
+    _, manifest_path = _write_config(tmp_path)
+    executable = tmp_path / "palace"
+    executable.write_text("binary")
+    values = np.array([[3e-12, -2e-12], [-2e-12, 4e-12]])
+
+    def make_node_ratio_unbounded(metadata):
+        metadata["PeakNodeMemoryMegabytes"] = {
+            "Min": 1e-308, "Average": 1e-308,
+            "Max": 1e308, "Total": 1e308,
+        }
+
+    build_manifest = _patch_process_run(
+        monkeypatch, tmp_path, values, values,
+        metadata_mutator=make_node_ratio_unbounded,
+    )
+    with pytest.raises(PalaceRunRejected) as caught:
+        _run_with_test_resource_policy(
+            manifest_path, executable=executable,
+            build_manifest=build_manifest, monkeypatch=monkeypatch,
+        )
+    validate_palace_attempt_manifest(caught.value.manifest_path)
+    assert any("PeakNodeMemoryMegabytes MPI totals" in failure
+               for failure in caught.value.failures)
+    assert not [path for path in tmp_path.rglob("terminal-C*.csv")
+                if path.is_file() or path.is_symlink()]
+
+
 def test_run_rejects_missing_normal_completion_markers(tmp_path, monkeypatch):
     _, manifest_path = _write_config(tmp_path)
     executable = tmp_path / "palace"

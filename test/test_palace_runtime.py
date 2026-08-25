@@ -12,6 +12,36 @@ sys.path.insert(0, str(ROOT / "lib"))
 import palace_runtime  # noqa: E402
 
 
+def _execution_binding(*, elapsed_s=3.0, peak_rss_megabytes=200.0):
+    execution = {
+        "elapsed_s": elapsed_s,
+        "peak_rss_bytes": peak_rss_megabytes * 1024**2,
+    }
+    metadata = {
+        "ElapsedTime": {"Durations": {"Total": 2.0}},
+        "PeakMemoryMegabytes": {"Max": 100.0},
+        "PeakNodeMemoryMegabytes": {"Max": 800.0},
+    }
+    return execution, metadata
+
+
+def test_execution_binding_accepts_staggered_rank_peaks():
+    execution, metadata = _execution_binding()
+    palace_runtime.validate_execution_runtime_binding(execution, metadata)
+
+
+def test_execution_binding_rejects_rss_below_largest_rank_peak():
+    execution, metadata = _execution_binding(peak_rss_megabytes=99.0)
+    with pytest.raises(ValueError, match="execution RSS"):
+        palace_runtime.validate_execution_runtime_binding(execution, metadata)
+
+
+def test_execution_binding_rejects_elapsed_below_runtime():
+    execution, metadata = _execution_binding(elapsed_s=1.0)
+    with pytest.raises(ValueError, match="execution elapsed time"):
+        palace_runtime.validate_execution_runtime_binding(execution, metadata)
+
+
 def test_quarantine_retries_disappeared_and_recreated_source(tmp_path, monkeypatch):
     output = tmp_path / "postpro"
     output.mkdir()

@@ -2,6 +2,7 @@
 """Crash-safe local publication against the external Palace head authority."""
 from contextlib import contextmanager
 from copy import deepcopy
+from functools import wraps
 import json
 import os
 from pathlib import Path
@@ -215,6 +216,15 @@ def validate_entry_v2(value, campaign, predecessor):
         if _validate_accounting(value["charged_accounting"]) != value[
                 "charged_accounting"]:
             raise ValueError("campaign v2 charged accounting is not canonical")
+    elif value.get("event") == "attempt_aborted":
+        if (set(value) != common | {"reason", "charged_accounting"}
+                or predecessor["terminal"]
+                or predecessor["active_attempt"] != value["attempt_id"]
+                or not isinstance(value["reason"], str) or not value["reason"]):
+            raise ValueError("campaign v2 abort schema mismatch")
+        if _validate_accounting(value["charged_accounting"]) != value[
+                "charged_accounting"]:
+            raise ValueError("campaign v2 abort accounting is not canonical")
     else:
         raise ValueError("campaign v2 entry event is invalid")
     return value
@@ -504,9 +514,34 @@ class CanonicalLedgerPublicationV2:
         payload.pop("content_sha256")
         return {**payload, "content_sha256": canonical_sha256(payload)}
 
+    def _abortion_successor(self, predecessor, entry, registration):
+        if (registration is None
+                or registration["attempt_id"] != entry["attempt_id"]
+                or entry["charged_accounting"]
+                != registration["resource_reservation"]):
+            raise ValueError("campaign v2 abort lacks its exact reservation")
+        accounting = _accumulate_accounting([
+            predecessor["accounting"], entry["charged_accounting"],
+        ])
+        if any(accounting[name] > self.campaign["cumulative_caps"][name]
+               for name in accounting):
+            raise ValueError("campaign v2 abort exceeds cumulative capacity")
+        payload = {
+            **predecessor,
+            "sequence": entry["sequence"],
+            "entry_sha256": entry["content_sha256"],
+            "active_attempt": None,
+            "attempts_finished": predecessor["attempts_finished"] + 1,
+            "accounting": accounting,
+        }
+        payload.pop("content_sha256")
+        return {**payload, "content_sha256": canonical_sha256(payload)}
+
     def _entry_successor(self, predecessor, entry, registration):
         if entry["event"] == "attempt_registered":
             return self._registration_successor(predecessor, entry), entry
+        if entry["event"] == "attempt_aborted":
+            return self._abortion_successor(predecessor, entry, registration), None
         return self._completion_successor(
             predecessor, entry, registration,
         ), None
@@ -669,6 +704,36 @@ class CanonicalLedgerPublicationV2:
             successor = self._registration_successor(predecessor, entry)
             self._publish_locked(state, entry, successor)
             return entry
+
+    def abort_attempt_if_active(self, attempt_id, *, reason):
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("campaign v2 abort reason is invalid")
+        with self._lock():
+            state = self._validate_local_state()
+            if state["pending"] is not None:
+                return False
+            predecessor = state["head"]
+            registration = state["active_registration"]
+            if registration is None:
+                return False
+            if registration["attempt_id"] != attempt_id:
+                raise ValueError("campaign v2 active attempt differs from abort")
+            payload = {
+                "format": ENTRY_FORMAT,
+                "campaign_sha256": self.campaign["content_sha256"],
+                "sequence": predecessor["sequence"] + 1,
+                "previous_entry_sha256": predecessor["entry_sha256"],
+                "event": "attempt_aborted",
+                "attempt_id": attempt_id,
+                "reason": reason,
+                "charged_accounting": registration["resource_reservation"],
+            }
+            entry = {**payload, "content_sha256": canonical_sha256(payload)}
+            successor = self._abortion_successor(
+                predecessor, entry, registration,
+            )
+            self._publish_locked(state, entry, successor)
+            return True
 
     def finish_attempt(self, attempt_id, *, run_manifest_path,
                        checkpoint_root):
@@ -902,3 +967,24 @@ class CanonicalLedgerPublicationV2:
         finally:
             os.close(directory)
         return final
+
+
+def abort_campaign_attempt_on_error(function):
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        ledger = kwargs.get("campaign_ledger")
+        attempt_id = kwargs.get("attempt_id")
+        try:
+            return function(*args, **kwargs)
+        except BaseException as error:
+            if type(ledger) is CanonicalLedgerPublicationV2 and attempt_id is not None:
+                try:
+                    ledger.abort_attempt_if_active(
+                        attempt_id, reason=f"{type(error).__name__}: {error}")
+                except Exception as abort_error:
+                    raise RuntimeError(
+                        f"Palace run failed and campaign abort failed: {abort_error}"
+                    ) from error
+            raise
+
+    return guarded

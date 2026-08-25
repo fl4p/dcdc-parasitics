@@ -14,8 +14,8 @@ authorizes a physical PCB model.
 
 ## Solver and local qualification instrumentation
 
-The pinned upstream source is `awslabs/palace` commit
-`86810b1909f3e05e0bf1fd78f485e59d55582b6d` from 2026-08-21. Palace is built
+The authoritative qualification source identity pins `awslabs/palace` commit
+`0ca2de941c42d1565187b16a8a25a9ccc9b267fe`. Palace is built
 from source on macOS arm64 with its dependency revisions pinned by that tree.
 Source, build options, dependencies, wrapper, MPI launcher, and solver binary are
 hashed in every run manifest.
@@ -214,18 +214,18 @@ alone remain diagnostic.
 
 ### P3 — Fugu physical extraction
 
-Run the approved mesh/order/domain ladders over the complete Fugu model. The
-first feasibility rung is v13 at outer scale 2, unrefined arrangement mesh,
-order 2, and provisional mask `epsilon_r=3.3`. If it remains inside the PCB
-profile, the 3-D h pair is that mesh versus `max_planar_area_m2=1e-7` and
-`max_vertical_step_m=0.02` at the same outer scale and order. The p pair is
-order 2 to 3 on the byte-identical fine mesh. The outer ladder is scale 2 to 3
-to 4 on fine order-2 meshes, followed by the mask envelope 1.0/3.3/5.0 on
-byte-identical topology. Apply raw gates at every rung and
-preserve uncertainty as the maximum adjacent raw matrix difference across all
-accepted axes. Aggregate disconnected copper only through explicit ideal
-shorts after base-conductor qualification. A passing result may reach
-`physical_model_validated` only after independent physical review.
+Repair and revalidate the Fugu conductor extraction before further matrix
+qualification; the completed z20 p1 direct matrix is rejected diagnostic
+evidence because its mesh-independent +35.8 pF Bat+↔Net-(D11-A) entry exposes
+an extraction defect. Build convergence evidence at fixed low order by varying
+`max_vertical_step_m`, rather than by increasing `Solver.Order` on the frozen
+under-resolved extrusion. After the extraction defect closes, run the outer
+scale 2/3/4 ladder and mask envelope 1.0/3.3/5.0 on byte-identical topology.
+Apply raw gates at every rung and preserve uncertainty as the maximum adjacent
+raw matrix difference across all accepted axes. Aggregate disconnected copper
+only through explicit ideal shorts after base-conductor qualification. A
+passing result may reach `physical_model_validated` only after independent
+physical review.
 
 ### P4 — EMI integration and calibration
 
@@ -355,26 +355,14 @@ formal EMC acceptance remains measurement-based.
   P2 topology is therefore `geometry_complete`. Solder-mask `epsilon_r=3.3`
   remains explicitly provisional and cannot support a physical-model claim
   until the actual material is identified or sensitivity bounds it.
-- P3 diagnostic execution has started, but no Palace Fugu matrix exists. The
-  frozen v13 order-2 baseline was rejected after the 1,800 s PCB wall-time gate
-  while still solving right-hand side 1 of 82. PCG reached iteration 311 with
-  preconditioned residual norm `2.581542e-3`; the mesh reported geometric
-  condition estimate `1.0431e9`. Peak monitored RSS was 11,368,644,608 bytes.
-  Rejected run content SHA-256 is
-  `fae577c91ad42a71bb4343edafb932ca3117fbe8cc30b3bf9d454e00aabb9d1a`.
-  No residual threshold or resource limit was weakened. The preregistered full
-  3-D h-refined mesh remained inside the PCB element caps at 5,224,064 nodes and
-  30,479,388 total elements, but was rejected because 180 reconstructed source
-  segments lacked exact mesh-edge-chain coverage. The subsequent byte-identical
-  v13 p1 feasibility run converged its first PCG solve in 18 iterations and
-  56.13 s with 9,942,024,192 bytes peak RSS, but the independent explicit
-  residual `1.38159534528792132e-10` failed the `1e-10` gate. Its rejected run
-  content SHA-256 is
-  `49ea68ba4e59c60717da9c093d0ab3e6447882902a605c931afbacde17569441`.
-  Following the qualified synthetic recovery policy, the active transition is
-  byte-identical p1 with a stricter `1e-11` solver target, not a weakened gate.
-  v13 remains topology evidence only, not `physical_model_validated` or
-  predictive evidence.
+- The refined-Fugu z20 p1 direct solve completed 82/82 RHS in 574 s at
+  16.5 GB, but the matrix remains `rejected_diagnostic`: the mesh-independent
+  +35.8 pF Bat+↔Net-(D11-A) positive mutual exposes a conductor-extraction
+  defect. No matrix is promoted. The frozen-mesh p-ladder is also superseded:
+  through-thickness under-resolution and poor conditioning make increased
+  polynomial order unsuitable as convergence evidence. The active direction is
+  to fix the extraction defect, then vary `max_vertical_step_m` at fixed low
+  order as specified in `docs/palace-conditioning-brief.md`.
 - Darwin's process-tree monitor records and enforces practical wall-time, RSS,
   and output limits. Platform-specific containment is not an acceptance gate.
 - No source-bound fabrication record identifies the actual Fugu solder-mask

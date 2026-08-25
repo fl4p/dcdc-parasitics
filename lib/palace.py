@@ -17,23 +17,29 @@ if __package__:
     from .palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
         read_attested_matrix as _read_attested_matrix)
-    from .palace_ledger_v2 import CanonicalLedgerPublicationV2
+    from .palace_completion import (
+        completed_observation_validator as _completed_observation_validator,
+        validate_completion_metadata as _validate_completion_metadata_impl,
+    )
+    from .palace_ledger_v2 import (
+        CanonicalLedgerPublicationV2, abort_campaign_attempt_on_error,
+    )
     from .palace_runtime import (
         native_campaign_digest as _native_campaign_digest,
         quarantine_or_purge_matrix_files as _quarantine_or_purge_matrix_files,
         validate_execution_runtime_binding as _validate_execution_runtime_binding,
         validate_runtime_build_identity as _validate_runtime_build_identity,
-        validate_runtime_metadata_schema as _validate_runtime_metadata_schema,
         validate_runtime_progress_accounting as _validate_runtime_progress_accounting,
     )
     from .palace_build import palace_build_identity, validate_palace_build_manifest
     from .palace_mesh import BoxBounds, validate_palace_mesh_manifest
     from .palace_resources import (
-        PalaceTopologyWorkload, build_palace_resource_decision,
+        build_palace_resource_decision,
         validate_palace_resource_decision,
         validate_palace_workload,
     )
     from .palace_workflow import (
+        LINEAR_SOLVER_TYPES as _LINEAR_SOLVER_TYPES,
         binary_paths as _binary_paths,
         execution_workload_inputs as _execution_workload_inputs,
         implementation_identity,
@@ -61,23 +67,29 @@ else:
     from palace_matrix_access import (
         PalaceMatrixAccess, checkpoint_matrix_access as checkpoint_matrix_access,
         read_attested_matrix as _read_attested_matrix)
-    from palace_ledger_v2 import CanonicalLedgerPublicationV2
+    from palace_completion import (
+        completed_observation_validator as _completed_observation_validator,
+        validate_completion_metadata as _validate_completion_metadata_impl,
+    )
+    from palace_ledger_v2 import (
+        CanonicalLedgerPublicationV2, abort_campaign_attempt_on_error,
+    )
     from palace_runtime import (
         native_campaign_digest as _native_campaign_digest,
         quarantine_or_purge_matrix_files as _quarantine_or_purge_matrix_files,
         validate_execution_runtime_binding as _validate_execution_runtime_binding,
         validate_runtime_build_identity as _validate_runtime_build_identity,
-        validate_runtime_metadata_schema as _validate_runtime_metadata_schema,
         validate_runtime_progress_accounting as _validate_runtime_progress_accounting,
     )
     from palace_build import palace_build_identity, validate_palace_build_manifest
     from palace_mesh import BoxBounds, validate_palace_mesh_manifest
     from palace_resources import (
-        PalaceTopologyWorkload, build_palace_resource_decision,
+        build_palace_resource_decision,
         validate_palace_resource_decision,
         validate_palace_workload,
     )
     from palace_workflow import (
+        LINEAR_SOLVER_TYPES as _LINEAR_SOLVER_TYPES,
         binary_paths as _binary_paths,
         execution_workload_inputs as _execution_workload_inputs,
         implementation_identity,
@@ -177,6 +189,8 @@ class PalaceConfigManifest:
     explicit_residual_tolerance: float
     maximum_iterations: int
     order: int
+    linear_solver_type: str
+    multigrid_max_levels: int | None
     finite_reference: dict
     checkpoint: dict | None
     mesh_provenance: dict
@@ -216,7 +230,8 @@ class PalaceRunRejected(RuntimeError):
 def write_palace_config(path, *, mesh_path, mesh_manifest_path, output_directory,
                         terminals, materials, ground_attribute, finite_reference, order=1,
                         linear_tolerance=1e-10, explicit_residual_tolerance=None,
-                        maximum_iterations=500, checkpoint=None):
+                        maximum_iterations=500, checkpoint=None,
+                        linear_solver_type="BoomerAMG", multigrid_max_levels=None):
     path = Path(path).resolve()
     mesh_path = Path(mesh_path).resolve()
     mesh_manifest_path = Path(mesh_manifest_path).resolve()
@@ -310,6 +325,12 @@ def write_palace_config(path, *, mesh_path, mesh_manifest_path, output_directory
     if (not isinstance(maximum_iterations, int) or isinstance(maximum_iterations, bool)
             or maximum_iterations <= 0):
         raise ValueError("maximum iterations must be a positive integer")
+    if (type(linear_solver_type) is not str
+            or linear_solver_type not in _LINEAR_SOLVER_TYPES):
+        raise ValueError("unsupported Palace linear solver type")
+    if not (multigrid_max_levels is None
+            or (type(multigrid_max_levels) is int and multigrid_max_levels == 1)):
+        raise ValueError("multigrid max levels supports only None or 1")
     if (finite_reference.get("kind") != "finite_outer_dirichlet_approximation"
             or not finite_reference.get("not_a_circuit_node")):
         raise ValueError("finite electrostatic reference must be declared explicitly")
@@ -343,6 +364,8 @@ def write_palace_config(path, *, mesh_path, mesh_manifest_path, output_directory
         explicit_residual_tolerance=explicit_residual_tolerance,
         maximum_iterations=maximum_iterations,
         checkpoint=checkpoint,
+        linear_solver_type=linear_solver_type,
+        multigrid_max_levels=multigrid_max_levels,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
@@ -358,6 +381,8 @@ def write_palace_config(path, *, mesh_path, mesh_manifest_path, output_directory
         "explicit_residual_tolerance": explicit_residual_tolerance,
         "maximum_iterations": maximum_iterations,
         "order": order,
+        "linear_solver_type": linear_solver_type,
+        "multigrid_max_levels": multigrid_max_levels,
         "finite_reference": finite_reference,
         "checkpoint": checkpoint,
     }
@@ -389,8 +414,20 @@ def load_palace_config_manifest(path):
     }
     if raw["format"] == CONFIG_MANIFEST_FORMAT:
         expected_provenance.add("checkpoint")
+    if "linear_solver_type" in provenance:
+        expected_provenance.add("linear_solver_type")
+    if "multigrid_max_levels" in provenance:
+        expected_provenance.add("multigrid_max_levels")
     if set(provenance) != expected_provenance:
         raise ValueError("Palace config provenance schema mismatch")
+    linear_solver_type = provenance.get("linear_solver_type", "BoomerAMG")
+    if (type(linear_solver_type) is not str
+            or linear_solver_type not in _LINEAR_SOLVER_TYPES):
+        raise ValueError("unsupported Palace linear solver type")
+    multigrid_max_levels = provenance.get("multigrid_max_levels")
+    if not (multigrid_max_levels is None
+            or (type(multigrid_max_levels) is int and multigrid_max_levels == 1)):
+        raise ValueError("multigrid max levels supports only None or 1")
     if provenance["gate_policy"] != GATE_POLICY:
         raise ValueError("Palace config gate policy mismatch")
     tolerance = provenance["linear_tolerance"]
@@ -456,6 +493,8 @@ def load_palace_config_manifest(path):
         explicit_residual_tolerance=provenance["explicit_residual_tolerance"],
         maximum_iterations=provenance["maximum_iterations"],
         checkpoint=checkpoint,
+        linear_solver_type=linear_solver_type,
+        multigrid_max_levels=multigrid_max_levels,
     )
     if not canonical_equal(config, expected_config):
         raise ValueError("Palace config semantics do not match its manifest")
@@ -500,6 +539,8 @@ def load_palace_config_manifest(path):
         explicit_residual_tolerance=provenance["explicit_residual_tolerance"],
         maximum_iterations=provenance["maximum_iterations"],
         order=provenance["order"],
+        linear_solver_type=linear_solver_type,
+        multigrid_max_levels=multigrid_max_levels,
         finite_reference=finite_reference,
         checkpoint=checkpoint,
         mesh_provenance=mesh_provenance,
@@ -673,7 +714,9 @@ def _expected_resolved_config(manifest):
                 "MGAuxiliarySmoother": False,
                 "MGCoarsenType": "Logarithmic",
                 "MGCycleIts": 1,
-                "MGMaxLevels": 100,
+                "MGMaxLevels": (
+                    100 if manifest.multigrid_max_levels is None
+                    else manifest.multigrid_max_levels),
                 "MGSmoothChebyshev4th": True,
                 "MGSmoothEigScaleMax": 1.0,
                 "MGSmoothEigScaleMin": 0.0,
@@ -692,7 +735,7 @@ def _expected_resolved_config(manifest):
                 "STRUMPACKLossyPrecision": 16,
                 "SuperLU3DCommunicator": False,
                 "Tol": manifest.linear_tolerance,
-                "Type": "BoomerAMG",
+                "Type": manifest.linear_solver_type,
                 "VerificationTol": manifest.explicit_residual_tolerance,
             },
             "Order": manifest.order,
@@ -704,69 +747,11 @@ def _expected_resolved_config(manifest):
 
 
 def _validate_completion_metadata(output_directory, manifest, *, processes):
-    palace_path = output_directory / "palace.json"
-    resolved_path = output_directory / "config_resolved.json"
-    metadata = _load_json_artifact(palace_path, label="runtime metadata")
-    resolved = _load_json_artifact(resolved_path, label="resolved config")
-    _validate_runtime_metadata_schema(metadata)
-    try:
-        counts = metadata["ElapsedTime"]["Counts"]
-        linear = metadata["LinearSolver"]
-        problem = metadata["Problem"]
-        git_tag = metadata["GitTag"]
-    except (KeyError, TypeError) as error:
-        raise ValueError("Palace runtime metadata is incomplete") from error
-    terminal_count = len(manifest.terminals)
-    linear_solves = counts.get("LinearSolve")
-    total_solves = linear.get("TotalSolves")
-    expected_solves = terminal_count if manifest.checkpoint is None else total_solves
-    required_exact_ints = (
-        (counts.get("Total"), 1),
-        (linear_solves, expected_solves),
-        (counts.get("Estimation"), 0),
-        (counts.get("Solve"), 0),
-        (problem.get("MPISize"), processes),
-        (problem.get("MeshElements"), manifest.mesh_provenance["tetrahedron_count"]),
+    return _validate_completion_metadata_impl(
+        output_directory, manifest, processes=processes,
+        load_json_artifact=_load_json_artifact,
+        expected_resolved_config=_expected_resolved_config,
     )
-    total_iterations = linear.get("TotalIts")
-    degrees_of_freedom = problem.get("DegreesOfFreedom")
-    topology = PalaceTopologyWorkload(
-        node_count=manifest.mesh_provenance["node_count"],
-        edge_count=manifest.mesh_provenance["edge_count"],
-        face_count=manifest.mesh_provenance["face_count"],
-        tetrahedron_count=manifest.mesh_provenance["tetrahedron_count"],
-        order=manifest.order,
-        terminal_count=terminal_count,
-        process_count=processes,
-    )
-    expected_hierarchy = topology.h1_hierarchy
-    runtime_hierarchy = problem.get("MultigridDegreesOfFreedom")
-    if (type(total_solves) is not int
-            or not 0 <= total_solves <= terminal_count
-            or any(type(value) is not int or value != expected
-                   for value, expected in required_exact_ints)
-            or type(total_iterations) is not int
-            or not 0 <= total_iterations <= total_solves * manifest.maximum_iterations
-            or type(degrees_of_freedom) is not int
-            or degrees_of_freedom != expected_hierarchy[-1]
-            or type(runtime_hierarchy) is not list
-            or runtime_hierarchy != list(expected_hierarchy)
-            or not isinstance(git_tag, str) or not git_tag):
-        raise ValueError("Palace runtime metadata fails completion or identity checks")
-    try:
-        resolved_identity = canonical_sha256(resolved)
-        expected_identity = canonical_sha256(_expected_resolved_config(manifest))
-    except (TypeError, ValueError) as error:
-        raise ValueError("Palace resolved config contains invalid values") from error
-    if resolved_identity != expected_identity:
-        raise ValueError("Palace resolved config does not match the requested model")
-    for name in ("PeakMemoryMegabytes", "PeakNodeMemoryMegabytes"):
-        memory = metadata[name]
-        if not np.isclose(
-                memory["Total"], memory["Average"] * processes,
-                rtol=1e-12, atol=0.0):
-            raise ValueError(f"Palace runtime {name} MPI totals are inconsistent")
-    return palace_path, resolved_path, metadata
 
 
 def _implementation_identity():
@@ -775,7 +760,7 @@ def _implementation_identity():
 
 def write_palace_resource_decision(
         config_manifest_path, *, executable, build_manifest_path,
-        completed_run_manifest_paths, processes=1):
+        completed_run_manifest_paths, completed_matrix_accesses=None, processes=1):
     manifest = load_palace_config_manifest(config_manifest_path)
     inputs = _execution_workload_inputs(
         manifest,
@@ -787,13 +772,15 @@ def write_palace_resource_decision(
         validate_build=validate_palace_build_manifest,
     )
     policy = _trusted_resource_policy()
-    completed_run_manifest_paths = tuple(completed_run_manifest_paths)
-    if not completed_run_manifest_paths:
-        raise ValueError("at least one completed observation run is required")
+    completed_run_manifest_paths, validate_observation = (
+        _completed_observation_validator(
+            completed_run_manifest_paths, completed_matrix_accesses,
+            validate_run=validate_palace_run_manifest,
+        )
+    )
     projection = projection_from_completed_runs(
-        inputs["workload"],
-        completed_run_manifest_paths,
-        validate_run=validate_palace_run_manifest,
+        inputs["workload"], completed_run_manifest_paths,
+        validate_run=validate_observation,
         validate_workload=validate_palace_workload,
     )
     decision = build_palace_resource_decision(
@@ -1124,6 +1111,7 @@ def validate_palace_run_manifest(path, *, matrix_access=None):
     return validated
 
 
+@abort_campaign_attempt_on_error
 def run_palace(config_manifest_path, *, executable, build_manifest_path, processes=1,
                resource_class=None, resource_decision_path=None,
                campaign_ledger=None, attempt_id=None):

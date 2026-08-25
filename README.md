@@ -98,8 +98,7 @@ PYTHONPATH=out/palace-qualification/venv/lib/python3.14/site-packages \
 
 Material overrides are explicit assumptions, not validated values. A physical
 Fugu model still requires source-bound P2 evidence, convergence ladders,
-independent review, actual material identification or bounded sensitivity, and
-native process containment acceptance.
+independent review, and actual material identification or bounded sensitivity.
 
 ### Diagnostic legacy (FasterCap)
 
