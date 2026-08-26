@@ -396,6 +396,86 @@ at 1e-23 F on all four rungs. Cost is comfortable — the finest is 5.8M tets,
 mild corroboration and nothing more. §4 still stands: **no trustworthy canary
 value.**
 
+### 0.12 The acceptance rule was passing ladders that do not converge
+
+**The gate was the defect.** Every mesh carries `convergence_ladder_required:
+True`, but nothing in `lib/` discharged it — the rule lived as a copy-pasted
+"finest pair within 2% + 1 fF" in each campaign script under `out/`. That rule
+reads two points out of a sequence, so an oscillating ladder passes it as soon
+as two adjacent rungs happen to land close.
+
+A ladder built this session did exactly that. Scaling the refinement band with
+the element size (band = 2 × edge length, base held at 1e-6) gave:
+
+| rung | edge µm | band µm | tets | trace pF | Δrel |
+|---|---|---|---|---|---|
+| `v3e05` | 100.0 | 200.0 | 5,808,024 | 99.5917 | — |
+| `v3s25` | 70.71 | 141.4 | 6,875,268 | 105.4212 | **+5.53%** |
+| `v3s12` | 50.00 | 100.0 | 9,643,944 | 102.9801 | −2.37% |
+| `v3s06` | 35.36 | 70.7 | 12,886,656 | 104.6627 | **+1.61%** |
+
+The finest pair is 1.61%, inside the band. The old rule reports CONVERGED on a
+sequence that is visibly ringing. Solver residuals are ~1e-12 against a 1e-10
+target on identical binary and config, so this is not a solver artefact.
+
+Two traps in fixing it, both real:
+
+- **Contraction alone is not enough.** That oscillating sequence contracts by
+  0.419 then 0.689. A sequence bouncing about a centre with decaying amplitude
+  contracts beautifully while saying nothing about where it is going.
+- **Sign alone is not enough.** The fixed-band ladder is monotone at −9047.04,
+  −6536.29, −7267.88 fF; only the growing magnitude gives it away.
+
+`lib/palace_convergence.py` requires both, suspending each for a correction
+already inside the band, and is tri-state: too few solved rungs, a rung that
+varied more than one axis, or a noise floor wider than the band all report
+`unevaluable`. Both real sequences are pinned as known-bad calibration in
+`test/test_palace_convergence.py`. The 2% + 1 fF band is untouched — this only
+ever refuses more (§6).
+
+**The scaled ladder above is not a ladder.** The gate rejects it on
+preconditions before reading a number: the band varies along with the element
+size, so two axes moved. Worse, the band *shrinks* — 200 → 70.7 µm — which
+un-refines a shell of material at each rung. Coarsening raises the FEM energy
+and so raises C, which is exactly the +5.53% jump. Holding the band constant in
+*element layers* is not the same as holding it constant, and only the latter is
+a ladder. **The valid family is fixed-band.**
+
+Run through the gate, the fixed-band family is:
+
+```
+rung       elem_um      tets   trace_pF   d_abs_fF    d_rel
+v3e40       282.84   1591332   122.4429          -        -
+v3e20       200.00   2037024   113.3958   -9047.04   -7.98%
+v3edge      141.42   3256260   106.8595   -6536.29   -6.12%
+v3e05       100.00   5808024    99.5917   -7267.88   -7.30%
+NOT_CONVERGED: the correction at rung v3e05 did not contract (ratio 1.112 > 0.9)
+```
+
+Note the Aitken limit this ladder implies is **171.79 pF** — above every rung
+that produced it. Earlier sessions quoted Aitken figures from this family; they
+are extrapolations from a sequence that is not contracting and mean nothing.
+`grade_gate.py` now labels them so.
+
+**Retraction:** §0.11's "graded refinement is 79× cheaper" compared a graded
+mesh against a uniform one at matched trace. The cost ratio still stands, but it
+was stated alongside a convergence claim resting on the finest-pair rule. No
+graded ladder has yet converged under the corrected gate.
+
+#### 0.12.1 Why the lateral ladder stalls (hypothesis, under test)
+
+The `v3e05` mesh has 25 z-levels. Copper runs `-0.0450 → -0.0275 → -0.0100` mm,
+so it is 2 elements of 17.5 µm through its 35 µm thickness — but **the core
+layer adjacent to it is 94 µm thick**, and that is where the fringing field at a
+conductor edge lives. With the lateral edge element now at 100 µm, the two axes
+are within 6% of each other and both are ~2.7× the copper thickness.
+
+Refining one axis while the other is co-dominant stalls: the error left by the
+frozen axis floors the sequence. This makes §0.10.2's "the vertical axis is
+already converged" **stale** — it was measured when the lateral element was
+1.4 mm, so 94 µm vertical looked converged by comparison. Under test as `v3v50`
+/ `v3v25` (vstep 5e-5, 2.5e-5, lateral held at `v3e05`).
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
