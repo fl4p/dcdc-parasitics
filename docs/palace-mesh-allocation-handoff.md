@@ -580,6 +580,40 @@ be re-measured on nested rungs rather than assumed to vanish.
 
 Filed as `~/dev/kb/tooling/meshpy-triangle-refine-needs-element-volumes.md`.
 
+#### 0.13.3 …and it survives the real canary PLC
+
+A unit square proves little here — the canary PLC has hundreds of conductor
+outlines and holes, and `-YY` forbidding segment splits. Run through
+`refine_probe.py` at 8e-6 → 2e-6:
+
+```
+coarse: 3156 points, 6218 triangles, 2533 segments
+fine:   17063 points, 33950 triangles, 7546 segments
+coarse vertices preserved: True (0 lost of 3156)
+PLC segments kept verbatim: 2101 of 2533
+triangles over target: 0 of 33950 (max 1.998e-06 vs target 2.000e-06)
+```
+
+Vertices nest exactly and the area target is honoured with nothing over it.
+
+**The segment count is the catch, and it is a provenance problem, not a
+geometry one.** `refine()` takes no `allow_volume_steiner`, so it splits
+segments the `-YY` build forbade: 432 of 2533 no longer appear verbatim. Checked
+rather than assumed — total segment length goes 1.127103013 m → 1.127103013 m,
+a relative change of **+8.7e-15**. The splits are collinear subdivisions, so no
+boundary moved and no geometry was invented or lost.
+
+Two consequences to carry into the implementation:
+
+1. `mesh_parameters` records `allow_volume_steiner: false`, which will be a
+   **lie** on a refined rung. A nested mesh must record how it was produced and
+   that segment splitting was permitted, or the manifest asserts a property the
+   mesh does not have.
+2. `_resplit_conductor_segments` exists precisely because `-YY` would not split
+   conductor-boundary segments. On the refine path Triangle will split them
+   itself, so that pre-split is redundant there — but the *coarsest* rung is
+   still a `build()`, so it cannot simply be deleted.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
