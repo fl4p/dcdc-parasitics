@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -10,6 +11,14 @@ from kicad_palace_schema import PCB_VOLUME_DUMP_FORMAT, parse_group
 
 
 MAX_ERROR_MM = 1e-3
+
+# A board region thinner than this fraction of its own Edge.Cuts bounding box is
+# rejected. This is a sanity floor against the stroked-outline failure mode, not
+# a judgement about board shape: measured, a stroked outline fills 0.47% (canary)
+# to 0.68% (Fugu2), while a correctly enclosed one fills 99.8% to 100.0%. A
+# genuinely sparse board trips this too, which is the intended direction — the
+# operator sees the message rather than a silently hollow dielectric.
+MIN_OUTLINE_FILL_FRACTION = 0.10
 
 
 def _file_sha256(path):
@@ -35,6 +44,70 @@ def _polyset_polygons(polyset, pcbnew):
             for hole in range(polyset.HoleCount(index))
         ),
     } for index in range(polyset.OutlineCount()))
+
+
+def _ring_area_mm2(points):
+    total = 0.0
+    count = len(points)
+    for index in range(count):
+        x_start, y_start = points[index]
+        x_end, y_end = points[(index + 1) % count]
+        total += x_start * y_end - x_end * y_start
+    return abs(total) / 2.0
+
+
+def _outline_area_mm2(outlines):
+    total = 0.0
+    for polygon in outlines:
+        total += _ring_area_mm2(polygon["shell"])
+        for hole in polygon["holes"]:
+            total -= _ring_area_mm2(hole)
+    return total
+
+
+def _check_board_outline_fill(outlines, bounding_area_mm2):
+    """Fail closed when the board region is implausibly thin for its extent.
+
+    The failure this exists for is silent. Stroking the Edge.Cuts graphics
+    rather than enclosing them yields a non-empty, valid, correctly-wound
+    picture frame, and every downstream stage accepts it: the mesh builds, the
+    solve converges, and the only symptom is that the dielectric is missing and
+    the board interior is solved as air. Nothing else in the pipeline looks at
+    how much area the outline encloses, so this is the one place it can be
+    caught.
+    """
+    if not outlines:
+        raise ValueError("KiCad board has no closed Edge.Cuts outline")
+    if (not isinstance(bounding_area_mm2, (int, float))
+            or isinstance(bounding_area_mm2, bool)
+            or not math.isfinite(bounding_area_mm2)
+            or bounding_area_mm2 <= 0.0):
+        raise ValueError(
+            "KiCad board outline has no measurable extent, so its fill "
+            "fraction cannot be evaluated"
+        )
+    area_mm2 = _outline_area_mm2(outlines)
+    if not math.isfinite(area_mm2) or area_mm2 <= 0.0:
+        raise ValueError("KiCad board outline encloses no area")
+    fraction = area_mm2 / bounding_area_mm2
+    if fraction < MIN_OUTLINE_FILL_FRACTION:
+        raise ValueError(
+            f"KiCad board outline encloses {area_mm2:.3f} mm2, only "
+            f"{fraction * 100.0:.2f}% of its {bounding_area_mm2:.3f} mm2 "
+            f"Edge.Cuts bounding box, below the "
+            f"{MIN_OUTLINE_FILL_FRACTION * 100.0:.0f}% floor. This is what a "
+            "stroked rather than enclosed Edge.Cuts outline looks like: check "
+            "that the board region, not the outline graphics, was polygonised."
+        )
+    return fraction
+
+
+def _validate_board_outline(outlines, board, pcbnew):
+    box = board.GetBoardEdgesBoundingBox()
+    return _check_board_outline_fill(
+        outlines,
+        pcbnew.ToMM(box.GetWidth()) * pcbnew.ToMM(box.GetHeight()),
+    )
 
 
 def _item_uuid(item):
@@ -311,10 +384,19 @@ def collect_pcb_volume_dump(
             })
 
     outline = pcbnew.SHAPE_POLY_SET()
-    board.ConvertBrdLayerToPolygonalContours(pcbnew.Edge_Cuts, outline)
-    outlines = _polyset_polygons(outline, pcbnew)
-    if not outlines:
+    # ConvertBrdLayerToPolygonalContours, which this used to call, renders the
+    # Edge.Cuts *graphics* by stroking each one at its line width. A board
+    # outlined with four 0.1 mm gr_lines therefore came back as four capsules,
+    # which the consumer unioned into a 50 um picture frame: the FR4 core and
+    # both masks covered 0.47% of the board and the whole interior solved as
+    # air. GetBoardPolygonOutlines chains the segments into closed loops and
+    # returns the region they enclose, which is the board. Infer is False so an
+    # unclosed outline raises here rather than being silently replaced by the
+    # Edge.Cuts bounding box.
+    if not board.GetBoardPolygonOutlines(outline, False):
         raise ValueError("KiCad board has no closed Edge.Cuts outline")
+    outlines = _polyset_polygons(outline, pcbnew)
+    _validate_board_outline(outlines, board, pcbnew)
     records.sort(key=lambda item: (
         item["group"], item["layer"], item["source_kind"],
         item["source_uuid"], item["shell"],

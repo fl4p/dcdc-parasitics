@@ -22,7 +22,9 @@ from kicad_palace import (  # noqa: E402
     volumes_from_pcb_dump,
 )
 from kicad_palace_dump import (  # noqa: E402
+    MIN_OUTLINE_FILL_FRACTION,
     _all_copper_groups,
+    _check_board_outline_fill,
     _drill_record,
     _mapping,
 )
@@ -246,6 +248,71 @@ def test_refine_levels_band_skips_air_within_an_ulp_either_side(shift):
     # 83, or 84 when the ulp puts the band gap a hair over 1.6 mm and the step
     # count rounds up. What must not happen is the air gap coming back.
     assert len(refined) in (83, 84)
+
+
+def _rectangle_ring(width_mm, height_mm):
+    return (
+        (0.0, 0.0), (width_mm, 0.0), (width_mm, height_mm), (0.0, height_mm),
+    )
+
+
+def test_board_outline_fill_accepts_an_enclosed_board():
+    # What GetBoardPolygonOutlines returns for the canary: 45 x 40 mm solid.
+    outlines = [{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}]
+    assert _check_board_outline_fill(outlines, 45.0 * 40.0) == pytest.approx(1.0)
+
+
+def test_board_outline_fill_rejects_a_stroked_outline():
+    """Known-bad calibration: the exact frame the stroking API produced.
+
+    Four 0.1 mm Edge.Cuts gr_lines around a 45 x 40 mm board come back as a
+    45.05 x 40.05 mm shell with a 44.95 x 39.95 mm hole -- 8.5 mm2 of material
+    over a 1804 mm2 board. It is a valid, non-empty, correctly-wound polygon, so
+    this fill check is the only thing that can tell it apart from a real board.
+    """
+    outlines = [{
+        "shell": _rectangle_ring(45.05, 40.05),
+        "holes": (_rectangle_ring(44.95, 39.95),),
+    }]
+    area = 45.05 * 40.05 - 44.95 * 39.95
+    assert area == pytest.approx(8.5, abs=1e-9)
+    with pytest.raises(ValueError, match="stroked rather than enclosed"):
+        _check_board_outline_fill(outlines, 45.05 * 40.05)
+
+
+def test_board_outline_fill_verdict_is_monotone_in_the_fill_fraction():
+    """As the board gets thinner the verdict must never flip back to accepted."""
+    bounding = 45.0 * 40.0
+    accepted_below = None
+    for filled in (bounding, bounding * 0.5, bounding * 0.2, bounding * 0.10001,
+                   bounding * MIN_OUTLINE_FILL_FRACTION * 0.999,
+                   bounding * 0.01, bounding * 0.0047, bounding * 1e-6):
+        side = math.sqrt(filled)
+        outlines = [{"shell": _rectangle_ring(side, side), "holes": ()}]
+        try:
+            _check_board_outline_fill(outlines, bounding)
+        except ValueError:
+            accepted_below = accepted_below if accepted_below is not None else filled
+        else:
+            assert accepted_below is None, (
+                "a thinner outline was rejected but this thicker one passed"
+            )
+
+
+@pytest.mark.parametrize("outlines, bounding", [
+    ([], 1800.0),                                            # nothing to judge
+    ([{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}], 0.0),
+    ([{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}], -1.0),
+    ([{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}], float("nan")),
+    ([{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}], float("inf")),
+    ([{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}], True),
+    # A shell exactly cancelled by its hole encloses nothing at all.
+    ([{"shell": _rectangle_ring(45.0, 40.0),
+       "holes": (_rectangle_ring(45.0, 40.0),)}], 1800.0),
+])
+def test_board_outline_fill_refuses_to_pass_unevaluable_input(outlines, bounding):
+    with pytest.raises(ValueError):
+        _check_board_outline_fill(outlines, bounding)
 
 
 def test_refine_levels_band_must_not_overhang_the_outermost_stackup_level():
