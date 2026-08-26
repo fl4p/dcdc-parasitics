@@ -637,10 +637,40 @@ Vertices nest exactly and the area target is honoured with nothing over it.
 >
 > `_validate_plc_mesh_topology` catches this, so a nested build fails closed
 > rather than producing a wrong mesh: `v3nest1..3` all refuse with "Palace PLC
-> mesh omits a noded source boundary segment: missing=50". **The nested path is
-> blocked until Triangle's -Y can be passed through refine, which MeshPy does
-> not expose.** Do not relax the topology guard to get past it — it is the only
-> thing standing between a nested rung and silently wrong materials.
+> mesh omits a noded source boundary segment: missing=50".
+>
+> **SECOND CORRECTION — the sentence that stood here, "the nested path is
+> blocked until Triangle's -Y can be passed through refine", was also wrong,
+> and it named the wrong flag.** The missing flag is `-p`, not `-Y`.
+> `meshpy.triangle.refine()` decides whether to pass `p` by testing
+> `input_p.faces` — the *output* edge array — while the PLC segments live in
+> `facets`. On a mesh from `build()` that test is always false, so `-r` runs
+> **without the segments ever being declared**. They are not destroyed by
+> refinement; they are never presented to it.
+>
+> Measured on a square-in-a-square PLC, one parent mesh refined under each
+> option string, scoring each source segment by whether it is still covered by
+> triangle edges:
+>
+> ```
+> razjQ   (what MeshPy sends)   4 of 8 segments 100% uncovered
+> razjpQ  (this)                0 of 8 uncovered, 0 parent vertices lost
+> ```
+>
+> `-Y` is in fact the **wrong** fix and is deliberately left out. It forbids
+> Steiner points on segments, so the conductor polyline would freeze at
+> whatever spacing rung zero got while the interior kept refining —
+> reintroducing on every rung above zero exactly the under-resolved conductor
+> edge `_resplit_conductor_segments` exists to prevent. Segment subdivision is
+> harmless because the material assignment accepts a segment covered by
+> collinear pieces; **losing** the segment is what breaks it, which is why
+> coverage and not verbatim survival is the property to measure.
+>
+> `_refine_segment_conforming` now calls Triangle directly with `razjpQ`. The
+> rung that failed with `missing=50` builds: 97841 nodes, 497934 tets.
+>
+> The standing instruction survives both corrections: do not relax the topology
+> guard to get past a segment failure. It was right twice.
 
 **The segment count is the catch, and it is a provenance problem, not a
 geometry one.** `refine()` takes no `allow_volume_steiner`, so it splits
