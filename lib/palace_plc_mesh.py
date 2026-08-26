@@ -389,6 +389,7 @@ def _nested_refinement(points, triangles, refinements):
     which is exactly what Triangle's -r mode did.
     """
     parent = set(points)
+    expected = len(triangles) * 4 ** refinements
     points, triangles = _subdivide_uniformly(points, triangles, refinements)
     lost = parent - set(points)
     if lost:
@@ -397,6 +398,16 @@ def _nested_refinement(points, triangles, refinements):
             f"parent vertices: the rung is not nested in its parent, so a "
             f"ladder over it would carry re-meshing noise it is meant to have "
             f"removed")
+    # Containment alone would be satisfied by doing nothing at all, and a rung
+    # that silently did not refine still records its nesting_refinements and
+    # would enter the ladder as a duplicate of its parent. The manifest cannot
+    # catch that either: max_planar_area_m2 stays at the seed value on every
+    # rung, so the recorded cap is trivially met however little was done.
+    if len(triangles) != expected:
+        raise ValueError(
+            f"Palace PLC nested refinement produced {len(triangles)} triangles "
+            f"where {refinements} uniform splits of {len(parent)} vertices owe "
+            f"exactly {expected}: the rung did not refine as recorded")
     return points, triangles
 
 

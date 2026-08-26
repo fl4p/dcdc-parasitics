@@ -1416,3 +1416,33 @@ def test_the_crossing_tolerance_stays_far_below_the_geometry_quantum():
     # It scales with the coordinates rather than being a fixed epsilon.
     assert (palace_plc_mesh._crossing_tolerance_m(1.0)
             > palace_plc_mesh._crossing_tolerance_m(1e-3))
+
+
+def test_a_refinement_that_does_not_refine_is_refused():
+    """Known-bad calibration for the second half of the nesting guard.
+
+    Containment is satisfied by doing nothing, so a rung that silently failed to
+    refine would pass the parent-vertex check and enter the ladder as a
+    duplicate of its parent. Nothing downstream would notice: the manifest keeps
+    max_planar_area_m2 at the seed value on every rung, so the recorded cap is
+    trivially met however little was done.
+    """
+    original = palace_plc_mesh._subdivide_uniformly
+    palace_plc_mesh._subdivide_uniformly = (
+        lambda points, triangles, refinements: (points, triangles))
+    try:
+        with pytest.raises(ValueError, match="did not refine as recorded"):
+            palace_plc_mesh._nested_refinement(
+                ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0)), ((0, 1, 2),), 1)
+    finally:
+        palace_plc_mesh._subdivide_uniformly = original
+
+
+@pytest.mark.parametrize("refinements", [1, 2, 3])
+def test_a_real_nested_refinement_meets_the_exact_triangle_count(refinements):
+    points = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    triangles = ((0, 1, 2), (0, 2, 3))
+    fine_points, fine_triangles = palace_plc_mesh._nested_refinement(
+        points, triangles, refinements)
+    assert len(fine_triangles) == len(triangles) * 4 ** refinements
+    assert set(points) <= set(fine_points)
