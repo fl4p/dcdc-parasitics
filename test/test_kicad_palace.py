@@ -32,6 +32,7 @@ from palace_mesh import (  # noqa: E402
     validate_palace_mesh_manifest,
 )
 from palace_plc_mesh import (  # noqa: E402
+    _refine_levels,
     generate_palace_plc_mesh,
     validate_palace_plc_mesh_manifest,
 )
@@ -166,6 +167,148 @@ def test_refined_plc_preserves_source_segments_and_planar_area(tmp_path):
     assert parameters["allow_volume_steiner"] is False
     assert parameters["source_segment_max_length_m"] == math.sqrt(2 * max_area)
     assert result.node_count > _plated_via_plc_mesh(tmp_path / "coarse").node_count
+
+
+def test_refine_levels_without_band_matches_uniform_subdivision():
+    levels = (-0.045, -1e-3, 0.0, 0.045)
+    assert _refine_levels(levels, None) == levels
+    assert _refine_levels(levels, None, None) == levels
+    uniform = _refine_levels(levels, 5e-3)
+    assert _refine_levels(levels, 5e-3, None) == uniform
+    for low, high in zip(uniform, uniform[1:]):
+        assert high - low <= 5e-3 + 1e-15
+
+
+def test_refine_levels_band_refines_stackup_and_leaves_air_gaps():
+    # Air below, 1 mm stackup, air above -- the band covers only the stackup.
+    levels = (-0.045, -1e-3, 0.0, 0.045)
+    refined = _refine_levels(levels, 2.5e-4, (-1e-3, 0.0))
+    # Air gap endpoints survive untouched, with nothing inserted inside them.
+    assert refined[0] == -0.045
+    assert refined[-1] == 0.045
+    assert not [z for z in refined if -0.045 < z < -1e-3]
+    assert not [z for z in refined if 0.0 < z < 0.045]
+    # The banded stackup gap is subdivided to the requested step.
+    stackup = [z for z in refined if -1e-3 <= z <= 0.0]
+    assert len(stackup) == 5
+    for low, high in zip(stackup, stackup[1:]):
+        assert high - low <= 2.5e-4 + 1e-15
+    assert set(levels).issubset(set(refined))
+    # Same step without a band spends its budget on the 90 mm of air instead.
+    assert len(refined) < len(_refine_levels(levels, 2.5e-4))
+
+
+def test_refine_levels_band_edge_tolerates_float_error_in_the_stackup_level():
+    """Known-bad calibration for the band's edge comparison.
+
+    The band is given as a round number; the level it is meant to coincide with
+    comes out of the stackup arithmetic. On the canary those differ by 2.2e-19 m
+    -- -1.6 mm evaluates to -0.0015999999999999999, just *above* a band edge of
+    -0.0016 -- and an exact `<=` therefore refused to skip the 44 mm air gap
+    below the board. Nothing raised: the mesh was simply 20x larger, which is
+    how it survived a full session. Assert the resulting level count, not merely
+    that the call succeeded.
+    """
+    # The measured canary value, one ulp above the band edge it should equal.
+    board_bottom = math.nextafter(-0.0016, math.inf)
+    assert board_bottom == -0.0015999999999999999
+    assert board_bottom - (-0.0016) == pytest.approx(2.168e-19, rel=1e-3)
+    levels = (-0.04585, board_bottom, -0.0, 0.04425)
+
+    refined = _refine_levels(levels, 2e-5, (-0.0016, 0.0))
+
+    # Neither air gap is tiled: they contribute their endpoints and nothing more.
+    assert not [z for z in refined if -0.04585 < z < board_bottom]
+    assert not [z for z in refined if -0.0 < z < 0.04425]
+    # 1.6 mm at a 20 um step, plus the two outer box levels.
+    assert len(refined) == 83
+    # Before the fix the gap below the board added ceil(44.25 mm / 20 um) = 2213
+    # levels, which is the whole 20x. Measured on b20u: 2297 levels, 2214 of
+    # them in air.
+    assert len(_refine_levels(levels, 2e-5)) > 2200
+    assert len(refined) < len(_refine_levels(levels, 2e-5)) / 20
+
+
+@pytest.mark.parametrize("shift", [0, 1, 2, -1, -2])
+def test_refine_levels_band_skips_air_within_an_ulp_either_side(shift):
+    """The skip must not depend on which side of the band edge the level lands."""
+    edge = -0.0016
+    board_bottom = edge
+    for _ in range(abs(shift)):
+        board_bottom = math.nextafter(
+            board_bottom, math.inf if shift > 0 else -math.inf
+        )
+    levels = (-0.04585, board_bottom, -0.0, 0.04425)
+    refined = _refine_levels(levels, 2e-5, (edge, 0.0))
+    assert not [z for z in refined if -0.04585 < z < board_bottom]
+    assert not [z for z in refined if -0.0 < z < 0.04425]
+    assert set(levels).issubset(set(refined))
+    # 83, or 84 when the ulp puts the band gap a hair over 1.6 mm and the step
+    # count rounds up. What must not happen is the air gap coming back.
+    assert len(refined) in (83, 84)
+
+
+def test_refine_levels_band_must_not_overhang_the_outermost_stackup_level():
+    # A band edge past the outermost stackup level makes the adjoining air gap
+    # overlap the band, so that whole gap is refined -- the caller must clamp
+    # the band to existing levels to get the intended saving.
+    levels = (-0.045, -1e-3, 0.0, 0.045)
+    clamped = _refine_levels(levels, 2.5e-4, (-1e-3, 0.0))
+    overhanging = _refine_levels(levels, 2.5e-4, (-1.1e-3, 0.0))
+    assert not [z for z in clamped if -0.045 < z < -1e-3]
+    assert [z for z in overhanging if -0.045 < z < -1e-3]
+    assert len(overhanging) > 10 * len(clamped)
+
+
+@pytest.mark.parametrize("band", [
+    (0.0,),
+    (0.0, 1e-3, 2e-3),
+    (1e-3, 1e-3),
+    (1e-3, 0.0),
+    (0.0, float("nan")),
+    (0.0, float("inf")),
+    (0.0, True),
+    ("0", "1"),
+    0.0,
+    {"lo": 0.0, "hi": 1e-3},
+])
+def test_plc_mesh_rejects_invalid_vertical_refinement_band(tmp_path, band):
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6
+    )
+    with pytest.raises(ValueError):
+        generate_palace_plc_mesh(
+            tmp_path / "invalid.msh",
+            outer_bounds=geometry.outer_bounds,
+            conductors=geometry.conductors,
+            dielectrics=geometry.dielectrics,
+            max_vertical_step_m=2.5e-4,
+            vertical_refinement_band_m=band,
+        )
+
+
+def test_banded_plc_mesh_records_band_and_beats_unbanded_cost(tmp_path):
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6
+    )
+    band = (-1.0e-3, 0.0)
+    common = {
+        "outer_bounds": geometry.outer_bounds,
+        "conductors": geometry.conductors,
+        "dielectrics": geometry.dielectrics,
+        "max_vertical_step_m": 2.5e-4,
+    }
+    banded = generate_palace_plc_mesh(
+        tmp_path / "banded.msh", vertical_refinement_band_m=band, **common
+    )
+    stored = validate_palace_plc_mesh_manifest(banded.manifest_path)
+    assert stored["provenance"]["mesh_parameters"][
+        "vertical_refinement_band_m"] == list(band)
+    unbanded = generate_palace_plc_mesh(tmp_path / "unbanded.msh", **common)
+    assert validate_palace_plc_mesh_manifest(unbanded.manifest_path)[
+        "provenance"]["mesh_parameters"]["vertical_refinement_band_m"] is None
+    # Confining refinement to the stackup is far cheaper than tiling the air.
+    assert banded.tetrahedron_count < unbanded.tetrahedron_count
 
 
 def test_plc_manifest_rejects_rehashed_semantic_and_identity_tampering(tmp_path):

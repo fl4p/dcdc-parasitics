@@ -300,15 +300,54 @@ def _coalesce_levels(values, span):
     return tuple(sum(group) / len(group) for group in groups)
 
 
-def _refine_levels(levels, maximum_step):
+def _refine_levels(levels, maximum_step, band=None):
     if maximum_step is None:
         return levels
+    # The band edges are supplied as round numbers while the levels are derived
+    # from the stackup, so the two agree only to within floating-point error:
+    # the canary's -1.6 mm board bottom lands at -0.0015999999999999999, which
+    # is 2.2e-19 m *above* a band edge of -0.0016. Comparing exactly there
+    # un-skips the 44 mm air gap below the board and tiles it at the board's own
+    # step. That fails open -- the mesh is 20x larger than intended and nothing
+    # reports it -- so the comparison is made at the same relative tolerance
+    # _coalesce_levels uses to decide that two levels are the same level.
+    tolerance = max(1e-15, 1e-10 * abs(levels[-1] - levels[0]))
     refined = [levels[0]]
     for low, high in zip(levels, levels[1:]):
+        # A band confines subdivision to gaps overlapping it, so refining the
+        # board stackup does not also tile the surrounding air.
+        if band is not None and (high <= band[0] + tolerance
+                                 or low >= band[1] - tolerance):
+            refined.append(high)
+            continue
         count = max(1, math.ceil((high - low) / maximum_step))
         refined.extend(low + (high - low) * index / count
-                       for index in range(1, count + 1))
+                       for index in range(1, count))
+        # Interpolating the last point rather than reusing `high` lands it up to
+        # an ulp past the gap it closes, which puts a spurious level just inside
+        # the neighbouring gap and breaks the invariant that every input level
+        # survives refinement exactly.
+        refined.append(high)
     return tuple(refined)
+
+
+def _validate_vertical_refinement_band(band):
+    if band is None:
+        return None
+    if isinstance(band, (str, bytes, dict)):
+        raise ValueError("vertical refinement band must be null or a 2-sequence")
+    try:
+        values = tuple(band)
+    except TypeError:
+        raise ValueError(
+            "vertical refinement band must be null or a 2-sequence") from None
+    if len(values) != 2 or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) for value in values):
+        raise ValueError("vertical refinement band must be null or a 2-sequence")
+    if not values[0] < values[1]:
+        raise ValueError("vertical refinement band must be increasing")
+    return (float(values[0]), float(values[1]))
 
 
 def _tetrahedralize(points_2d, triangles, z_levels, region_for_cell):
@@ -544,7 +583,9 @@ def _validate_source_identity(source):
 
 def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                              outer_permittivity=1.0, max_planar_area_m2=None,
-                             max_vertical_step_m=None, source_identity=None):
+                             max_vertical_step_m=None,
+                             vertical_refinement_band_m=None,
+                             source_identity=None):
     path = Path(path).resolve()
     outer_bounds = BoxBounds(outer_bounds.minimum, outer_bounds.maximum)
     conductors = tuple(conductors)
@@ -562,6 +603,8 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                 and (isinstance(value, bool) or not isinstance(value, (int, float))
                      or not math.isfinite(value) or value <= 0.0)):
             raise ValueError(f"{label} must be null or finite and positive")
+    vertical_refinement_band_m = _validate_vertical_refinement_band(
+        vertical_refinement_band_m)
     source_identity = json.loads(json.dumps(
         source_identity or {"kind": "direct_geometry"}, allow_nan=False
     ))
@@ -585,7 +628,7 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
         *outer_bounds.minimum[2:3], *outer_bounds.maximum[2:3],
         *(value for item in conductors for value in (item.z_min, item.z_max)),
         *(value for item in dielectrics for value in _dielectric_z(item)),
-    }, outer_bounds.lengths[2]), max_vertical_step_m)
+    }, outer_bounds.lengths[2]), max_vertical_step_m, vertical_refinement_band_m)
     planar_quantum = _planar_quantum(outer_bounds, source_identity)
     points_2d, triangles = _planar_mesh(
         outer_bounds, conductors, dielectrics, max_planar_area_m2, planar_quantum
@@ -633,6 +676,10 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
             "allow_volume_steiner": False,
             "max_planar_area_m2": max_planar_area_m2,
             "max_vertical_step_m": max_vertical_step_m,
+            "vertical_refinement_band_m": (
+                list(vertical_refinement_band_m)
+                if vertical_refinement_band_m is not None else None
+            ),
             "noding_serialization_quantum_m": _noding_serialization_quantum(
                 outer_bounds, planar_quantum
             ),
@@ -752,7 +799,9 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
         *outer.minimum[2:3], *outer.maximum[2:3],
         *(value for item in conductors for value in (item.z_min, item.z_max)),
         *(value for item in dielectrics for value in _dielectric_z(item)),
-    }, outer.lengths[2]), provenance["mesh_parameters"]["max_vertical_step_m"]))
+    }, outer.lengths[2]), provenance["mesh_parameters"]["max_vertical_step_m"],
+        _validate_vertical_refinement_band(
+            provenance["mesh_parameters"].get("vertical_refinement_band_m"))))
     node_level_indices = _nearest_level_indices(points[:, :, 2], z_levels)
     low_indices = node_level_indices.min(axis=1)
     high_indices = node_level_indices.max(axis=1)
@@ -1075,7 +1124,7 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
             "max_planar_area_m2", "max_vertical_step_m", "msh_version",
             "noding_serialization_quantum_m", "planar_quantum_m", "prism_split",
             "source_segment_max_length_m", "threads",
-            "triangle_coordinate_system"}
+            "triangle_coordinate_system", "vertical_refinement_band_m"}
             or parameters["backend"] != "meshpy-triangle-extrusion"
             or parameters["allow_boundary_steiner"] is not False
             or parameters["allow_volume_steiner"] is not False
@@ -1109,6 +1158,10 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
                                  parameters["planar_quantum_m"],
                                  parameters["source_segment_max_length_m"]))):
         raise ValueError("Palace PLC mesh parameters are invalid")
+    try:
+        _validate_vertical_refinement_band(parameters["vertical_refinement_band_m"])
+    except ValueError:
+        raise ValueError("Palace PLC mesh parameters are invalid") from None
     mesher = provenance.get("mesher")
     if (not isinstance(mesher, dict) or set(mesher) != {
             "backend", "native_extension", "native_extension_sha256",
