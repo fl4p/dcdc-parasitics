@@ -45,6 +45,7 @@ import sys
 
 import pcbnew
 
+import extra_nets as extra_nets_lib
 import fet_discovery
 import gate_net_override
 import probe_ports as probe_ports_lib
@@ -330,24 +331,70 @@ class Model:
         self.equivs = [e for e in self.equivs if e[0] in seen and e[1] in seen]
         return seen
 
-    def drop_floating_ports(self, seed_label="P_pwr"):
+    def drop_floating_ports(self, seed_label="P_pwr", island_nets=()):
         """Remove any port whose copper is NOT in the same connected component as
         the seed port. A single floating/disconnected port (e.g. a distant bulk cap
         whose pad never bonds into the meshed pour at a coarse pitch) makes
         FastHenry's ENTIRE solve NaN — so drop it and report, never let it poison
-        every result. Returns the dropped labels."""
+        every result. Returns the dropped labels.
+
+        `island_nets` (the `extra_nets` set, empty by default) narrows that rule
+        WITHOUT relaxing what it protects against. The NaN comes from a port whose
+        two endpoints sit on DIFFERENT conductors — an open circuit, infinite
+        impedance. A port whose two endpoints are on ONE conductor that merely
+        happens not to touch the seed's is a different animal: it is a
+        self-consistent two-terminal measurement on a galvanically separate island,
+        which is exactly what the output power path is (back-flow FETs, fuse and
+        shunt sit between it and the switching cell, and none of them is copper).
+
+        MEASURED, not assumed: FastHenry 2 was given two disjoint 10 mm x 1 mm
+        traces, each with its own `.external`, at 1 MHz. It returned a finite,
+        symmetric 2x2 — diag 0.00493 + 0.04390j (i.e. 6.99 nH self), off-diag
+        1.6e-18 + 0.01041j (1.66 nH mutual). No NaN, no singular factor. Disjoint
+        conductors are the ordinary case for a mutual-inductance solver.
+
+        So the allowance is deliberately narrow, and it can only ever ADD to what
+        survives:
+
+          * both endpoints must be in ONE component (the actual NaN condition is
+            still refused, for every net);
+          * EVERY node of that component must be on a net the caller named in
+            `island_nets`. A component that mixes in power/gate copper is not "the
+            copper the user asked to add", so a genuinely broken power-net port
+            cannot be rescued by this path.
+
+        With `island_nets` empty — every run that does not use `extra_nets` — the
+        guard behaves exactly as before, node for node.
+        """
         if not self.ports:
             return []
         seed = next(((a, b) for lbl, a, b in self.ports if lbl == seed_label), None)
         if seed is None:
             seed = (self.ports[0][1], self.ports[0][2])
         seen = self.component(seed)
+        island = set(island_nets or ())
         kept, dropped = [], []
         for lbl, a, b in self.ports:
-            (kept if (a in seen and b in seen) else dropped).append(
-                (lbl, a, b) if (a in seen and b in seen) else lbl)
+            if a in seen and b in seen:
+                kept.append((lbl, a, b))
+            elif island and self._is_declared_island_port(a, b, island):
+                kept.append((lbl, a, b))
+            else:
+                dropped.append(lbl)
         self.ports = kept
         return dropped
+
+    def _is_declared_island_port(self, a, b, island_nets):
+        """True iff `a` and `b` share ONE component made only of `island_nets` copper.
+
+        See `drop_floating_ports`. Kept separate so the two conditions are
+        testable on their own: "same component" (not an open circuit) and "wholly
+        declared" (not a broken power-net port wearing an island's clothes).
+        """
+        comp = self.component({a})
+        if b not in comp:
+            return False
+        return all(self.meta.get(n, (None, None))[0] in island_nets for n in comp)
 
     def write(self, path, fmin=1e3, fmax=1e8, ndec=3, nwinc=1, nhinc=1, sigma=SIGMA):
         keep = self.prune()
@@ -1637,20 +1684,32 @@ def build_probe_terminals(board, model, zmap, probes, allow_proximity=False):
                     f"probe_ports: {probe['name']}: footprint {ref} has no pad {num!r}. "
                     f"Pads on {ref}: {have}.")
             if len(matching) > 1:
-                # KiCad allows several physical lands to share a pad number (split
-                # thermal tabs, a tab plus its SMD land). `REF.PAD` then does not
-                # name a place on the board, and picking the first in footprint
-                # order silently decides which land was measured — a real 10 mm
-                # difference in the loop under test.
-                where = "; ".join(
-                    f"({mm(p.GetPosition().x):.3f}, {mm(p.GetPosition().y):.3f}) mm"
-                    for p in matching)
-                raise probe_ports_lib.ProbeError(
-                    f"probe_ports: {probe['name']}: footprint {ref} has "
-                    f"{len(matching)} pads numbered {num!r}, at {where}. "
-                    f"'{ref}.{num}' is therefore ambiguous and the extractor will not "
-                    f"choose one for you — a probe must name ONE land. Use a pad "
-                    f"number that is unique on this footprint.")
+                # KiCad allows several physical lands to share a pad number: split
+                # thermal tabs and lead fingers on an SMD power package, or a
+                # footprint carrying alternate lands for two mounting orientations.
+                # That is normal, not an error — one pad number is ONE TERMINAL of
+                # the part. It is only ambiguous if the lands are on different nets.
+                nets = sorted({p.GetNetname() for p in matching})
+                if len(nets) > 1:
+                    raise probe_ports_lib.ProbeError(
+                        f"probe_ports: {probe['name']}: footprint {ref} has "
+                        f"{len(matching)} pads numbered {num!r} on DIFFERENT nets "
+                        f"({', '.join(nets)}). '{ref}.{num}' does not name one node "
+                        f"and the extractor will not choose for you.")
+                # Same net: land on the biggest one. It carries the terminal's
+                # current and is the least arbitrary choice; ties break on position
+                # so the pick never depends on footprint order.
+                def _land_key(p):
+                    return (-(mm(p.GetSizeX()) * mm(p.GetSizeY())),
+                            p.GetPosition().x, p.GetPosition().y)
+                matching.sort(key=_land_key)
+                big = matching[0]
+                sys.stderr.write(
+                    f"WARNING: probe port {probe['name']}: {ref}.{num} has "
+                    f"{len(matching)} lands on net {nets[0]}; using the largest, "
+                    f"{mm(big.GetSizeX()):.2f}x{mm(big.GetSizeY()):.2f} mm at "
+                    f"({mm(big.GetPosition().x):.3f}, "
+                    f"{mm(big.GetPosition().y):.3f}) mm.\n")
             pad = matching[0]
             node, info = _probe_pad_node_stack(
                 model, zmap, cu, fp, pad, probe["name"], probe[side],
@@ -2053,8 +2112,13 @@ def _required_gate_labels(topo, role):
 # --------------------------------------------------------------------------- #
 # top-level build
 # --------------------------------------------------------------------------- #
-def _roi(board, topo, margin=8.0):
-    """Bounding box of the FETs + Cin footprints, expanded by `margin` mm."""
+def _roi_base(board, topo):
+    """Bounding box of the FETs + Cin footprints, with NO margin applied.
+
+    Split out of `_roi` so the `extra_nets` diagnostics can answer "what margin
+    would reach this net?" — that question is about the UNGROWN box, and
+    re-deriving it from the grown one by subtracting `margin` would be a second
+    definition of the same thing, free to drift."""
     refs = set(topo["hs"]["refs"] + topo["ls"]["refs"] + topo["cin"])
     xs, ys = [], []
     for fp in board.GetFootprints():
@@ -2064,7 +2128,124 @@ def _roi(board, topo, margin=8.0):
             ys += [mm(bb.GetTop()), mm(bb.GetBottom())]
     if not xs:
         return None
-    return (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _grow(box, margin):
+    """Expand an (x0, y0, x1, y1) box uniformly by `margin` mm, or None -> None."""
+    if box is None:
+        return None
+    return (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
+
+
+def _roi(board, topo, margin=8.0):
+    """Bounding box of the FETs + Cin footprints, expanded by `margin` mm."""
+    return _grow(_roi_base(board, topo), margin)
+
+
+def _box_overhang(base, item):
+    """Smallest uniform growth of `base` that makes it TOUCH `item` (mm, >= 0).
+
+    Both are (x0, y0, x1, y1). Used to turn "this net's copper is outside the
+    ROI" into the actionable "--margin >= N mm would first reach it". It is a
+    LOWER bound on a usable margin: touching a bounding box is not the same as
+    putting a pour mesh node under a particular pad."""
+    return max(0.0,
+               base[0] - item[2], item[0] - base[2],
+               base[1] - item[3], item[1] - base[3])
+
+
+def _net_copper_extents(board, zmap, base_box=None):
+    """Per-net copper extents for the `extra_nets` diagnostics.
+
+    ``{net: {"bbox", "has_zone", "zone_bbox", "margin_required_mm"}}`` over every
+    net carrying copper the mesher could actually use — filled zone polygons,
+    tracks, via barrels and pads — on a layer that is in the copper stack.
+    Deliberately NOT the netlist: a net that exists only in the schematic carries
+    no copper, and for `extra_nets` it is exactly as unmeshable as a misspelt
+    name, so it must fall into the same hard error rather than pass the
+    membership check and then mesh nothing.
+
+    `margin_required_mm` is measured over FILLED ZONES ONLY, not over all copper,
+    and the distinction is load-bearing. `add_zones` is the only stage clipped to
+    the ROI; `add_tracks` and `add_vias` create nodes for their whole net
+    board-wide (the ROI only decides whether a track redundant with its own pour
+    may be dropped). And the pad-land terminal cascade
+    (`_pad_land_terminal` -> `_pad_region_contacts`) bonds to ZONE nodes. So the
+    question "would a bigger margin help?" is a question about the pour, and a
+    margin derived from the net's tracks would answer a different one.
+
+    It is `_box_overhang(base_box, item)` minimised over the net's individual
+    zone-layer bounding boxes — per item, not against the net's overall bbox,
+    because a net like GND spans the board and its union bbox would report
+    "margin 0" while the nearest real copper sits 30 mm away. It stays a LOWER
+    bound: the ROI touching a fill's bounding box is not the same as a mesh node
+    landing inside a particular pad.
+
+    Only called when `extra_nets` is non-empty: it is one extra pass over the
+    board's copper, and a run without the feature must pay nothing for it.
+    """
+    out = {}
+
+    def _rec(net):
+        rec = out.get(net)
+        if rec is None:
+            rec = out[net] = dict(bbox=None, has_zone=False, zone_bbox=None,
+                                  margin_required_mm=None)
+        return rec
+
+    def _union(cur, box):
+        if cur is None:
+            return box
+        return (min(cur[0], box[0]), min(cur[1], box[1]),
+                max(cur[2], box[2]), max(cur[3], box[3]))
+
+    def _add(net, box, zone=False):
+        rec = _rec(net)
+        rec["bbox"] = _union(rec["bbox"], box)
+        if not zone:
+            return
+        rec["has_zone"] = True
+        rec["zone_bbox"] = _union(rec["zone_bbox"], box)
+        if base_box is not None:
+            need = _box_overhang(base_box, box)
+            cur = rec["margin_required_mm"]
+            rec["margin_required_mm"] = need if cur is None else min(cur, need)
+
+    for i in range(board.GetAreaCount()):
+        z = board.GetArea(i)
+        net = z.GetNetname()
+        for lid in z.GetLayerSet().Seq():
+            if zmap.get(lid) is None:
+                continue
+            poly = z.GetFilledPolysList(lid)
+            if poly is None or poly.OutlineCount() == 0:
+                continue
+            bb = poly.BBox()
+            _add(net, (mm(bb.GetLeft()), mm(bb.GetTop()),
+                       mm(bb.GetRight()), mm(bb.GetBottom())), zone=True)
+    for t in board.GetTracks():
+        net = t.GetNetname()
+        a, b = t.GetStart(), t.GetEnd()
+        ax, ay, bx, by = mm(a.x), mm(a.y), mm(b.x), mm(b.y)
+        if t.Type() == pcbnew.PCB_VIA_T:
+            # A via lands on several layers; its presence in the copper stack is
+            # what matters, and its footprint is a barrel at one xy.
+            _add(net, (ax, ay, ax, ay))
+            continue
+        if zmap.get(t.GetLayer()) is None:
+            continue
+        _add(net, (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)))
+    cu = _cu_stack(board)
+    for fp in board.GetFootprints():
+        for pad in fp.Pads():
+            if not any(pad.IsOnLayer(lid) for lid in cu):
+                continue
+            p = pad.GetPosition()
+            hx, hy = mm(pad.GetSizeX()) / 2.0, mm(pad.GetSizeY()) / 2.0
+            _add(pad.GetNetname(), (mm(p.x) - hx, mm(p.y) - hy,
+                                    mm(p.x) + hx, mm(p.y) + hy))
+    return out
 
 
 def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
@@ -2076,7 +2257,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
           cin_extraction_basis="full_loop", cin_closure="cell_bridge",
           merge_vias=False, merge_via_radius=1.0,
           allow_missing_gate_ports=False, probe_ports=None,
-          probe_allow_proximity_bond=False):
+          probe_allow_proximity_bond=False, extra_nets=None):
     zmap = layer_z_map(board)
     model = Model(cu_thickness=cu_thickness, terminal_mode=terminal_mode)
     model.pitch = pitch
@@ -2089,8 +2270,33 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
         return {topo[role]["gate"]}
 
     gate_nets = side_gate_nets("hs") | side_gate_nets("ls")
-    nets = power_nets | gate_nets
-    roi = _roi(board, topo, margin)
+    base_box = _roi_base(board, topo)
+    roi = _grow(base_box, margin)
+
+    # ---- opt-in extra nets (see lib/extra_nets.py) ----
+    # The half-bridge job needs exactly power_nets|gate_nets, and that is what
+    # every run without this option still meshes: `extra` is empty, every union
+    # below is a no-op, and no extents pass is made. With it, whole regions the
+    # tool could not previously reach (the output power path: BflowS -> Bat+ ->
+    # BT+, and the GND return through the R26 shunt) become meshable so that a
+    # `probe_ports` entry there resolves to real copper instead of being refused
+    # for having none. The refusal itself is untouched — this supplies copper, it
+    # does not lower a bar.
+    extra_requested = extra_nets_lib.parse_spec(extra_nets)
+    extra_entries, extra_extents, extra = [], {}, set()
+    if extra_requested:
+        extra_extents = _net_copper_extents(board, zmap, base_box)
+        extra_entries = extra_nets_lib.classify(
+            extra_requested, power_nets, gate_nets, set(extra_extents))
+        extra = extra_nets_lib.mesh_nets(extra_entries)
+
+    # The pour-meshed set and the tracks/vias set are kept as two names, because
+    # they are NOT the same set: gate nets get tracks and vias but deliberately no
+    # pour (see build_pour_index). Extra nets join BOTH — a probe terminal needs
+    # pour mesh under the pad land to bond to, and the tracks/vias are what carry
+    # the path between two pads on a net with a thin or fragmented pour.
+    mesh_nets = power_nets | extra
+    nets = mesh_nets | gate_nets
     if cin_extraction_basis not in ("full_loop", "cap_only", "switch_residual"):
         raise ValueError("--cin-extraction-basis must be one of: full_loop, cap_only, "
                          "switch_residual")
@@ -2111,22 +2317,43 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
 
     # issue #6: index same-net filled pours so add_tracks can skip tracks routed
     # inside their own pour (redundant with the mesh add_zones builds below).
-    # Index ONLY power_nets — the exact set add_zones meshes — so a track is
+    # Index ONLY mesh_nets — the exact set add_zones meshes — so a track is
     # dropped only where a substitute pour mesh exists; gate nets (even if a gate
-    # net happens to have a pour) are never dropped, as they get no mesh.
-    pour_index = build_pour_index(board, zmap, power_nets)
+    # net happens to have a pour) are never dropped, as they get no mesh. This is
+    # an invariant, not a coincidence: pour_index and add_zones must be handed the
+    # SAME set or a track gets dropped with nothing put in its place.
+    pour_index = build_pour_index(board, zmap, mesh_nets)
     add_tracks(board, model, zmap, nets, pour_index=pour_index, roi=roi)
     # add_zones BEFORE add_vias: the via-merge reachability gate needs the pour
     # mesh nodes to already exist so it can verify a merged centroid barrel will
     # actually bond (stitch_zones) rather than float. Node CREATION order does not
     # affect the solved mesh (nodes are interned by position; segs are added
     # regardless), only the N-numbering in the .inp — which nothing depends on.
-    add_zones(board, model, zmap, power_nets, pitch, roi=roi, mode=zone_mesh)
+    add_zones(board, model, zmap, mesh_nets, pitch, roi=roi, mode=zone_mesh)
     add_vias(board, model, zmap, nets,  # gate traces can change layers too — model their vias
              merge_vias=merge_vias, merge_radius=merge_via_radius,
-             merge_nets=power_nets,  # only merge power-net via fields; gate vias stay per-via
+             # Only merge POWER-net via fields. Gate vias stay per-via, and so do
+             # extra-net vias: via merging is an approximation validated on the
+             # commutation loop, whereas an extra net is read for its two-terminal
+             # R/L between named pads, where the exact per-via barrel is both
+             # cheaper to justify and no slower in practice (extra nets are read
+             # by a probe, not solved as a dense field). Keeping merge_nets at
+             # power_nets also means --merge-vias behaves identically with and
+             # without extra_nets on the copper that feeds L_loop.
+             merge_nets=power_nets,
              pour_index=pour_index,  # ...only where the via sits in same-net filled pour...
              roi=roi, pitch=pitch)   # ...and only where the merged centroid can bond to the mesh
+
+    # Measure what the mesher actually produced for each extra net, and REFUSE a
+    # net that got nothing. This has to happen here, before the FET/cap/probe
+    # terminals are built: a net with no mesh under it surfaces downstream as
+    # "probe_ports: <name>: pad X resolved to NO copper contact", which reads as a
+    # pitch/margin bug in a different part of the tool. Raising here names the net
+    # and the margin that would reach it.
+    if extra_entries:
+        extra_nets_lib.measure_mesh(model, extra_entries)
+        extra_nets_lib.require_meshed(extra_entries, roi, margin,
+                                      extents=extra_extents)
 
     # FET leads + die shorts, or the cap-only/switch-residual plane-P variants.
     if cin_extraction_basis == "cap_only" and cin_closure == "per_fet":
@@ -2332,7 +2559,14 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     # whose pad never bonds into the pour at this pitch) — one floating port NaNs the
     # entire FastHenry solve. Keep the topo/cin_net manifests consistent.
     seed_port = "P_sw_residual" if residual_only else "P_pwr"
-    dropped = model.drop_floating_ports(seed_port)
+    # `extra` (empty unless extra_nets was declared) lets a port that spans ONE
+    # wholly-declared island survive the floating-port drop. Without it every
+    # probe on the output power path would be dropped here — BflowS/Bat+/BT+/GND
+    # are galvanically separate from the switching cell — and then hard-fail in
+    # require_not_dropped, which would make extra_nets mesh copper nobody can
+    # measure. See Model.drop_floating_ports for why this is narrower than it
+    # looks and why it cannot rescue a genuinely open port.
+    dropped = model.drop_floating_ports(seed_port, island_nets=extra)
     if probes:
         # A dropped derived port is a warning; a dropped PROBE is a hard failure —
         # it would leave the label out of `ports` and a consumer would read the
@@ -2368,6 +2602,17 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
             sys.stderr.write(
                 "WARNING: dropped more ports than kept — the P_pwr seed net may be "
                 "the disconnected one; check --sw/--gnd nets and the nearest-Cin pad.\n")
+    # ---- extra-net provenance ----
+    # Written ONLY when extra_nets was requested, so a run without the option
+    # emits byte-identical sidecar/topo/JSON to one from before it existed — the
+    # no-op claim is literal, not "equivalent modulo a new empty key".
+    if extra_entries:
+        extra_nets_lib.annotate_reachability(model, extra_entries, seed_port)
+        topo["extra_nets"] = extra_nets_lib.manifest(
+            extra_entries, roi=roi, margin=margin, extents=extra_extents)
+        for w in extra_nets_lib.run_warnings(extra_entries):
+            sys.stderr.write(f"WARNING: {w}\n")
+
     if cin_extraction_basis == "cap_only":
         validate_cap_only_ports(model)
     elif cin_extraction_basis == "switch_residual":
@@ -2626,6 +2871,15 @@ def main():
                          "the port list. Every failure (unknown refdes/pad, no copper "
                          "contact, label or node-pair collision, dropped as floating) "
                          "is a hard error, never a silent skip.")
+    ap.add_argument("--extra-nets", nargs="*",
+                    help="additional net names to MESH beyond {sw, vin, gnd} and the "
+                         "gate nets, e.g. --extra-nets BflowS Bat+ BT+ GND. Needed "
+                         "before a probe_ports entry can land on them; without it "
+                         "such a pad resolves to no copper and is refused. Passed as "
+                         "separate argv items (never a packed string) because a "
+                         "KiCad net name may contain , : and =. Extra nets do NOT "
+                         "extend the meshing ROI — raise --margin for that — and a "
+                         "requested net the ROI never reaches is a hard error.")
     ap.add_argument("--probe-allow-proximity-bond", action="store_true",
                     help="allow a probe terminal to bond by PROXIMITY (fabricated "
                          "spokes to nearby pour nodes) when no mesh node overlaps the "
@@ -2721,7 +2975,8 @@ def main():
                       merge_via_radius=args.merge_via_radius,
                       allow_missing_gate_ports=args.allow_missing_gate_ports,
                       probe_ports=args.probe_ports,
-                      probe_allow_proximity_bond=args.probe_allow_proximity_bond)
+                      probe_allow_proximity_bond=args.probe_allow_proximity_bond,
+                      extra_nets=args.extra_nets)
     except ValueError as e:
         raise SystemExit(str(e))
     dropped = topo.get("cin_dropped_ports")
@@ -2788,6 +3043,11 @@ def main():
                 zone_mesh_notes=getattr(model, "zone_mesh_notes", []),
                 terminal_regions=getattr(model, "terminal_regions", []),
                 terminal_fallbacks=getattr(model, "terminal_fallbacks", []))
+    # Only present when the option was used — see the note in build(). An absent
+    # key is the honest encoding of "this run meshed the derived set and nothing
+    # else"; an empty one would be a new field in every historical artifact.
+    if topo.get("extra_nets"):
+        side["extra_nets"] = topo["extra_nets"]
     with open(args.out + ".ports.json", "w") as f:
         json.dump(side, f, indent=2)
     vm = getattr(model, "via_merge", None)

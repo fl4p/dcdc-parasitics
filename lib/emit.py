@@ -250,6 +250,58 @@ def _only_fb_banner(p):
     ]
 
 
+def _extra_nets_banner(p):
+    """Banner for a run that meshed nets beyond the derived half-bridge set.
+
+    `extra_nets` widens the meshed copper past {sw, vin, gnd} + gate nets. Any
+    such net that a port reaches is in the solved deck, so it couples to the
+    commutation loop and `L_loop` here is NOT comparable with the same config
+    without it. A net that no port reaches is pruned back out and changes
+    nothing — but the reader cannot tell those two cases apart from the numbers,
+    which is exactly why the distinction has to be on the page rather than only
+    in `meta.extra_nets`.
+
+    Returns [] when the option was not used, so every existing report is
+    unchanged line for line."""
+    block = (p.get("meta") or {}).get("extra_nets") or {}
+    nets = block.get("nets") or []
+    if not nets:
+        return []
+    ported = [n for n in nets if n.get("ported")]
+    dead = [n for n in nets if not n.get("ported")]
+
+    def _name(n):
+        tag = " (isolated island)" if n.get("isolated") else ""
+        return f"`{n['net']}`{tag}"
+
+    lines = [
+        "> ⚠️ **Extra nets were meshed (`extra_nets`)** — this run modelled copper "
+        "outside the derived half-bridge set.",
+    ]
+    if ported:
+        lines.append(
+            "> **In the solved deck:** " + ", ".join(_name(n) for n in ported)
+            + ". This copper adds mutual coupling to the commutation loop, so "
+            "`L_loop` / `L_loop_single` / the gate loops from this run are **not** "
+            "comparable with the same config without `extra_nets`. Read the "
+            "`probe_ports` entries on these nets; treat the loop numbers as "
+            "diagnostic.")
+    if dead:
+        lines.append(
+            "> **Meshed but unported (pruned out of the deck, no effect on any "
+            "result):** " + ", ".join(f"`{n['net']}`" for n in dead)
+            + ". Declare a `probe_ports` entry on them or drop them — as declared "
+            "they cost geometry time and appear nowhere.")
+    roi = block.get("roi")
+    if roi:
+        lines.append(
+            f"> ROI (FET+Cin box + `--margin` {block.get('margin')} mm): "
+            f"({roi[0]:.1f}, {roi[1]:.1f}) .. ({roi[2]:.1f}, {roi[3]:.1f}) mm — "
+            f"extra nets do **not** extend it.")
+    lines.append("")
+    return lines
+
+
 def markdown(p):
     nH = 1e9
     t = p["topo"]
@@ -262,6 +314,7 @@ def markdown(p):
         "",
         *_only_fb_banner(p),
         *_altium_banner(p),
+        *_extra_nets_banner(p),
         f"Extracted by `dcdc-tools/parasitics` at the {p['freq_Hz']:g} Hz plateau "
         f"(mesh pitch {p['meta'].get('pitch')} mm, FET lead {p['meta'].get('lead_mm')} mm).",
         "",
@@ -411,7 +464,10 @@ def markdown(p):
         # carries the rejection evidence; without this the reader sees an authoritative-looking
         # per-cap Lb/Rb table with nothing anywhere marking it as the model that lost.
         cm = p.get("cin_model") or {}
-        if p.get("reduce_info") and cm.get("matrix_valid") is True:
+        # Key on the SCALAR caveats specifically, not on reduce_info being non-empty:
+        # reduce_info also carries model-independent advisories (the parallel-FET note), and
+        # those must not make the report claim the scalar model was rejected.
+        if p.get("reduce_scalar_warn") and cm.get("matrix_valid") is True:
             lines += [
                 f"> ⚠️ **This shared-trunk decomposition was REJECTED for this board.** The run "
                 f"emits the **{cm.get('mode')}** Cin model (`{cm.get('basis')}` basis); the "

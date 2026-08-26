@@ -384,6 +384,7 @@ python3 extract_parasitics.py PCB --sw SW_NET --gnd GND_NET \
         [--parallel-fets lumped|per-device] \
         [--hs-kelvin] [--ls-kelvin] [--weld-tol 0.6] [--zone-mesh grid|polygon] \
         [--terminal-mode padland|single|finite|point] \
+        [--extra-nets NET ...] \
         [--margin 8] [--svg] -o OUTDIR
 ```
 
@@ -513,6 +514,95 @@ python3 extract_parasitics.py .../Fugu2.kicad_pcb --sw SW --gnd BuckGND --vin So
         --emit-cin-network --cin-network-model matrix --pitch 1.0 -o out/
 ```
 
+### `extra_nets` — meshing copper the half-bridge topology does not touch
+
+The meshed set is *derived*: `{--sw, --vin, --gnd}` plus the HS/LS gate nets, and
+**nothing else**. That is exactly right for the commutation and gate loops, and it
+makes whole regions of a board unreachable. On Fugu2 the buck's entire **output
+power path** is outside it:
+
+```
+coil lug J6.1 (BflowS) -> Q5/Q6/Q7 -> F1 (Bat+ -> BT+) -> J9.1 (BT+)
+return:  J9.2 (GND) -> R26 (0.5 mOhm shunt) -> BuckGND
+```
+
+`BflowS`, `Bat+`, `BT+`, `GND` (a **different** net from `BuckGND` — R26 straddles
+them) and `T_HV+` are never meshed, so a `probe_ports` entry on any of them dies
+with
+
+```
+probe_ports: out_coil_bflow: pad J6.1 (net 'BflowS') resolved to NO copper
+contact on any of its layers (layer 0: no_same_net_zone_mesh; ...)
+```
+
+That refusal is **correct** — the alternative is a bare pad-centre node that
+point-injects the current and reports a loop inductance nobody asked for. What was
+missing was copper, not permission. `extra_nets` supplies it:
+
+```yaml
+extra_nets: [BflowS, "Bat+", "BT+", GND, "T_HV+"]
+probe_ports:
+  out_coil_bflow: [J6.1, C10.1]     # both on BflowS
+```
+
+On the CLI: `--extra-nets BflowS Bat+ BT+ GND T_HV+`. Net names are passed as
+separate argv items, never packed into one string — a KiCad net name may contain
+`,`, `:` and `=`.
+
+**Extra nets do NOT extend the meshing ROI.** `--margin` stays the single ROI
+authority, for two reasons: a net like `GND` spans the whole outline, so an
+auto-grown ROI would silently mesh the entire board at the one place this tool has
+a hard cost cliff; and moving the ROI moves the *power-net* pour mesh too, so
+adding a diagnostic net would shift `L_loop`. Instead the tool **says so** — a
+requested net whose pour the ROI never reaches is a hard error naming the margin
+that would first reach it:
+
+```
+extra_nets: the following net(s) got NO pour mesh — the meshing ROI
+(21.0, 31.7) .. (69.5, 96.7) mm does not reach their filled copper:
+  - 'Bat+': 456 track/via node(s) but no pour mesh; its pour spans
+    (58.5, 75.2) .. (73.7, 89.2) mm; --margin >= 10.8 mm would first reach it
+    (currently 8 mm)
+```
+
+Note the predicate is the **pour** mesh, not node count: only `add_zones` is
+clipped to the ROI, so a net whose fill is 30 mm away still arrives with hundreds
+of track and via nodes while a pad-land terminal has nothing to bond to.
+
+Everything else that can go wrong is a hard error too, never a silent drop
+(unlike `cin_loop_refs`): an unknown net name — with a `did you mean` suggestion —
+and a net with no filled zone anywhere on the board, where no margin can ever
+help.
+
+**Reachability, and why an extra net is usually an island.** Extra nets are
+galvanically separate from the switching cell: the back-flow FETs, the fuse and
+the shunt in between are *components*, and the extractor models neither. So:
+
+- an extra net with **no port** on it is dead copper. `prune()` keeps only
+  port-reachable copper, so it is meshed and then dropped from the deck entirely
+  — it costs geometry time and appears in no result. The run **warns**, with the
+  node count.
+- an extra net **with** a probe port on it survives `drop_floating_ports` through
+  a narrow, opt-in allowance: both endpoints must be in ONE component, and every
+  node of that component must be on a declared extra net. The NaN condition the
+  guard actually protects against — two endpoints on two *different* conductors —
+  is never relaxed, for any net. (FastHenry solves disjoint conductors fine;
+  measured on two 10 mm × 1 mm traces at 1 MHz, it returns a finite symmetric 2×2,
+  6.99 nH self and 1.66 nH mutual.)
+- that copper is then **in the solved deck**, so it adds mutual coupling to the
+  commutation loop. `L_loop` from such a run is **not** comparable with the same
+  config without `extra_nets`; the existing `probe_ports[].pulled_new_copper`
+  flags say which probe pulled it in.
+
+Provenance lands in `parasitics.json` under `meta.extra_nets` — per net: the
+`nodes` / `zone_nodes` meshed, how many were `retained` after the prune, whether
+it is `ported` and `isolated`, its copper `bbox` / `zone_bbox`, and
+`margin_required_mm` — plus the run's `roi`, `margin`, and
+`roi_policy: extra_nets_do_not_extend_roi`. `report.md` carries a banner
+separating the nets that are in the solved deck from the ones that were pruned
+back out. Both are emitted **only** when the option was used, so a run without it
+produces byte-identical artifacts.
+
 ### Interactive path viewer
 
 `visualize_paths.py` emits a standalone HTML/SVG viewer for inspecting the copper
@@ -631,6 +721,7 @@ lib/
   kicad_palace_dump.py  # stdlib + pcbnew -> complete copper/drill/census JSON
   kicad_palace.py       # complete dump + stackup -> closed volume primitives
   fet_discovery.py      # auto-ID FETs / Vin / gate nets / Cin / gate network
+  extra_nets.py         # opt-in extra meshed nets: guards + provenance
   solve_reduce.py       # run fasthenry, parse Zc.mat -> named parasitics
   fastercap.py          # diagnostic surface-BEM path
   palace_mesh.py        # closed fixture geometry -> conformal Gmsh volume mesh

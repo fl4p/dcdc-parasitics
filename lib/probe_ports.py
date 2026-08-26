@@ -47,6 +47,11 @@ _SANITIZE = re.compile(r"[^A-Za-z0-9_]+")
 # Endpoint syntax: REF.PAD. Refdes never contains a dot; pad "numbers" are
 # strings in KiCad (A1, 2, MP...). Reject the characters used by the
 # comma/colon/equals wire format so a name can never smuggle a separator.
+#
+# REF.PAD names a TERMINAL, not a land. One number can cover several lands -- the
+# split tab and lead fingers of an SMD power package, or a footprint carrying
+# alternate lands for two mounting orientations -- and build_probe_terminals lands
+# on the largest of them, reporting which. Only lands on DIFFERENT nets are refused.
 _ENDPOINT = re.compile(r"^([A-Za-z0-9_+\-]+)\.([A-Za-z0-9_+\-]+)$")
 
 
@@ -263,13 +268,24 @@ def annotate_perturbation(model, probes):
         whole cost to whichever ran first, and the second would otherwise report
         "added nothing";
       * `retained_nodes_added` — nodes `prune()` now keeps only because this probe
-        seeds them. **In a successful build this is structurally zero**: the caller
-        runs `drop_floating_ports` first, so every surviving probe is already inside
-        the seed port's connected component, hence inside `base`. It is kept
+        seeds them. **On the switching cell this is structurally zero**: the caller
+        runs `drop_floating_ports` first, so a surviving probe there is already
+        inside the seed port's connected component, hence inside `base`. It is kept
         because it is the correct general statement of the question and it is the
         signal that fires in the states the drop guard would otherwise have to
         catch — but the terminal-geometry signals are the operative ones, and this
         one must not be read as independent corroboration.
+
+        **THE "STRUCTURALLY ZERO" PART STOPPED BEING TRUE WHEN `extra_nets` LANDED,
+        and a nonzero value there is the feature working, not an anomaly.** A probe
+        on a declared island (`Model.drop_floating_ports(island_nets=…)`) survives
+        the drop guard *precisely by not being in the seed's component*, so none of
+        its nodes are in `base` and `retained` is the whole island's node count.
+        That is reported honestly: `pulled_new_copper` fires True, which is the
+        documented signal for "this probe brought copper the rest of the deck does
+        not reach". Do not "fix" the nonzero back to zero — the invariant above is
+        scoped to the seed component, and an island port is outside it by
+        construction.
 
     If the baseline cannot be evaluated at all (no non-probe ports), every probe
     reports `pulled_new_copper: true` — the reported-perturbation direction, never

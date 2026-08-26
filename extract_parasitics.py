@@ -39,6 +39,7 @@ sys.path.insert(0, LIB)  # library modules live in lib/; root holds only this CL
 import numpy as np  # noqa: E402  (for the LinAlgError type on a degenerate port matrix)
 import emit  # noqa: E402
 import pcb_source  # noqa: E402
+import extra_nets as extra_nets_lib  # noqa: E402
 import probe_ports as probe_ports_lib  # noqa: E402
 import solve_reduce  # noqa: E402
 
@@ -154,6 +155,7 @@ DEFAULTS = {
     "gate_net_override": None,
     "probe_ports": None,
     "probe_allow_proximity_bond": False,
+    "extra_nets": None,
     "hs_package": None,
     "ls_package": None,
     "hs_kelvin": False,
@@ -204,6 +206,10 @@ LIST_TYPES = {
     "cin_refs": str,
     "cin_loop_refs": str,
     "cin_network_refs": str,
+    # Net NAMES, not refdes. A KiCad net name is arbitrary text (hierarchical
+    # paths, '+' and '-' signs, spaces), which is why this crosses the subprocess
+    # boundary as separate argv items rather than a packed string.
+    "extra_nets": str,
 }
 SCALAR_TYPES = {
     "pcb": str,
@@ -282,7 +288,8 @@ def run_geom(args, pitch, outdir, tag=None):
     for flag, vals in (("--hs-ref", args.hs_ref), ("--ls-ref", args.ls_ref),
                        ("--cin-refs", args.cin_refs),
                        ("--cin-loop-refs", args.cin_loop_refs),
-                       ("--cin-network-refs", args.cin_network_refs)):
+                       ("--cin-network-refs", args.cin_network_refs),
+                       ("--extra-nets", getattr(args, "extra_nets", None))):
         if vals:
             cmd += [flag] + vals
     if args.hs_kelvin:
@@ -427,7 +434,7 @@ def _load_altium_sidecar(pcb_input, resolved_pcb, workdir):
     return meta
 
 
-def _meta_for_side(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
+def _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
     return dict(pitch=pitch, lead_mm=side.get("lead_mm"),
                 cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
                 lf_freq=side.get("lf_freq"),
@@ -446,6 +453,19 @@ def _meta_for_side(args, pitch, side, pcb_input, pcb_sha256, config_sha256, alti
                 pcb_sha256=pcb_sha256,
                 extract_config=args.config, extract_config_sha256=config_sha256,
                 altium_import=altium_meta)
+
+
+def _meta_for_side(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
+    meta = _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256,
+                      altium_meta)
+    # ADDED CONDITIONALLY, not with a None default. `extra_nets` widens the meshed
+    # copper beyond the derived half-bridge set, so a payload carrying it is not
+    # comparable with one that does not — but a run that never used the option
+    # must still produce the byte-identical parasitics.json it always did, which
+    # an always-present `extra_nets: null` would quietly break.
+    if side.get("extra_nets"):
+        meta["extra_nets"] = side["extra_nets"]
+    return meta
 
 
 def _inject_packages(args, side):
@@ -988,6 +1008,18 @@ def build_parser():
                          "L/R, mutual to the commutation port, and whether the probe "
                          "pulled previously-unported copper into the deck). In YAML use "
                          "the mapping form: probe_ports: {cap_at_d9: [D9.2, D9.3]}.")
+    ap.add_argument("--extra-nets", nargs="*", default=argparse.SUPPRESS,
+                    help="additional net NAMES to mesh beyond the derived set "
+                         "({--sw, --vin, --gnd} plus the gate nets), e.g. "
+                         "--extra-nets BflowS Bat+ BT+ GND. Use it to make a "
+                         "region the half-bridge topology does not touch (the "
+                         "output power path, a shunt return) measurable by a "
+                         "probe_ports entry; without it such a pad resolves to no "
+                         "copper and is refused. Extra nets do NOT extend the "
+                         "meshing ROI — raise --margin for that — and a net the "
+                         "ROI never reaches is a hard error naming the margin that "
+                         "would. Recorded in parasitics.json meta.extra_nets. In "
+                         "YAML: extra_nets: [BflowS, 'Bat+'].")
     ap.add_argument("--probe-allow-proximity-bond", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
                     help="allow a probe terminal to bond by PROXIMITY when no mesh "
@@ -1266,6 +1298,18 @@ def parse_args(argv=None):
                 "switch_residual: that basis is a single-port residual gauge and "
                 "the extractor rejects every extra solved port. Use full_loop "
                 "(or cap_only).")
+    # extra_nets: normalize (and refuse an unusable entry) here, the one place the
+    # YAML and CLI paths meet, so a bad declaration costs nothing instead of
+    # surfacing inside the geometry subprocess minutes later. The SEMANTIC check
+    # — does this net carry copper on THIS board, and does the ROI reach it — can
+    # only run there, where pcbnew is; this is the cheap half.
+    if merged.get("extra_nets"):
+        try:
+            merged["extra_nets"] = extra_nets_lib.parse_spec(merged["extra_nets"])
+        except extra_nets_lib.ExtraNetError as e:
+            ap.error(str(e))
+        if not merged["extra_nets"]:
+            ap.error("extra_nets: declared but empty; remove the key or name a net")
     if merged.get("cin_refs") and merged.get("cin_loop_refs"):
         ap.error("--cin-refs is an alias for --cin-loop-refs; pass only one")
     if merged.get("cin_refs"):

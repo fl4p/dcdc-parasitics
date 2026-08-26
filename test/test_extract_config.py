@@ -1190,6 +1190,116 @@ def test_switch_residual_gauge_leg_runs_without_probe_ports():
     assert seen["switch_residual"] is None
 
 
+def test_extra_nets_yaml_list_is_accepted_and_deduped():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+extra_nets: [BflowS, "Bat+", "BT+", BflowS]
+""")
+    args = extract_parasitics.parse_args(["--config", cfg])
+    assert args.extra_nets == ["BflowS", "Bat+", "BT+"]
+
+
+def test_extra_nets_default_is_absent():
+    args = extract_parasitics.parse_args(
+        ["/b.kicad_pcb", "--sw", "SW", "--gnd", "GND", "-o", "o"])
+    assert args.extra_nets is None
+
+
+def test_extra_nets_yaml_requires_a_list_of_strings():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+extra_nets: BflowS
+""")
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args(["--config", cfg]))
+    assert "extra_nets: expected list" in msg
+
+
+def test_extra_nets_refuses_an_empty_entry_rather_than_dropping_it():
+    # A blank list item cannot name a net. Dropping it silently is how a
+    # declaration goes missing, which is the posture this whole feature avoids.
+    _, msg = _exit_msg(lambda: extract_parasitics.parse_args([
+        "/b.kicad_pcb", "--sw", "SW", "--gnd", "GND", "-o", "o",
+        "--extra-nets", "BflowS", ""]))
+    assert "empty net name" in msg
+
+
+def test_extra_nets_cli_overrides_yaml():
+    cfg = _yaml("""
+pcb: /boards/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+out: out-par
+extra_nets: [FromYaml]
+""")
+    args = extract_parasitics.parse_args(
+        ["--config", cfg, "--extra-nets", "FromCli"])
+    assert args.extra_nets == ["FromCli"]
+
+
+def test_run_geom_forwards_extra_nets_as_separate_argv_items():
+    # NOT a packed string: a KiCad net name may contain ',' ':' and '=', so any
+    # separator-based wire form could smuggle one net name into two.
+    base = dict(pcb="b.kicad_pcb", sw="SW", gnd="GND", cin_parallel=1, lead_mm=0.1,
+                nwinc=1, nhinc=1, cu_temp=20.0, cu_thickness=0.035, lf_freq=1e5,
+                hf_freq=1e8, ndec=3, weld_tol=0.6, zone_mesh="grid",
+                terminal_mode="padland", margin=8.0, vin=None, hs_gate=None,
+                ls_gate=None, hs_ref=None, ls_ref=None, cin_refs=None,
+                cin_loop_refs=None, cin_network_refs=None, hs_kelvin=False,
+                ls_kelvin=False, include_bulk_cin=False, emit_cin_network=False,
+                cin_network_model="scalar_trunk", cin_extraction_basis="full_loop",
+                cin_closure="cell_bridge", parallel_fets="lumped",
+                gate_net_override=None, allow_missing_gate_ports=False,
+                probe_ports=None, merge_vias=False, merge_via_radius=1.0)
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, env=None):
+        captured["cmd"] = cmd
+        inp = cmd[cmd.index("-o") + 1]
+        import json
+        with open(inp + ".ports.json", "w") as fh:
+            json.dump({"ports": ["P_pwr"], "topo": {}}, fh)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    d = tempfile.mkdtemp()
+    orig_run, orig_req = extract_parasitics.subprocess.run, extract_parasitics.require_gate_ports
+    extract_parasitics.subprocess.run = fake_run
+    extract_parasitics.require_gate_ports = lambda side, pitch, **kw: None
+    try:
+        extract_parasitics.run_geom(SimpleNamespace(extra_nets=None, **base), 1.0, d)
+        assert "--extra-nets" not in captured["cmd"]
+        extract_parasitics.run_geom(SimpleNamespace(
+            extra_nets=["BflowS", "Bat+", "Net-(X=1,2)"], **base), 1.0, d)
+        i = captured["cmd"].index("--extra-nets")
+        assert captured["cmd"][i + 1:i + 4] == ["BflowS", "Bat+", "Net-(X=1,2)"]
+    finally:
+        extract_parasitics.subprocess.run = orig_run
+        extract_parasitics.require_gate_ports = orig_req
+
+
+def test_meta_omits_extra_nets_entirely_when_the_option_was_not_used():
+    # The byte-level no-op claim: a run without extra_nets must emit the same
+    # parasitics.json it always did, so the key is ABSENT, not `null`.
+    args = SimpleNamespace(plateau=5e6, pcb="b.kicad_pcb", config=None)
+    side = {"lead_mm": 0.0}
+    meta = extract_parasitics._meta_for_side(
+        args, 1.0, side, "b.kicad_pcb", "sha", None, None)
+    assert "extra_nets" not in meta
+
+    side_used = dict(side, extra_nets={"nets": [{"net": "BflowS"}],
+                                       "roi_policy": "extra_nets_do_not_extend_roi"})
+    meta_used = extract_parasitics._meta_for_side(
+        args, 1.0, side_used, "b.kicad_pcb", "sha", None, None)
+    assert meta_used["extra_nets"]["nets"][0]["net"] == "BflowS"
+    # ...and nothing else about the payload moved
+    assert {k: v for k, v in meta_used.items() if k != "extra_nets"} == meta
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     fails = 0

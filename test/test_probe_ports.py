@@ -370,21 +370,45 @@ def test_pad_on_no_copper_layer_is_refused_not_invented():
     assert len(model.segs) == segs0, "invented terminal copper before refusing"
 
 
-def test_duplicate_pad_numbers_are_ambiguous_and_refused():
-    # CODEX FINDING 2b. KiCad permits several lands with one pad number; picking
-    # the first in footprint order silently decides which loop was measured.
+def test_duplicate_pad_numbers_on_one_net_land_on_the_largest():
+    # An SMD power package splits one terminal across several lands (thermal tab
+    # plus lead fingers), and a terminal-block footprint carries alternate lands
+    # for two mounting orientations. Same number, same net, one TERMINAL -- that
+    # is normal, and refusing it blocks every power-path probe on the board. Land
+    # on the biggest land: it carries the terminal's current, and the choice must
+    # not depend on the order pads happen to appear in the footprint.
+    small = _Pad("2", "SW", 20.0, 10.0, size_mm=0.5)
+    big = _Pad("2", "SW", 10.0, 10.0, size_mm=2.0)
+    board = _Board([_Footprint("D9", [small, big, _Pad("3", "GND", 14.0, 10.0)])])
+    pour = _pour_grid("SW", F_CU, 10.0, 10.0)
+    pour[("SW", F_CU)] += _pour_grid("SW", F_CU, 20.0, 10.0)[("SW", F_CU)]
+    pour.update(_pour_grid("GND", F_CU, 14.0, 10.0))
+    model = _model_with_pour(pour)
+    probes = probe_ports.parse_spec({"p": ["D9.2", "D9.3"]})
+    kicad_geom.build_probe_terminals(board, model, ZMAP, probes)
+    # The port sits over the 2.0 mm land, not the 0.5 mm one it was declared after.
+    where = {v: k for k, v in model._nodes.items()}[probes[0]["a_node"]]
+    assert abs(where[2] * kicad_geom.SNAP - 10.0) < 0.5, where
+
+
+def test_duplicate_pad_numbers_on_different_nets_are_refused():
+    # CODEX FINDING 2b, narrowed to the case that is genuinely ambiguous: two
+    # lands, one number, DIFFERENT nets. 'D9.2' then names no single node and
+    # picking one silently decides which loop was measured.
     board = _Board([_Footprint("D9", [_Pad("2", "SW", 10.0, 10.0),
-                                      _Pad("2", "SW", 20.0, 10.0),
+                                      _Pad("2", "BuckGND", 20.0, 10.0),
                                       _Pad("3", "GND", 14.0, 10.0)])])
     pour = _pour_grid("SW", F_CU, 10.0, 10.0)
     pour.update(_pour_grid("GND", F_CU, 14.0, 10.0))
     model = _model_with_pour(pour)
+    segs0 = len(model.segs)
     probes = probe_ports.parse_spec({"p": ["D9.2", "D9.3"]})
     with pytest.raises(probe_ports.ProbeError) as e:
         kicad_geom.build_probe_terminals(board, model, ZMAP, probes)
     msg = str(e.value)
-    assert "2 pads numbered '2'" in msg
-    assert "10.000, 10.000" in msg and "20.000, 10.000" in msg
+    assert "2 pads numbered '2'" in msg and "DIFFERENT nets" in msg
+    assert "BuckGND" in msg and "SW" in msg
+    assert len(model.segs) == segs0, "invented terminal copper before refusing"
 
 
 def test_perturbation_attribution_is_order_independent():

@@ -1,0 +1,119 @@
+# flu -- terminal-path copper resistance, for the loss deck's Rmisc.
+#
+# WHY. loss/examples/flu.yaml books no series term for the board copper between the
+# coil and the output terminal, and fetlib's converter model carries a guessed one:
+# apps/mppts/fugu.py MPPT_Fheat2() declares output_parasitics R_csr 0.5m + R_rpcb 1.5m
+# + R_fuse 1.6m = 3.6 mOhm against Iout^2. At 30.4 A that is 3.34 W = 0.39 pp -- larger
+# than the whole remaining bench-vs-model gap (2026-08-26 eff-buck sweep: +0.09..+0.33
+# pp). This run extracts the part of it a field solver can answer.
+#
+# WHAT IT CANNOT ANSWER. FastHenry solves copper. The components in the path are out of
+# reach and need a datasheet or a 4-wire measurement:
+#     R26      0.5 mOhm shunt        BuckGND <-> GND
+#     F1, F3   40 A blade fuses      Bat+ <-> BT+ , T_HV+ <-> Solar+
+#     Q5/6/7   3x AONS66612          BflowS <-> Bat+   0.55 mOhm cold, ~0.72 hot
+# Do not read a small copper number as "Rmisc is small". And note Q5/Q6/Q7 are not in
+# the fetlib model at all -- ~0.5 W unbooked at 30 A, independent of anything here.
+#
+# WHICH PART Q5/6/7 ARE IS NOT ON THE BOARD. Their value field is the multi-option BOM
+# string 'TPH1R306PL,L1Q or NTMFS5C612NLT1G' in a footprint-compatible PG-TDSON-8 slot.
+# What is actually stuffed on flu is 3x AONS66612 (Fab, 2026-08-26) = 1.65 mOhm each,
+# and that is the only source for it -- do not read the value field as the part.
+#
+# METERED SPAN (Fab, 2026-08-26): INA228_3's voltage taps land on flu's OWN output
+# terminals, J9. So J6 -> Q5/6/7 -> F1 -> J9 and the return J9.2 -> R26 -> BuckGND are
+# all inside the measured efficiency. The input tap point (J10 vs upstream of F3) is
+# NOT established, so the in_* legs are extracted but must not be booked yet.
+#
+# R26 SITS IN THE GROUND LEG. J10.1 is BuckGND, J9.2 is GND, and R26 is the only
+# on-board path between them -- so tying input and output ground externally, as the
+# power-loop rig does, puts a wire across the board's own current-sense shunt. That
+# split is external wiring and is not measured here; these legs give the on-board
+# copper each candidate path carries, which is what the split calculation needs.
+pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+sw: SW
+gnd: BuckGND
+vin: Solar+
+
+hs_ref: [Q1, Q3]
+# flu's single LS device sits in the D9 (Schottky) land; only its gate is hand-wired.
+ls_ref: [D9]
+gate_net_override:
+  D9: "Net-(Q2-G)@Q2.1"
+
+# The output power path is not part of the half-bridge topology, so none of its nets
+# are meshed by default and every pad on them would be refused as "no copper contact".
+extra_nets: [BflowS, "Bat+", "BT+", GND, "T_HV+"]
+
+# EVERY PAIR IS SAME-NET AND JOINED BY BOARD COPPER -- the constraint that killed
+# probe_c1 in flu-sense.yaml (Q2.2/Q2.3 close only through the circuit, and the
+# reduction returned R_ring = -2.9 mOhm before _validate_probe_numerics refused it).
+# Each leg stops at the pads of the component in series; the COMPONENT's own resistance
+# is added by hand, downstream.
+#
+# READ port_R_dc, NOT port_R. Iout is DC with ~15 A of 39 kHz ripple on top, and the
+# conduction loss the deck books is the DC value. "port_R_dc" is evaluated at
+# R_dc_freq_Hz == lf_freq == 39 kHz, not at DC -- the name is a role, not a frequency.
+# It is still the right column here: skin depth in copper at 39 kHz is ~0.33 mm against
+# 35-70 um of plating, so the current fills the conductor. That argument is about THIS
+# board's copper weight, not a general licence to read port_R_dc as DC.
+#
+# Each scalar is the diagonal of the port_R_dc matrix, i.e. the two-terminal
+# driving-point resistance, so Iout * R_dc is the drop that load current causes on that
+# segment by superposition and the legs sum in series. The "a port measures a loop, not
+# a segment" caveat is real but belongs to L, not to a resistive driving point.
+probe_ports:
+  # --- metered output: coil lug -> back-flow FETs -> fuse -> terminal ---
+  out_coil_bflow: [J6.1, Q5.1]     # BflowS
+  out_bflow_fuse: [Q5.3, F1.1]     # Bat+
+  out_fuse_term:  [F1.2, J9.1]     # BT+
+  # --- metered output return: terminal ground -> shunt -> LS source ---
+  out_gnd_shunt:  [J9.2, R26.2]    # GND
+  out_shunt_ls:   [R26.1, D9.3]    # BuckGND
+  # --- input side: extracted, NOT bookable until the INA228_2 tap point is known ---
+  in_term_fuse:   [J10.2, F3.1]    # T_HV+
+  in_fuse_cin:    [F3.2, C11.1]    # Solar+
+
+# Q5.1 and Q5.3 are split lands (thermal tab plus lead fingers) and J9/J10 carry
+# alternate lands for two mounting orientations. The extractor lands on the largest
+# land of the terminal and says which on stderr; check that line before booking.
+#
+# A PROBE AT Q5 IS NOT ONE FET'S BRANCH. Q5, Q6 and Q7 share the BflowS and Bat+ pours,
+# so the port already reflects spreading across the whole pour. That is the right
+# quantity for "what does the J6 -> pour path present" and the wrong one for a
+# per-device branch resistance.
+#
+# TWO SIDE-TAPS, CHECKED against the board file (2026-08-26). R28 on BT+ is '47k, 1%' in
+# an 0805 -- a sense divider, no load current. D12 on Bat+ is NOT a clamp, which is what
+# it looks like from its refdes and package: it is the HOUSEKEEPING FEED --
+#     Bat+ -> D12 (SS310) -> F2 (500 mA) -> J7 pin 1 -> external 3.3V PSU module -> +3.3V
+# with C13 4.7uF/100V and D13 SMAJ85A across the node, and D11 diode-ORing a second
+# source in. That rail runs the ESP32-S3, the UCC21330 and (via the U5 AP3012 step-up)
+# the +12V gate drive. It carries ~14 mA against 30 A of load current, so it does not
+# disturb the series-chain assumption for the COPPER -- but it matters for the power
+# balance: the tap is on Bat+, UPSTREAM of F1 and J9, so that power leaves the output
+# path before the output DCCT sees it while still being drawn through the input meter.
+# Measured board draw at idle is 392 mW (Fab, from smart_shunt history, 2026-08-26).
+parallel_fets: per-device
+lead_mm: 0
+cin_loop_refs: [C9, C16, C17, C18, C21, C22, C27]
+# scalar_trunk + emit_cin_network false: probe_ports.require_no_production_cin_network
+# hard-fails a run that also emits the production Cin network.
+cin_network_model: scalar_trunk
+pitch: [1]
+lf_freq: 39000
+emit_cin_network: false
+weld_tol: 0.6
+zone_mesh: grid
+
+# The ROI is the FET+Cin bounding box grown by this margin, and it must now reach J9/J10
+# at the board edge. If a declared extra net falls outside it the run fails and names
+# the margin that would work -- raise this to that number, do not guess.
+#
+# PRUNE / ROI WARNING. This ROI and this port set both differ from out/flu-sense, so
+# every commutation-loop number out of this run (L_loop, L_loop_single, R_loop) is
+# uninterpretable -- ROI and probes moved together and the diff isolates nothing. Read
+# probe_R_dc for the seven legs and nothing else.
+margin: 45.0
+out: out/flu-terminals
+svg: true
