@@ -221,6 +221,73 @@ solve rationing in §7.
 still has no trustworthy number, and §0.6 stands. The ladder (§0.7 step 3) and
 the Fugu re-extraction (step 4) are the remaining work.
 
+### 0.9 The ladder on corrected geometry: still NOT CONVERGED
+
+Five rungs halving `max_planar_area_m2` and `max_vertical_step_m` together, on
+v3 geometry with the fixed band, order 1 + BoomerAMG, 8 ranks. Every rung has
+exactly **2 air levels**. Grade with
+`out/palace-qualification/simple-hb-zladder-v1/grade_v3.py -boomeramg`.
+
+| rung | area m² | vstep m | nodes | tets | trace pF | Δrel | pos_off | recip F | s | RSS GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3r1 | 8e-6 | 8e-4 | 33,610 | 154,206 | 151.2072 | — | 0 | 8.9e-24 | 6.6 | 1.48 |
+| v3r2 | 4e-6 | 4e-4 | 50,098 | 241,248 | 145.7398 | −3.75% | 0 | 1.7e-23 | 9.3 | 1.91 |
+| v3r3 | 2e-6 | 2e-4 | 92,731 | 472,644 | 138.3096 | −5.37% | 0 | 4.4e-23 | 17.5 | 3.16 |
+| v3r4 | 1e-6 | 1e-4 | 215,289 | 1,158,066 | 133.3821 | −3.69% | 0 | 3.0e-23 | 43.5 | 7.07 |
+| v3r5 | 5e-7 | 5e-5 | 597,037 | 3,346,722 | 129.1146 | −3.31% | 0 | 1.9e-23 | 101.6 | 13.27 |
+
+**Matrix health is perfect** — zero positive off-diagonals and reciprocity at
+1e-23 F on every rung, against the Fugu +35.8 pF that motivated the gate in §5
+step 4. **Cost is no longer a constraint:** the whole five-rung ladder is under
+three minutes of solve time and peaks at 13 GB, so §7's "at most 2 concurrent
+solves" and 1800 s budget no longer bind.
+
+**But the finest pair is 3.31% / 4267.55 fF against the 2% + 1 fF band: NOT
+CONVERGED.** The gate stays as it is.
+
+**No value may be quoted, including an extrapolated one.** The observed
+convergence order, `log2(Δprev/Δnext)`, is **−0.44, +0.59, +0.21** across
+successive windows, against ~2 expected for order-1 elements. Aitken over a
+sliding three-rung window gives **166.44 → 123.68 → 101.52 pF** — a 30% swing
+per window. The sequence is not in an asymptotic regime, so extrapolation is
+meaningless here. (This is worth remembering against §4's p-ladder Aitken of
+11.706 pF, which was quoted as a limit.)
+
+**Why, measured — and it is not the obvious answer.** `quality_meshing=False`
+means Triangle applies no shape-quality floor, and extrusion turns each bad
+triangle into a column of bad tets. Normalised shape measure
+`12(3V)^(2/3)/Σedge²` (1.0 = regular, → 0 = sliver), from `tet_quality.py`:
+
+| rung | median | < 0.05 | < 0.1 | min |
+|---|---|---|---|---|
+| v3r1 | 0.039 | 57.4% | 74.9% | 1e-6 |
+| v3r2 | 0.051 | 49.2% | 65.6% | 1e-6 |
+| v3r3 | 0.094 | 30.1% | 50.8% | 1e-6 |
+| v3r4 | 0.202 | 14.8% | 34.7% | 1e-6 |
+| v3r5 | 0.177 | 7.3% | 20.0% | 1e-6 |
+
+Quality is **not** constant across the ladder — it improves 4.5× in the median
+from r1 to r5, because halving both knobs together makes cells more isotropic.
+That is the problem: **each rung changes element shape as well as element size,
+so the ladder never isolated `h` and its differences are not a convergence
+sequence at all.** That fully explains the erratic observed order without
+needing slivers to be the cause. Meanwhile a degenerate tail survives every
+rung — the minimum is 1e-6 throughout, and 7.3% of the finest mesh is still
+below 0.05.
+
+So the §2 item that was real all along is the one nobody acted on:
+**there is no shape-quality floor.** Two things follow, and both are
+`mesh_parameters` schema changes to a shared gated component — Fab's call:
+
+1. Enable Triangle quality meshing (`quality_meshing=True`, `min_angle`), which
+   bounds the planar angle and therefore the extruded aspect ratio. Measured in
+   §0.5, q25 costs 68,868 triangles against 11,114 — affordable now.
+2. Re-run the ladder varying **one** knob at a time against a fixed quality
+   floor, so the differences mean what the 2% + 1 fF gate assumes they mean.
+
+Until then §4 stands: **there is still no trustworthy canary value.** 129.1146 pF
+is the finest measurement, not a converged number, and must not be quoted as one.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
