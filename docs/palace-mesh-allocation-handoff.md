@@ -1023,6 +1023,50 @@ not follow that the ladder now converges — that is being measured, and the
 answer is not in yet. Every ladder in this document predates the fix and should
 be re-run before any of its conclusions are relied on.
 
+### 0.18 With the numbering artefact gone, the ladder converges — but is not converged
+
+The A/B is clean: identical geometry, identical seed, identical rungs, identical
+solver. Only the prism diagonal rule differs.
+
+```
+index order (v3u)                          coordinate order (v3l)
+rung  elem_um      tets   trace_pF         rung  elem_um      tets   trace_pF
+v3u0  4000.00   383106   146.0835          v3l0  4000.00   383106   175.6309
+v3u1  2000.00  1532424   166.8052 +12.42%  v3l1  2000.00  1532424   130.8634 -34.21%
+v3u2  1000.00  6129696   139.5821 -19.50%  v3l2  1000.00  6129696   109.5380 -19.47%
+
+contraction   1.314                        contraction   0.476
+observed order -0.39                       observed order 1.07
+sign flip at rung 2                        monotone
+```
+
+**This is the first ladder in the project whose corrections all share a sign and
+contract.** The contraction of 0.476 is essentially ½, which is what first-order
+convergence gives when *h* halves; the observed order of 1.07 agrees. For a
+problem with field singularities at conductor edges, first order is what P1
+elements are expected to deliver.
+
+**It is still NOT_CONVERGED, and the gate is right.** The finest step is 19.47%,
+an order of magnitude outside the 2% + 1 fF band, and 91 of 171 entries fail.
+The ladder is converging; it has not converged. The Aitken figure of 90.14 pF is
+reported and is *not* a result — the gate marks it meaningless precisely because
+the ladder did not pass, and it disagrees with the ~99.6 pF that earlier
+index-ordered ladders drifted toward, which is itself a reason to trust neither
+until a ladder passes.
+
+At a contraction of 0.476 per rung, closing 19.47% down to 2% takes roughly
+three more halvings — 24M, 98M, 392M tets uniformly, which is not reachable.
+Only graded refinement can get there, which is what the conductor edge band
+exists for, and a graded ladder under the fixed ordering is the next measurement.
+
+One more thing this pins down. v3u0 and v3l0 are the *same geometry at the same
+resolution*, differing only in diagonal choice, and their quality distributions
+are indistinguishable (p50 0.10654 vs 0.10653; 9.15% vs 9.18% of tets below
+0.01). They differ by 20% in trace. So the discretisation error at 4 mm lateral
+elements is at least that large however the prisms are cut, and no ordering rule
+was ever going to rescue a mesh this coarse — the fix removes the arbitrariness,
+not the error.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
