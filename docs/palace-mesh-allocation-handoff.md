@@ -1120,11 +1120,28 @@ conclusion. More tetrahedra is not the answer.
 
 **Three candidate routes, cheapest first.**
 
-1. **Raise the element order.** At O(h²) the contraction becomes ~0.25, so
-   19.47% → 4.9% → 1.2% closes in two rungs rather than four. `probe.py` already
-   takes the order as its second argument, so this is testable on the meshes
-   that already exist. The constraint is memory: order 2 on 6.1M tets is roughly
-   8× the degrees of freedom, so expect the ladder to have to start coarser.
+1. **Raise the element order — but not with BoomerAMG.** At O(h²) the
+   contraction becomes ~0.25, so 19.47% → 4.9% → 1.2% closes in two rungs
+   rather than four. **Measured, and the arithmetic does not survive contact
+   with the solver.** Order 2 on `v3l0`, the *coarsest* rung at 383k tets and
+   39 s at order 1:
+
+   ```
+   PCG did NOT converge in 500 iterations, avg. reduction factor 9.489e-01
+   killed at the 1800 s wall limit, exit -9, outcome "rejected"
+   0.26 GB per rank -- not memory-bound
+   ```
+
+   A reduction factor of 0.949 means each iteration removes 5% of the residual;
+   the preconditioner is doing essentially nothing at order 2. This is not a
+   size problem and starting coarser will not fix it. It is also why the
+   existing p3 and p4 campaigns were built around SuperLU direct solves, which
+   in hindsight is the finding those scripts were already recording.
+
+   So route 1 costs a **direct** solve, whose memory and time scale far worse
+   in problem size than the ~8× DOF growth suggests. Before committing to it,
+   measure a direct order-2 solve on one rung — if it does not fit at 383k
+   tets, this route is closed and route 2 is the real answer.
    The p-ladder scripts under `out/` were written for this and are pinned to
    refused v2 geometry — repoint them at v3 rather than writing new ones. Each
    pins it in exactly one line (`GEOMETRY = Path(...simple-hb-user-space-
