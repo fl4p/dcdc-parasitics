@@ -462,7 +462,34 @@ mesh against a uniform one at matched trace. The cost ratio still stands, but it
 was stated alongside a convergence claim resting on the finest-pair rule. No
 graded ladder has yet converged under the corrected gate.
 
-#### 0.12.1 Why the lateral ladder stalls (hypothesis, under test)
+#### 0.12.1 Why the lateral ladder stalls — **RETRACTED, measured false**
+
+> **The hypothesis below is wrong.** Halving the vertical step at held lateral
+> refinement moves the trace by **−290 fF (−0.29%)**: `v3e05` 99.5917 pF →
+> `v3v50` 99.3013 pF. The lateral axis moves it 7.3% per rung. The vertical
+> axis is not co-dominant and cannot explain the stall, so **§0.10.2 stands
+> after all** and this section's reasoning does not.
+>
+> The measurement is cleaner than it looks. `_planar_mesh` does not take
+> `max_vertical_step_m`, so the two meshes share a **bit-identical lateral
+> triangulation** — 42,486 distinct xy points in both — and the §0.13 re-meshing
+> noise floor, which was measured by perturbing the base area, does not apply to
+> this comparison at all.
+>
+> One caveat kept: the z-levels are **not** nested between the two rungs (15 of
+> 25 coarse levels are absent from the fine set), because `_refine_levels`
+> divides each gap into `ceil(gap/step)` *equal* parts, so halving the step
+> reshuffles the interior levels instead of bisecting them. Part of that 290 fF
+> is therefore re-levelling perturbation rather than refinement, which only makes
+> the true vertical effect smaller. This is also direct evidence for the
+> bisection requirement in §0.13.1 — the current scheme demonstrably does not
+> nest in z either.
+>
+> What was right in it: the geometric observation that copper is 2 elements
+> thick while the adjacent core layer is 94 µm. That is true, and it simply does
+> not dominate.
+
+Original hypothesis, retained for the record:
 
 The `v3e05` mesh has 25 z-levels. Copper runs `-0.0450 → -0.0275 → -0.0100` mm,
 so it is 2 elements of 17.5 µm through its 35 µm thickness — but **the core
