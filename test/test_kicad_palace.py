@@ -1476,3 +1476,34 @@ def test_the_coverage_grid_stays_clear_of_the_rounding_it_absorbs():
     for scale in (0.205, 1.0, 45e-3):
         grid = palace_plc_mesh._coverage_grid_m(scale, quantum_m=1.0)
         assert grid > 1e3 * math.ulp(scale)
+
+
+def test_the_stray_distance_separates_a_dropped_segment_from_a_bent_one():
+    """The third coverage tier, and the only one that measures the physical
+    quantity. Snapping is a comparison of representations; on the graded canary
+    seed it cleared 3002 of 3003 segments and the one it missed strayed
+    1.963e-17 m, which is not a dropped segment by any reading."""
+    covering = union_all([LineString([(0.0, 0.0), (0.5, 0.0)]),
+                          LineString([(0.5, 0.0), (1.0, 0.0)])])
+    # A segment covered by edges bent off it: the whole thing is "remainder",
+    # but no point of it is far from the covering.
+    bent = LineString([(0.0, 1e-17), (1.0, 1e-17)])
+    assert palace_plc_mesh._stray_distance_m(bent, covering) < 1e-15
+    # A segment whose middle really is missing: the gap's interior is far.
+    gapped = union_all([LineString([(0.0, 0.0), (0.2, 0.0)]),
+                        LineString([(0.8, 0.0), (1.0, 0.0)])])
+    missing = LineString([(0.0, 0.0), (1.0, 0.0)]).difference(gapped)
+    assert palace_plc_mesh._stray_distance_m(missing, gapped) > 0.1
+
+
+def test_the_stray_distance_samples_the_remainder_not_the_segment():
+    """Sampling the whole segment could step over a gap shorter than the
+    sample spacing. The remainder is exactly the disputed set, so a gap is
+    always sampled at its own scale however small it is."""
+    for gap in (1e-3, 1e-5, 1e-7):
+        low, high = 0.5 - gap / 2.0, 0.5 + gap / 2.0
+        covering = union_all([LineString([(0.0, 0.0), (low, 0.0)]),
+                              LineString([(high, 0.0), (1.0, 0.0)])])
+        remainder = LineString([(0.0, 0.0), (1.0, 0.0)]).difference(covering)
+        stray = palace_plc_mesh._stray_distance_m(remainder, covering)
+        assert stray == pytest.approx(gap / 2.0, rel=0.05)

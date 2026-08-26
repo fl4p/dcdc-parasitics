@@ -253,6 +253,31 @@ def _coverage_grid_m(coordinate_scale_m, quantum_m):
     return grid
 
 
+def _stray_distance_m(remainder, covering, samples=33):
+    """How far the disputed part of a segment actually lies from the covering.
+
+    Sampling the *remainder* rather than the whole segment is what makes this
+    safe. The remainder is exactly the set in dispute: if a segment was really
+    dropped, the remainder is the gap and its interior points are half a gap
+    away from anything; if the segment is covered by edges bent off it by a
+    rounding step, the remainder is the whole segment and every point of it is
+    an ULP away. Sampling the segment instead could step over a real gap that
+    is shorter than the sample spacing.
+    """
+    worst = 0.0
+    parts = getattr(remainder, "geoms", None) or [remainder]
+    for part in parts:
+        if part.is_empty:
+            continue
+        if part.geom_type == "Point":
+            worst = max(worst, part.distance(covering))
+            continue
+        for step in range(samples):
+            point = part.interpolate(step / (samples - 1.0), normalized=True)
+            worst = max(worst, point.distance(covering))
+    return worst
+
+
 def _boundary_crossings(cells, source_lines, source_tree, tolerance_m, grid_m):
     """Cells whose interior a source boundary passes through.
 
@@ -1333,6 +1358,7 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
     coordinate_scale_m = max(
         abs(value) for value in (*outer.minimum[:2], *outer.maximum[:2]))
     coverage_grid_m = _coverage_grid_m(coordinate_scale_m, planar_quantum)
+    crossing_tolerance_m = _crossing_tolerance_m(coordinate_scale_m)
     missing_edges = expected_edges - actual_edges
     if missing_edges:
         actual_lines = tuple(LineString(edge) for edge in actual_edges)
@@ -1365,11 +1391,23 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
             # Only now is it worth snapping. The exact test is both cheaper and
             # more trustworthy, and on a mesh whose edges happen to land exactly
             # on the segments it answers every case on its own.
-            if coverage_grid_m is not None:
-                remainder = set_precision(line, coverage_grid_m).difference(
-                    set_precision(covering, coverage_grid_m))
-                if remainder.is_empty:
-                    continue
+            if coverage_grid_m is not None and set_precision(
+                    line, coverage_grid_m).difference(
+                        set_precision(covering, coverage_grid_m)).is_empty:
+                continue
+            # Third and last tier, and the only one that measures the quantity
+            # the guard actually cares about. Snapping clears all but a handful
+            # -- 3002 of 3003 on the graded canary seed -- but it is a
+            # comparison of representations, and the one it missed strayed
+            # 1.963e-17 m, which is not a dropped segment by any reading.
+            #
+            # Both sides here are the UNSNAPPED geometry on purpose. Measuring a
+            # snapped remainder against an unsnapped covering compares two
+            # different geometries and reports the grid size, 5e-14 m, which
+            # swamps a 2.2e-16 m tolerance and fails every segment it is asked
+            # about.
+            if _stray_distance_m(remainder, covering) <= crossing_tolerance_m:
+                continue
             uncovered.append((remainder.length,
                               remainder.length / line.length, edge))
         if uncovered:
@@ -1398,7 +1436,6 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
     # coordinates say nothing about whether the mesher ignored a constraint or
     # a single sliver grazes a boundary by a rounding error, and that is the
     # first question anyone asks. The happy path does the same work either way.
-    crossing_tolerance_m = _crossing_tolerance_m(coordinate_scale_m)
     crossings = _boundary_crossings(
         projected_cells, source_lines, source_tree, crossing_tolerance_m,
         coverage_grid_m)
