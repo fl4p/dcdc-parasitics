@@ -233,7 +233,8 @@ MatrixLadderVerdict = namedtuple(
     "state reason entry_count failed_entries worst_entry trace")
 
 
-def check_matrix_convergence_ladder(rungs, matrices, noise_floor_f=None):
+def check_matrix_convergence_ladder(rungs, matrices, noise_floor_f=None,
+                                    entry_noise_floors=None):
     """Judge a ladder entry by entry, which is what the goal actually asks for.
 
     The gate is specified over capacitance *matrices*, but every campaign
@@ -250,6 +251,15 @@ def check_matrix_convergence_ladder(rungs, matrices, noise_floor_f=None):
     `matrices` is one square matrix per rung, coarse to fine, aligned with
     `rungs`. Only i <= j is judged: reciprocity is checked separately per rung,
     and judging both triangles would double-report the same defect.
+
+    `entry_noise_floors` is a matrix of per-entry re-meshing spreads, and it is
+    not optional in spirit. A single scalar floor taken from the trace badly
+    understates what individual couplings do, because the trace is a sum and
+    the re-meshing errors in it cancel. Measured on the canary, the trace moves
+    0.238% across three meshes of nominally identical resolution while 45 of
+    its 171 entries move more than the whole band, the worst by 63.8%. An entry
+    that noisy cannot be shown to have converged to 2% by any amount of
+    refinement, so it is reported unevaluable rather than judged.
     """
     rungs = list(rungs)
     matrices = list(matrices)
@@ -286,23 +296,56 @@ def check_matrix_convergence_ladder(rungs, matrices, noise_floor_f=None):
             "unevaluable", "a rung produced a non-finite matrix entry",
             0, (), None, trace)
 
+    if entry_noise_floors is not None:
+        if (len(entry_noise_floors) != size
+                or any(len(row) != size for row in entry_noise_floors)):
+            return MatrixLadderVerdict(
+                "unevaluable",
+                "the per-entry noise floors do not match the matrix shape",
+                0, (), None, trace)
+        if any(not math.isfinite(entry_noise_floors[i][j])
+               or entry_noise_floors[i][j] < 0.0
+               for i in range(size) for j in range(size)):
+            return MatrixLadderVerdict(
+                "unevaluable",
+                "a per-entry noise floor is not a non-negative finite "
+                "capacitance", 0, (), None, trace)
+
     labels = [rung.label for rung in rungs]
     failed = []
     judged = []
+    unreadable = []
     for i in range(size):
         for j in range(i, size):
             values = [matrix[i][j] for matrix in matrices]
             deltas = [fine - coarse for coarse, fine in zip(values, values[1:])]
-            problem = _judge_trend(values, deltas, labels)
             relative = (abs(deltas[-1] / values[-1]) if values[-1]
                         else math.inf)
             judged.append(((i, j), relative, deltas[-1]))
+            if entry_noise_floors is not None and not within_band(
+                    entry_noise_floors[i][j], values[-1]):
+                # Checked before the trend: refining an entry this noisy tells
+                # you nothing, so calling it converged or not converged would
+                # both be claims the data cannot support.
+                unreadable.append(((i, j), entry_noise_floors[i][j]))
+                continue
+            problem = _judge_trend(values, deltas, labels)
             if problem is not None:
                 failed.append(((i, j), problem))
     # size >= 1 above, so there is always at least the (0, 0) entry here.
     worst = max(judged, key=lambda item: item[1])
 
     entries = size * (size + 1) // 2
+    if unreadable:
+        (i, j), floor = max(unreadable, key=lambda item: item[1])
+        return MatrixLadderVerdict(
+            "unevaluable",
+            f"{len(unreadable)} of {entries} entries move more than the "
+            f"{REL_BAND * 100:.0f}% + {ABS_BAND_F * 1e15:.0f} fF band when the "
+            f"mesh is merely regenerated at the same resolution, worst "
+            f"C[{i}][{j}] at {floor * 1e15:.2f} fF; no amount of refinement "
+            f"can demonstrate convergence against that",
+            entries, tuple(failed), worst, trace)
     if failed:
         (i, j), problem = failed[0]
         return MatrixLadderVerdict(

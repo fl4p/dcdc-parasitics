@@ -382,3 +382,73 @@ def test_a_ladder_wide_precondition_failure_short_circuits():
     verdict = check_matrix_convergence_ladder(rungs, _matrices(entries))
     assert verdict.state == "unevaluable"
     assert "max_planar_area_m2" in verdict.reason
+
+
+def test_entries_too_noisy_to_read_are_unevaluable_not_converged():
+    """Measured on the canary: re-meshing at nominally identical resolution
+    moves 45 of 171 entries more than the whole band. Refining an entry that
+    noisy proves nothing either way."""
+    entries = {
+        (0, 0): _converging(50e-12, 60e-12, 4),
+        (1, 1): _converging(50e-12, 60e-12, 4),
+        (0, 1): _converging(-8e-12, -9e-12, 4),
+    }
+    rungs = _ladder([m[0][0] + m[1][1] for m in _matrices(entries)])
+    matrices = _matrices(entries)
+    assert check_matrix_convergence_ladder(
+        rungs, matrices).state == "converged"
+
+    floors = [[0.0, 0.0], [0.0, 0.0]]
+    floors[0][1] = floors[1][0] = 0.6 * abs(entries[(0, 1)][-1])
+    verdict = check_matrix_convergence_ladder(
+        rungs, matrices, entry_noise_floors=floors)
+    assert verdict.state == "unevaluable", verdict.reason
+    assert "regenerated at the same resolution" in verdict.reason
+
+
+def test_a_quiet_entry_noise_floor_leaves_the_verdict_alone():
+    entries = {
+        (0, 0): _converging(50e-12, 60e-12, 4),
+        (1, 1): _converging(50e-12, 60e-12, 4),
+        (0, 1): _converging(-8e-12, -9e-12, 4),
+    }
+    rungs = _ladder([m[0][0] + m[1][1] for m in _matrices(entries)])
+    floors = [[1e-16, 1e-16], [1e-16, 1e-16]]
+    verdict = check_matrix_convergence_ladder(
+        rungs, _matrices(entries), entry_noise_floors=floors)
+    assert verdict.state == "converged", verdict.reason
+
+
+def test_noise_floors_of_the_wrong_shape_are_unevaluable():
+    entries = {(0, 0): _converging(50e-12, 60e-12, 4)}
+    rungs = _ladder([m[0][0] for m in _matrices(entries)])
+    verdict = check_matrix_convergence_ladder(
+        rungs, _matrices(entries), entry_noise_floors=[[0.0, 0.0], [0.0, 0.0]])
+    assert verdict.state == "unevaluable"
+    assert "shape" in verdict.reason
+
+
+@pytest.mark.parametrize("bad", [-1e-15, float("nan"), float("inf")])
+def test_a_nonsensical_entry_noise_floor_is_unevaluable(bad):
+    entries = {(0, 0): _converging(50e-12, 60e-12, 4)}
+    rungs = _ladder([m[0][0] for m in _matrices(entries)])
+    verdict = check_matrix_convergence_ladder(
+        rungs, _matrices(entries), entry_noise_floors=[[bad]])
+    assert verdict.state == "unevaluable"
+
+
+def test_a_noisy_entry_does_not_mask_a_failure_elsewhere():
+    """The unevaluable entries are reported, but the entries that did fail the
+    trend are still carried on the verdict rather than discarded."""
+    entries = {
+        (0, 0): [50e-12, 55e-12, 60e-12, 65e-12],
+        (1, 1): _converging(50e-12, 60e-12, 4),
+        (0, 1): _converging(-8e-12, -9e-12, 4),
+    }
+    rungs = _ladder([m[0][0] + m[1][1] for m in _matrices(entries)])
+    floors = [[0.0, 0.0], [0.0, 0.0]]
+    floors[0][1] = floors[1][0] = 0.6 * abs(entries[(0, 1)][-1])
+    verdict = check_matrix_convergence_ladder(
+        rungs, _matrices(entries), entry_noise_floors=floors)
+    assert verdict.state == "unevaluable"
+    assert (0, 0) in [pair for pair, _ in verdict.failed_entries]
