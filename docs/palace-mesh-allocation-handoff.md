@@ -1439,6 +1439,104 @@ scales are comparable; on `v3cz` at order 1 there are none, and orders 3, 4 and
 5 there have none either, so it is not a simple function of resolution. Do not
 relax the gate to get past this — see §6.
 
+### 0.22 The air axis is usable after all — the positive off-diagonals are an order-1 artefact
+
+§0.21 left the dominant axis identified but blocked: every air-refined rung was
+rejected for positive off-diagonal entries. That blocker is gone, and it was
+never a property of the mesh.
+
+**Raise the order and they disappear.** Same air-refined mesh (`v3a1`, 156666
+tets), direct solve, orders 1 to 4:
+
+```
+p    trace_pF     delta_pF     d_rel   contraction   pos_off   wall      RSS
+1    120.7545            -         -             -        24    7.3 s       -
+2     38.2289     -82.5256   -215.87%            -         0   17.8 s   9.3 GB
+3     25.3968     -12.8321    -50.53%        0.155         0   54.5 s  12.6 GB
+4     21.1762      -4.2207    -19.93%        0.329         0  360.2 s  18.0 GB
+```
+
+Orders 2, 3 and 4 produce **no positive entries at all**. The gate accepts them.
+
+**Why**, and it was visible in §0.21's own data. Track one offending entry as
+the discretisation improves:
+
+```
+C[15][8] fF   v3cz p1  -256.5   v3a1 p1  -40.9   v3a2 p1  -7.1   v3a3 p1  +15.8
+              v3cz p3    -7.8   v3cz p5   -7.0
+```
+
+The order-1 solution on the coarse mesh overestimates this coupling **35-fold**.
+As accuracy improves the error shrinks through the true value (near −7 fF) and,
+for entries whose true magnitude is small, overshoots into positive territory.
+The positive off-diagonals are order-1 error on weak couplings, not a mesh
+defect — which is why they appear on the *more* accurate meshes and vanish when
+the order rises rather than when the mesh coarsens.
+
+That also explains the anti-monotone behaviour §0.21 recorded: the violation
+"growing with air refinement" (601 → 453 → 7657 ppm) was the true couplings
+shrinking toward their correct small values while the order-1 error floor stayed
+put. The median off-diagonal magnitude falls from 9.96 fF on `v3cz` to 1.62 fF
+on `v3a3` — a 6× shrink of the signal against a static error.
+
+**A caution on reading the gate.** For as long as a campaign runs at order 1, the
+positive-off-diagonal gate systematically rejects its *better* meshes and accepts
+its worse ones. That is not a reason to weaken it — a non-physical matrix is not
+a small error — but it is a reason never to read "no positive off-diagonals" as
+evidence of accuracy. On this geometry it is closer to the opposite. The M-matrix
+property that would guarantee the sign has never held here: measured across
+`v3cz`, `v3lz`, `v3a3` and `v3al`, 21–26% of assembled P1 stiffness edges carry a
+positive off-diagonal (`mmatrix.py`), including on every mesh that passes. The
+discretisation cannot promise a physical matrix; it has only been delivering one.
+
+**Best bound to date, and a second ladder that agrees on the shape.**
+
+```
+                     p1        p2       p3       p4       p5
+v3cz   99546 tets  215.91    63.99    38.08    28.67    24.19
+v3a1  156666 tets  120.75    38.23    25.40    21.18        -
+```
+
+21.18 pF is now the tightest upper bound on the canary trace, against §0.18's
+order-1 Aitken limit of 90.14 pF — which is **4.3×** above it. Both ladders
+contract in the same worsening pattern (0.171, 0.363 and 0.155, 0.329):
+algebraic, not exponential, with the finest step still ~20% against a 2% + 1 fF
+band. Neither has converged. The canary still has no value.
+
+**One unexplained result.** `v3cz` at order 2 produced 16 positive entries
+(largest 4 ppm) while orders 1, 3, 4 and 5 on that same mesh produced none.
+`v3a1` shows the opposite pattern — order 1 bad, 2 onward clean. A single-order
+anomaly on one mesh is not explained by the error-floor account above, and it is
+recorded here unresolved rather than smoothed over.
+
+**Cost, and a hard constraint on whoever runs this next.** These are full-system
+direct factorisations on a 36 GB machine:
+
+```
+v3cz  order 3   13.4 GB      v3a1  order 2    9.3 GB
+v3cz  order 4   14.8 GB      v3a1  order 3   12.6 GB
+v3cz  order 5   20.9 GB      v3a1  order 4   18.0 GB
+```
+
+Running these back to back **kernel-panicked the machine** on 2026-08-26
+(`watchdog timeout: no checkins from watchdogd in 92 seconds`), losing nothing
+but costing a reboot. Two limits failed to prevent it and both should be
+understood before the next campaign:
+
+- `RESOURCE_LIMITS["pcb_diagnostic"]` permits 24 GiB — two thirds of this
+  machine's RAM — and `process_monitor` enforces it by *polling*, so it reports
+  an overshoot after the fact and cannot refuse one. It is a reporting threshold,
+  not a guard.
+- The system-wide OOM killer at `~/dev/crypto/jnb/apps/guards/macos_oom_guard.py`
+  did not fire. Its swap trigger needs 58 GB (the panic came at 18.3 GB of swap);
+  its level trigger needs two *consecutive* samples below 10 and resets its strike
+  count on any sample above, which a burst allocation never satisfies; and its own
+  once-a-minute heartbeat stopped roughly three minutes before the panic, so it
+  was starved by the freeze it exists to prevent.
+
+Do not run above order 3 without checking free memory first, and do not chain
+these runs.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
