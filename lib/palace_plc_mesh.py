@@ -191,9 +191,67 @@ def _resplit_conductor_segments(segments, boundary, maximum_length, quantum):
     return tuple(output)
 
 
+def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
+    """Halve the area targets `refinements` times by refining in place.
+
+    Calling build() again at a finer constraint returns an unrelated
+    triangulation. That costs a convergence ladder both things it depends on:
+    Rayleigh-Ritz monotonicity is owed only to nested spaces, and the re-meshing
+    perturbation adds on every difference instead of cancelling. Measured on the
+    canary, regenerating at the same resolution moved 45 of 171 matrix entries
+    by more than the whole acceptance band, the worst by 63.8%, while the trace
+    moved 0.238% and hid it.
+
+    Triangle's -r mode refines the existing triangulation instead, keeping every
+    vertex. Two traps, both measured rather than assumed:
+
+    - MeshPy does not allocate the per-element area array that -r reads, so
+      `refine(mesh)` segfaults with no traceback until `element_volumes` is set
+      up. `refinement_func=` is accepted and still segfaults, which is why the
+      grading here is expressed as per-element targets rather than reusing the
+      callback the initial build uses.
+    - `refine()` takes no `allow_volume_steiner`, so it splits PLC segments the
+      -YY build forbade. That is safe -- the splits are collinear, and total
+      segment length was unchanged to 8.7e-15 relative on the canary -- but it
+      means a nested mesh must not claim `allow_volume_steiner: false`.
+
+    Nesting is checked here rather than trusted, while the parent is still in
+    hand: a lost vertex means the rung is not nested and the ladder built on it
+    would be reading noise again.
+    """
+    for step in range(1, refinements + 1):
+        scale = 2.0 ** step
+        base_target = base_area_m2 / scale
+        edge_target = None if edge_area_m2 is None else edge_area_m2 / scale
+        parent = {tuple(float(value) for value in point)
+                  for point in mesh.points}
+        mesh.element_volumes.setup()
+        for index, element in enumerate(mesh.elements):
+            target = base_target
+            if edge_target is not None and zone is not None:
+                centroid = Point(
+                    sum(mesh.points[i][0] for i in element) / 3.0,
+                    sum(mesh.points[i][1] for i in element) / 3.0,
+                )
+                if zone.intersects(centroid):
+                    target = edge_target
+            mesh.element_volumes[index] = target
+        mesh = meshpy_triangle.refine(mesh)
+        lost = parent - {tuple(float(value) for value in point)
+                         for point in mesh.points}
+        if lost:
+            raise ValueError(
+                f"Palace PLC nested refinement lost {len(lost)} of "
+                f"{len(parent)} parent vertices at refinement {step}: the rung "
+                f"is not nested in its parent, so a ladder over it would carry "
+                f"re-meshing noise it is meant to have removed")
+    return mesh
+
+
 def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
                  conductor_edge_band_m=None,
-                 conductor_edge_max_planar_area_m2=None):
+                 conductor_edge_max_planar_area_m2=None,
+                 nesting_refinements=0):
     source_segment_max_length = (
         math.sqrt(2.0 * max_area_m2) if max_area_m2 is not None else None
     )
@@ -202,6 +260,7 @@ def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
         source_segment_max_length,
     )
     refinement_func = None
+    zone = None
     if conductor_edge_band_m is not None:
         boundary = _conductor_boundary(conductors)
         segments = _resplit_conductor_segments(
@@ -253,6 +312,10 @@ def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
         allow_volume_steiner=False,
         refinement_func=refinement_func,
     )
+    if nesting_refinements:
+        mesh = _refine_nested(
+            mesh, nesting_refinements, max_area_m2,
+            conductor_edge_max_planar_area_m2, zone)
     canonical_ids = {}
     mesh_points = []
     remap = {}
@@ -706,6 +769,7 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                              vertical_refinement_band_m=None,
                              conductor_edge_band_m=None,
                              conductor_edge_max_planar_area_m2=None,
+                             nesting_refinements=0,
                              source_identity=None):
     path = Path(path).resolve()
     outer_bounds = BoxBounds(outer_bounds.minimum, outer_bounds.maximum)
@@ -724,6 +788,17 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                 and (isinstance(value, bool) or not isinstance(value, (int, float))
                      or not math.isfinite(value) or value <= 0.0)):
             raise ValueError(f"{label} must be null or finite and positive")
+    if (isinstance(nesting_refinements, bool)
+            or not isinstance(nesting_refinements, int)
+            or nesting_refinements < 0):
+        raise ValueError(
+            "nesting refinements must be a non-negative integer")
+    if nesting_refinements and max_planar_area_m2 is None:
+        # Refinement halves an area target; without one there is nothing to
+        # halve, and silently meshing unrefined would make a ladder rung
+        # identical to its parent while claiming to be finer.
+        raise ValueError(
+            "nesting refinements require a maximum planar area")
     vertical_refinement_band_m = _validate_vertical_refinement_band(
         vertical_refinement_band_m)
     conductor_edge_band_m, conductor_edge_max_planar_area_m2 = (
@@ -753,11 +828,13 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
         *outer_bounds.minimum[2:3], *outer_bounds.maximum[2:3],
         *(value for item in conductors for value in (item.z_min, item.z_max)),
         *(value for item in dielectrics for value in _dielectric_z(item)),
-    }, outer_bounds.lengths[2]), max_vertical_step_m, vertical_refinement_band_m)
+    }, outer_bounds.lengths[2]), max_vertical_step_m,
+        vertical_refinement_band_m, nested=bool(nesting_refinements))
     planar_quantum = _planar_quantum(outer_bounds, source_identity)
     points_2d, triangles = _planar_mesh(
         outer_bounds, conductors, dielectrics, max_planar_area_m2, planar_quantum,
         conductor_edge_band_m, conductor_edge_max_planar_area_m2,
+        nesting_refinements,
     )
     conductor_polygons = tuple(_prism_polygon(item) for item in conductors)
     dielectric_polygons = tuple(_dielectric_polygon(item) for item in dielectrics)
@@ -805,6 +882,14 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
             "conductor_edge_band_m": conductor_edge_band_m,
             "conductor_edge_max_planar_area_m2": (
                 conductor_edge_max_planar_area_m2),
+            "nesting_refinements": nesting_refinements,
+            # allow_volume_steiner above is the build() flag, and it stays
+            # true of the coarsest triangulation. Triangle's refine mode
+            # takes no such flag and does split PLC segments, so a reader
+            # who needs intact segments must be told that separately rather
+            # than inferring it from a flag that is no longer the whole
+            # story.
+            "plc_segments_intact": nesting_refinements == 0,
             "vertical_refinement_band_m": (
                 list(vertical_refinement_band_m)
                 if vertical_refinement_band_m is not None else None
@@ -932,13 +1017,19 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
         prep(_conductor_boundary(conductors).buffer(edge_band_m))
         if edge_band_m is not None else None
     )
+    nesting_refinements = provenance["mesh_parameters"].get(
+        "nesting_refinements", 0)
     z_levels = np.asarray(_refine_levels(_coalesce_levels({
         *outer.minimum[2:3], *outer.maximum[2:3],
         *(value for item in conductors for value in (item.z_min, item.z_max)),
         *(value for item in dielectrics for value in _dielectric_z(item)),
     }, outer.lengths[2]), provenance["mesh_parameters"]["max_vertical_step_m"],
         _validate_vertical_refinement_band(
-            provenance["mesh_parameters"].get("vertical_refinement_band_m"))))
+            provenance["mesh_parameters"].get("vertical_refinement_band_m")),
+        # A nested mesh bisects its z gaps, so revalidating it against
+        # equal-division levels would reconstruct a level set the mesh never
+        # had and reject a sound mesh.
+        nested=bool(nesting_refinements)))
     node_level_indices = _nearest_level_indices(points[:, :, 2], z_levels)
     low_indices = node_level_indices.min(axis=1)
     high_indices = node_level_indices.max(axis=1)
@@ -1291,6 +1382,7 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
             "allow_boundary_steiner", "allow_volume_steiner", "backend",
             "conductor_edge_band_m", "conductor_edge_max_planar_area_m2",
             "max_planar_area_m2", "max_vertical_step_m", "msh_version",
+            "nesting_refinements", "plc_segments_intact",
             "noding_serialization_quantum_m", "planar_quantum_m", "prism_split",
             "source_segment_max_length_m", "threads",
             "triangle_coordinate_system", "vertical_refinement_band_m"}

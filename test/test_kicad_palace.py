@@ -36,6 +36,7 @@ from palace_mesh import (  # noqa: E402
     validate_palace_mesh_content,
     validate_palace_mesh_manifest,
 )
+import palace_plc_mesh  # noqa: E402
 from palace_plc_mesh import (  # noqa: E402
     MAX_EDGE_AREA_OVERSHOOT,
     _refine_levels,
@@ -1107,3 +1108,134 @@ import kicad_palace_dump
         [sys.executable, "-c", code], capture_output=True, text=True, check=False
     )
     assert completed.returncode == 0, completed.stderr
+
+
+# -- nested ladder rungs ---------------------------------------------------
+
+
+def _nesting_common(geometry):
+    return dict(
+        outer_bounds=geometry.outer_bounds, conductors=geometry.conductors,
+        dielectrics=geometry.dielectrics, max_planar_area_m2=1e-6,
+        max_vertical_step_m=1e-3,
+    )
+
+
+def test_a_nested_rung_contains_its_parent_and_validates(tmp_path):
+    """The point of the whole exercise: rung k+1 must contain rung k, so
+    differencing them measures refinement rather than re-meshing."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    common = _nesting_common(geometry)
+    parent = generate_palace_plc_mesh(
+        tmp_path / "n0.msh", nesting_refinements=0, **common)
+    child = generate_palace_plc_mesh(
+        tmp_path / "n1.msh", nesting_refinements=1, **common)
+    assert child.tetrahedron_count > parent.tetrahedron_count
+    validate_palace_plc_mesh_manifest(tmp_path / "n1.msh.manifest.json")
+
+    def xy(path):
+        points = set()
+        with open(path) as handle:
+            for line in handle:
+                if line.startswith("$Nodes"):
+                    break
+            for _ in range(int(next(handle))):
+                parts = next(handle).split()
+                points.add((float(parts[1]), float(parts[2])))
+        return points
+
+    assert xy(tmp_path / "n0.msh") <= xy(tmp_path / "n1.msh")
+
+
+def test_a_nested_rung_records_that_its_segments_were_split(tmp_path):
+    """refine() takes no allow_volume_steiner and does split PLC segments, so
+    the manifest must not let a reader infer they are intact from a build flag
+    that is no longer the whole story."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    common = _nesting_common(geometry)
+    for refinements, intact in ((0, True), (1, False)):
+        generate_palace_plc_mesh(
+            tmp_path / f"s{refinements}.msh",
+            nesting_refinements=refinements, **common)
+        parameters = json.loads(
+            (tmp_path / f"s{refinements}.msh.manifest.json").read_text()
+        )["provenance"]["mesh_parameters"]
+        assert parameters["nesting_refinements"] == refinements
+        assert parameters["plc_segments_intact"] is intact
+        # the build flag stays true of the build, and stays recorded
+        assert parameters["allow_volume_steiner"] is False
+
+
+def test_nesting_bisects_the_z_levels_too(tmp_path):
+    """Nesting the triangulation while equal-dividing z would leave the rungs
+    unnested in the other axis, which is how 15 of 25 canary levels were lost."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    common = _nesting_common(geometry)
+    generate_palace_plc_mesh(
+        tmp_path / "z0.msh", nesting_refinements=0, **common)
+    generate_palace_plc_mesh(
+        tmp_path / "z1.msh", nesting_refinements=1, **common)
+
+    def levels(path):
+        out = set()
+        with open(path) as handle:
+            for line in handle:
+                if line.startswith("$Nodes"):
+                    break
+            for _ in range(int(next(handle))):
+                out.add(float(next(handle).split()[3]))
+        return out
+
+    assert levels(tmp_path / "z0.msh") <= levels(tmp_path / "z1.msh")
+
+
+@pytest.mark.parametrize("bad", [-1, True, 1.5, "1", None])
+def test_a_bad_nesting_count_is_refused(tmp_path, bad):
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    with pytest.raises(ValueError, match="nesting refinements"):
+        generate_palace_plc_mesh(
+            tmp_path / "bad.msh", nesting_refinements=bad,
+            **_nesting_common(geometry))
+
+
+def test_nesting_without_a_planar_area_is_refused(tmp_path):
+    """There is no area target to halve, so the rung would be identical to its
+    parent while claiming to be finer."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    with pytest.raises(ValueError, match="maximum planar area"):
+        generate_palace_plc_mesh(
+            tmp_path / "bad.msh", outer_bounds=geometry.outer_bounds,
+            conductors=geometry.conductors, dielectrics=geometry.dielectrics,
+            nesting_refinements=1)
+
+
+def test_a_refinement_that_loses_a_parent_vertex_is_refused():
+    """Known-bad calibration for the nesting guard: hand it a 'refinement' that
+    drops a vertex and it must raise rather than return an unnested rung."""
+    class _Mesh:
+        def __init__(self, points):
+            self.points = points
+            self.elements = [(0, 1, 2)]
+            self.element_volumes = _Volumes()
+
+    class _Volumes:
+        def setup(self):
+            pass
+
+        def __setitem__(self, index, value):
+            pass
+
+    original = palace_plc_mesh.meshpy_triangle.refine
+    palace_plc_mesh.meshpy_triangle.refine = (
+        lambda mesh: _Mesh([(0.0, 0.0), (1.0, 0.0), (9.0, 9.0)]))
+    try:
+        with pytest.raises(ValueError, match="not nested in its parent"):
+            palace_plc_mesh._refine_nested(
+                _Mesh([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]), 1, 1e-6, None, None)
+    finally:
+        palace_plc_mesh.meshpy_triangle.refine = original
