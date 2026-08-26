@@ -1446,3 +1446,33 @@ def test_a_real_nested_refinement_meets_the_exact_triangle_count(refinements):
         points, triangles, refinements)
     assert len(fine_triangles) == len(triangles) * 4 ** refinements
     assert set(points) <= set(fine_points)
+
+
+def test_the_coverage_grid_is_a_power_of_ten():
+    """GEOS snaps by scaling with 1/gridSize, so a grid that is not exactly
+    representable pushes collinear points off each other. On the canary the
+    comparison that leaves 0 segments uncovered at 1e-13 leaves 160 at
+    2.05e-13 and 141-193 at every power of two from 2**-46 to 2**-36."""
+    for scale in (0.205, 0.0020005, 1.0, 45e-3):
+        grid = palace_plc_mesh._coverage_grid_m(scale, quantum_m=1.0)
+        assert grid == pytest.approx(10.0 ** round(math.log10(grid)))
+        assert grid < scale
+
+
+def test_the_coverage_grid_declines_when_it_would_reach_the_quantum():
+    """Unevaluable is not clean. With no room between the rounding floor and
+    the quantum the geometry is snapped to, snapping would start absorbing real
+    geometry, so the caller keeps the unsnapped verdict and fails closed."""
+    # The plated-via fixture is a real instance of this: 2e-3 m coordinates
+    # against a 4.001e-15 m quantum leaves no separation at all.
+    assert palace_plc_mesh._coverage_grid_m(0.0020005, 4.001e-15) is None
+    # The canary has six orders of room and does get a grid.
+    assert palace_plc_mesh._coverage_grid_m(0.205, 5e-8) == pytest.approx(1e-13)
+
+
+def test_the_coverage_grid_stays_clear_of_the_rounding_it_absorbs():
+    """It has to sit well above the coordinate ULP -- that is the size of what
+    it is absorbing, and it accumulates with each refinement."""
+    for scale in (0.205, 1.0, 45e-3):
+        grid = palace_plc_mesh._coverage_grid_m(scale, quantum_m=1.0)
+        assert grid > 1e3 * math.ulp(scale)

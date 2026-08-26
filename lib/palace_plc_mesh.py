@@ -243,7 +243,12 @@ def _coverage_grid_m(coordinate_scale_m, quantum_m):
     which fails closed.
     """
     grid = 10.0 ** math.floor(math.log10(coordinate_scale_m * 1e-12))
-    if grid >= quantum_m / 4.0:
+    # Two decades of clearance, not a hair's breadth. The grid moves in factors
+    # of ten, so a threshold set just below it would be decided by where the
+    # quantum happens to fall between two decades rather than by whether there
+    # is real separation -- the plated-via fixture lands within 0.03% of a
+    # quantum/4 threshold, which is luck, not headroom.
+    if grid > quantum_m / 100.0:
         return None
     return grid
 
