@@ -891,6 +891,50 @@ Runtime cost of the guard work, measured: 4.2 s at 383k tets, 17.2 s at 1.53M �
 was correct to refuse what it refused; three of them were reporting the wrong
 number about it.
 
+### 0.16 The coarse ladder was measuring the tetrahedralization, not the mesh
+
+§0.15.2 flagged the nested-ladder noise floor as *unmeasured, not zero*, because
+the prism diagonals are re-chosen at every rung. Measured, and it is not small.
+
+`_tetrahedralize` picks each prism's diagonal from `sorted(triangle)` — the
+**global vertex indices**. Permuting the planar point numbering therefore leaves
+every coordinate, every triangle, every z level and every material assignment
+exactly as it was, and changes only which diagonal each prism gets. Two such
+permutations of the coarse seed:
+
+```
+v3u0     trace 146.0835 pF      (natural ordering out of Triangle)
+v3u0p1   trace 288.7963 pF      (seed 1)
+v3u0p2   trace 275.7444 pF      (seed 2)
+trace spread 142712.70 fF = 49.42%
+entries beyond the 2% + 1 fF band: 272 of 324
+worst entry C[14][12]: 185.54 fF with 183.07 fF of spread (98.67%)
+```
+
+Checked rather than assumed, because a 49% spread invites disbelief:
+
+- identical node sets (77794 nodes, set equality)
+- identical element histogram across every material and all 18 terminal tags
+- identical total volume to machine precision (7.289605946e-04 m³ both)
+- genuinely different meshes: only 28.1% of tets are shared
+- comparable element quality (median 0.1065 / 0.1058 / 0.1060; 9.15% / 9.17% /
+  9.16% below 0.01), so this is **not** a quality artefact
+- different mesh SHA-1s in the two solve directories, so each solve really did
+  read its own mesh
+
+**Consequence.** At this resolution the answer is a function of the vertex
+numbering. The v3u ladder's 146 → 167 → 140 pF was not measuring refinement; a
+single relabelling moves the trace further than any of its rungs did. The
+oscillation §0.12 has been chasing is at least partly this.
+
+**What this does not say.** It was measured on a 4 mm-lateral / 100 µm-vertical
+seed — 40:1 anisotropic, 9% of tets below quality 0.01. It says nothing yet
+about the noise floor at the resolutions the project actually quotes (v3e05,
+5.8M tets, base 1414 µm). **That measurement is still owed**, and until it
+exists no ladder on this mesher should be believed, including the ones already
+in this document. The permutation test is the way to take it: same geometry,
+same materials, different diagonals.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
