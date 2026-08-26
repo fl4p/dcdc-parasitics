@@ -1347,6 +1347,98 @@ accepted.
 Campaign: `out/palace-qualification/simple-hb-pladder-v1/probe.py TAG ORDER`,
 one output directory per order so no grader can conflate them.
 
+### 0.21 The dominant axis is the air box, and no ladder here has ever driven it
+
+§0.20 named two candidate causes for the p-ladder's algebraic convergence and
+said the discriminating experiment was one mesh and one solve. It is cheaper
+than that: a 2×2, all at order 1, all seconds.
+
+The board sits in an air box spanning z = −45.8 mm to +44.2 mm. Every mesh in
+this document sets `vertical_refinement_band_m = [-0.0016, 0]` — **the board** —
+so the 44.2 mm of air above and the 44.2 mm below have always been one element
+tall. Measured on the meshes themselves:
+
+```
+v3l0   z levels 25   min gap 10.0 um   max gap 44.200 mm
+v3cz   z levels 10   min gap 10.0 um   max gap 44.200 mm
+```
+
+Lateral refinement subdivides that 44.2 mm element sideways, so every rung of
+the h-ladder made the air elements *more* anisotropic rather than smaller: 11:1
+at `v3l0`, 44:1 at `v3l2`. The ladder was refining the one direction that was
+already resolved.
+
+**The 2×2.** Vary lateral element size and air z-resolution independently, with
+the same PLC and — verified — the same worst tetrahedron:
+
+```
+mesh   lateral   air z     tets   trace_pF   pos_off   worst_ppm
+v3cz    16 mm     none    99546   215.9080         0           -
+v3lz     4 mm     none   137856   200.6603         0           -
+v3a3    16 mm     5 mm   328026    76.6165        50      7656.8
+v3al     4 mm     5 mm   436320    67.9962        50      2219.5
+```
+
+```
+lateral 16 mm -> 4 mm, no air levels     215.91 -> 200.66     -7.1%
+lateral 16 mm -> 4 mm, air at 5 mm        76.62 ->  68.00    -11.2%
+air none -> 5 mm, lateral 16 mm          215.91 ->  76.62    -64.5%
+air none -> 5 mm, lateral 4 mm           200.66 ->  68.00    -66.1%
+```
+
+The two axes are nearly separable and the air axis is worth roughly **nine
+times** the lateral one at comparable element cost. The air ladder alone, at
+order 1:
+
+```
+v3cz    99546 tets   215.9080 pF   air: material interfaces only
+v3a1   156666 tets   120.7545 pF   air step 20 mm
+v3a2   213786 tets    95.3932 pF   air step 10 mm
+v3a3   328026 tets    76.6165 pF   air step  5 mm
+```
+
+328k tetrahedra reach a better bound than the lateral ladder reached with
+6.13M — **19× fewer elements**.
+
+**This corrects §0.10.** That section is titled "Which axis: measured, and it is
+the lateral one", and its measurement was sound within the family it varied.
+But every mesh in that family held the air at a single 44.2 mm element, so it
+identified the best of the axes it drove, not the best axis. The lateral axis
+wins among mesh parameters that were on the table; the one that was not on the
+table beats it ninefold. Nothing in §0.10's arithmetic is wrong and its
+conclusion does not survive.
+
+**Mesh quality is not the explanation.** All five meshes report an identical
+`minimum_tetrahedron_determinant_m3` of 2.850e-18, set by the 10 µm copper
+layer, and the minimum z gap is 10 µm in every one. Adding air levels created no
+slivers; it removed a 44.2 mm one.
+
+**But the air-refined meshes do not pass the gate.** Every rung with air levels
+was rejected for positive off-diagonal entries, and the violation grows with air
+refinement rather than shrinking:
+
+```
+v3a1   24 entries   worst  601 ppm of the smaller diagonal
+v3a2   40 entries   worst  453 ppm
+v3a3   50 entries   worst 7657 ppm
+v3al   50 entries   worst 2220 ppm
+```
+
+Lateral refinement improves it (7657 → 2220 ppm at fixed air resolution) but
+does not remove it. A positive Maxwell off-diagonal is non-physical, and the
+run gate is right to refuse the run; the traces above come from the quarantined
+CSVs and are diagnostic only. They remain valid *upper bounds* — the trace is
+the Ritz energy per §0.20 regardless of off-diagonal sign — but the matrices
+are not usable and the entrywise gate cannot be run on them.
+
+So the axis that matters is identified and is not yet usable. **Diagnosing the
+positive off-diagonals is now the blocking item**, ahead of any further ladder.
+The likely mechanism is the loss of the M-matrix property on obtuse tetrahedra,
+which extruded prism splitting produces freely once the vertical and lateral
+scales are comparable; on `v3cz` at order 1 there are none, and orders 3, 4 and
+5 there have none either, so it is not a simple function of resolution. Do not
+relax the gate to get past this — see §6.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
