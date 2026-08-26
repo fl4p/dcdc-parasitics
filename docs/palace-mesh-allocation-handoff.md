@@ -1537,6 +1537,115 @@ understood before the next campaign:
 Do not run above order 3 without checking free memory first, and do not chain
 these runs.
 
+### 0.23 A real ladder in the real axis: 4 rungs, physical matrices, still not converged
+
+§0.22 established that the air axis works at order 2 and above. This is the
+ladder that follows from it — the first one in this document driven along the
+axis that actually dominates, and the first whose every rung the run gate
+accepts.
+
+**Air ladder, order 2, four rungs** (`grade_p.py --axis vertical`), halving the
+vertical step each time with the lateral mesh and the board stackup held:
+
+```
+rung          z step      tets   trace_pF   d_rel   pos_off   recip_F
+v3a1-p2       20.0 mm   156666    38.2289       -         0  1.70e-26
+v3a2-p2       10.0 mm   213786    32.3091  -18.32%        0  1.16e-26
+v3a3-p2        5.0 mm   328026    28.2234  -14.48%        0  1.17e-26
+v3a4-p2        2.5 mm   585066    25.7497   -9.61%        0  8.89e-27
+
+trace:  NOT_CONVERGED — finest step 9.61% against 2% + 1 fF
+        contraction 0.690, 0.605      observed order 0.72
+matrix: NOT_CONVERGED — 56 of 171 entries outside the band
+```
+
+Reciprocity is 1e-26, eight orders inside the 1e-18 slack, and no rung has a
+single positive off-diagonal. This is a clean ladder that simply has not
+converged, which is a better position than any previous section reached.
+
+**The observed order is 0.72, and that is the interesting number.** Halving the
+element size in the driven direction should buy far more than that. Sub-linear
+order has an obvious candidate here: at 2.5 mm vertical against a 16 mm lateral
+element, the *lateral* mesh is now the coarse direction, so the ladder could be
+converging to the other axis's error floor rather than to the answer. If true it
+would invalidate the per-axis gate that §0.19's route 3 assumes.
+
+**Tested, and it is not that.** The same ladder rebuilt on a 4× finer lateral
+mesh (`max_planar_area_m2` 8e-6 rather than 1.28e-4):
+
+```
+                        lateral   contraction   observed order
+v3a1 / v3a2 / v3a3       16 mm          0.690             0.54
+v3b1 / v3b2 / v3al        4 mm          0.687             0.54
+```
+
+Identical to three digits in the ratio. Sixteen times the lateral elements
+changes the air axis's convergence *rate* not at all — it only shifts the whole
+curve down. So the axes are separable in rate, the sub-linear order is intrinsic
+to the vertical direction, and route 3's per-axis gate is not invalidated. That
+is a negative result and it is worth as much as the ladder: it was the cheapest
+available reason to distrust every single-axis ladder in this document, and it
+does not hold.
+
+Note the order is also *improving* as the ladder refines — contraction 0.690 then
+0.605, i.e. order 0.54 then 0.72. The ladder is still pre-asymptotic at 585k
+tetrahedra.
+
+**The grid, and what it says the answer is.** Mesh against element order, every
+cell a completed solve, `!of` = rejected for positive off-diagonals, `!RS` =
+rejected at the 24 GiB ceiling:
+
+```
+mesh    air z    tets           p1           p2        p3        p4        p5
+v3cz     none   99546     215.91       63.99!of    38.08     28.67     24.19
+v3lz     none  137856     200.66            -         -         -         -
+v3a1    20 mm  156666     120.75!of     38.23     25.40     21.18         -
+v3a2    10 mm  213786      95.39!of     32.31     22.69     19.70!RS      -
+v3a3     5 mm  328026      76.62!of     28.22     20.95         -         -
+v3a4   2.5 mm  585066           -       25.75         -         -         -
+v3al     5 mm  436320      68.00!of     26.37         -         -         -
+```
+
+Extrapolating each row in *p* and each column in air step, independently:
+
+```
+p-ladders      v3cz 20.10   v3a1 19.11   v3a2 18.34   v3a3 19.67  pF
+air-ladders    order 2 19.12   order 3 17.85   (4 mm lateral) 17.75  pF
+```
+
+Seven independent extrapolations across two axes land between **17.8 and
+20.1 pF**. None is a bound and none passes the gate; what makes them worth
+recording is that they were reached along different axes at different orders and
+they agree.
+
+**The one number that is a bound**: 20.9544 pF, from `v3a3` at order 3, an
+accepted run. By §0.20 every accepted trace bounds the truth from above, and
+this is the smallest one measured. Against §0.18's order-1 Aitken limit of
+90.14 pF, which the h-ladder was converging toward, that is a factor of 4.3.
+
+**Why neither axis can close the gate on this machine.** At the measured
+contraction ratios, and with the memory each rung costs:
+
+```
+air axis at order 2, contraction ~0.605:  9.61% -> 5.8 -> 3.5 -> 2.1 -> 1.3%
+   four more rungs; v3a4 already costs 21.3 GB of a 24 GiB ceiling
+p axis at fixed mesh, contraction ~0.31:  needs p5-p6
+   v3a2 at p4 was killed at the ceiling
+```
+
+Both run out of memory before they run out of ladder. `v3a4-p2` at 21.3 GB and
+`v3al-p2` at 20.2 GB are the largest solves this resource class admits, and
+neither axis is within four rungs of the band.
+
+**A note on reading rejected runs.** `v3a2-p4` produced a complete matrix
+(19.6965 pF) and was then killed for exceeding the RSS ceiling; the harness
+quarantined the CSV. That number is in the grid above marked `!RS` and it is not
+a result. `grade_p.py` refuses to grade a rejected run at all rather than reading
+the quarantined copy, because reading it back is precisely how a refused result
+gets laundered into a ladder. An earlier draft of the grid here reported
+`v3a2-p4` as the tightest bound available, having keyed on the matrix rather
+than on the run's own verdict; that was wrong and this is the correction.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
