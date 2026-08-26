@@ -1138,10 +1138,23 @@ conclusion. More tetrahedra is not the answer.
    existing p3 and p4 campaigns were built around SuperLU direct solves, which
    in hindsight is the finding those scripts were already recording.
 
-   So route 1 costs a **direct** solve, whose memory and time scale far worse
-   in problem size than the ~8× DOF growth suggests. Before committing to it,
-   measure a direct order-2 solve on one rung — if it does not fit at 383k
-   tets, this route is closed and route 2 is the real answer.
+   Route 1 therefore costs a **direct** solve — which is what `probe.py`
+   defaults to, and the reason its docstring gives is exactly this: a direct
+   solve means "the reported capacitance carries no iterative-solver error and
+   the only varying quantity across rungs is [the mesh]".
+
+   **Measured, and it is cheap.** The same rung, order 2, SuperLU:
+
+   ```
+   BoomerAMG   1831 s   rejected, PCG stalled at reduction factor 0.949
+   SuperLU       53 s   completed, no failures, 8.4 GB
+   ```
+
+   So the route is open, and the earlier note here calling it closed was wrong
+   — it generalised from the iterative solver to the method. What is not yet
+   known is how the direct solve scales: 8.4 GB at 383k tets against 36 GB of
+   machine, so the ladder may only reach two or three rungs before it does not
+   fit. Measure rung 1 before planning around it.
    The p-ladder scripts under `out/` were written for this and are pinned to
    refused v2 geometry — repoint them at v3 rather than writing new ones. Each
    pins it in exactly one line (`GEOMETRY = Path(...simple-hb-user-space-
@@ -1158,6 +1171,23 @@ conclusion. More tetrahedra is not the answer.
    step, then apply the vertical correction separately — §0.14 already did the
    vertical half this way. Not a proof of joint convergence, but the gate is
    per-axis and this is the standard practice.
+
+**A sobering cross-check, and a warning about every extrapolation here.** The
+same coarse mesh solved at order 1 and order 2:
+
+```
+v3l0 order 1 (BoomerAMG)   175.6309 pF   reciprocity 1.19e-23
+v3l0 order 2 (SuperLU)      57.3542 pF   reciprocity 5.82e-26
+```
+
+A factor of **three**, with reciprocity three orders better at order 2. That is
+a direct measure of how far from converged the order-1 solution is on this mesh,
+and it sits badly with both extrapolations in play: the order-1 h-ladder
+contracts toward ~90 pF and the earlier index-ordered work drifted toward
+~99.6 pF. If the order-2 value is anywhere near right, the order-1 ladder has
+much further to run than its contraction ratio suggests — and if it is not, then
+the order-2 solution is itself unconverged in *h* and equally unquotable. The
+two cannot both be trusted, and nothing here settles which. **Quote neither.**
 
 **Before any of that, re-run what is already here.** Every ladder in this
 document predates the coordinate-ordering fix. §0.11's graded ladder, §0.14's
