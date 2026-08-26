@@ -540,9 +540,45 @@ independent.
 
 This is a mesher feature that does not exist yet. `_planar_mesh` calls Triangle
 fresh each time; nesting needs Triangle's refine mode over the previous
-triangulation (MeshPy exposes `triangle.refine`), and a z-level set built by
-bisecting the previous one so the coarse levels remain a subset. **No canary
-number should be quoted as converged until the ladder is nested.**
+triangulation, plus a z-level set built by bisecting the previous one so the
+coarse levels remain a subset. **No canary number should be quoted as converged
+until the ladder is nested.**
+
+#### 0.13.2 `meshpy.triangle.refine` segfaults — measured, with the workaround
+
+Tested before designing on it, and the obvious call does not work:
+
+| call | result |
+|---|---|
+| `t.refine(m)` | **SIGSEGV** (exit 139, no traceback) |
+| `t.refine(m, refinement_func=...)` | **SIGSEGV** (exit 139) |
+| `t.refine(m)` after `m.element_volumes.setup()` | works |
+
+`refine()` hands the mesh to Triangle's `-r` mode, which reads a per-element
+area-constraint array that MeshPy never allocates. The `refinement_func=`
+keyword is accepted and still crashes, so it is **not** a substitute — the
+existing `refinement_func` grading in `_planar_mesh` cannot simply be carried
+over to the refine path. Grading has to be expressed as per-element targets:
+
+```python
+m.element_volumes.setup()
+for i in range(len(m.elements)):
+    m.element_volumes[i] = target_area_for(m, i)   # grading goes here
+r = t.refine(m)
+```
+
+The crash is silent under output filtering — the last `print` before the call is
+the only clue, which is how it first looked like a hang.
+
+**Vertex nesting confirmed**, not assumed: every coarse point survives into the
+fine mesh (`set(coarse) <= set(fine)`, 0 lost; 5 points/4 triangles → 177/319 at
+target 0.005). Caveat worth carrying: this is *vertex* nesting, not strict
+element nesting — Delaunay may still flip an edge between two surviving
+vertices. It should make the re-meshing noise largely common-mode, which is what
+§0.13 needs, but it is not a proof of nested subspaces and the noise floor must
+be re-measured on nested rungs rather than assumed to vanish.
+
+Filed as `~/dev/kb/tooling/meshpy-triangle-refine-needs-element-volumes.md`.
 
 ### 0.7 Next steps (replacing §5)
 
