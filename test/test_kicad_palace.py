@@ -37,7 +37,9 @@ from palace_mesh import (  # noqa: E402
     validate_palace_mesh_manifest,
 )
 from palace_plc_mesh import (  # noqa: E402
+    MAX_EDGE_AREA_OVERSHOOT,
     _refine_levels,
+    _validate_conductor_edge_refinement,
     generate_palace_plc_mesh,
     validate_palace_plc_mesh_manifest,
 )
@@ -374,6 +376,92 @@ def test_loading_an_enclosed_dump_is_accepted(tmp_path):
     path = tmp_path / "enclosed.json"
     path.write_text(json.dumps(dump))
     assert load_pcb_volume_dump(path)["board_outlines"]
+
+
+@pytest.mark.parametrize("band, area, base", [
+    (1e-4, None, 1e-6),            # a band with no cap refines nothing
+    (None, 1e-8, 1e-6),            # a cap with no band is a global cap
+    (1e-4, 1e-8, None),            # nothing to refine relative to
+    (1e-4, 1e-5, 1e-6),            # "refinement" that would coarsen
+    (-1.0, 1e-8, 1e-6),
+    (0.0, 1e-8, 1e-6),
+    (1e-4, 0.0, 1e-6),
+    (1e-4, -1e-8, 1e-6),
+    (float("nan"), 1e-8, 1e-6),
+    (float("inf"), 1e-8, 1e-6),
+    (1e-4, float("nan"), 1e-6),
+    (True, 1e-8, 1e-6),
+    (1e-4, True, 1e-6),
+])
+def test_conductor_edge_refinement_is_validated_fail_closed(band, area, base):
+    with pytest.raises(ValueError):
+        _validate_conductor_edge_refinement(band, area, base)
+
+
+def test_conductor_edge_refinement_accepts_a_complete_spec():
+    assert _validate_conductor_edge_refinement(None, None, 1e-6) == (None, None)
+    assert _validate_conductor_edge_refinement(2e-4, 1e-8, 1e-6) == (2e-4, 1e-8)
+    # equal is allowed: a band that merely matches the global cap is degenerate
+    # but not incoherent, and rejecting it would be a surprise.
+    assert _validate_conductor_edge_refinement(2e-4, 1e-6, 1e-6) == (2e-4, 1e-6)
+
+
+def test_conductor_edge_refinement_grades_the_triangulation(tmp_path):
+    """Graded refinement must buy edge resolution, not just more elements."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    common = dict(
+        outer_bounds=geometry.outer_bounds, conductors=geometry.conductors,
+        dielectrics=geometry.dielectrics, max_planar_area_m2=1e-6,
+        max_vertical_step_m=1e-3,
+    )
+    coarse = generate_palace_plc_mesh(tmp_path / "coarse.msh", **common)
+    graded = generate_palace_plc_mesh(
+        tmp_path / "graded.msh", conductor_edge_band_m=3e-4,
+        conductor_edge_max_planar_area_m2=2.5e-8, **common)
+    assert graded.tetrahedron_count > coarse.tetrahedron_count
+    provenance = json.loads(
+        (tmp_path / "graded.msh.manifest.json").read_text())["provenance"]
+    assert provenance["mesh_parameters"]["conductor_edge_band_m"] == 3e-4
+    assert provenance["mesh_parameters"][
+        "conductor_edge_max_planar_area_m2"] == 2.5e-8
+    # and the unrefined mesh records the absence rather than omitting the key
+    plain = json.loads(
+        (tmp_path / "coarse.msh.manifest.json").read_text())["provenance"]
+    assert plain["mesh_parameters"]["conductor_edge_band_m"] is None
+    assert plain["mesh_parameters"]["conductor_edge_max_planar_area_m2"] is None
+
+
+def test_a_mesh_that_never_applied_its_recorded_refinement_is_rejected(tmp_path):
+    """Known-bad calibration for the in-band area guard.
+
+    Recording the parameters is not evidence they were honoured -- a stale or
+    hand-edited manifest would otherwise carry a refinement claim over a mesh
+    that has none. Build without refinement, then claim it, and the guard must
+    fail on the mesh rather than trust the provenance.
+    """
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    path = tmp_path / "unrefined.msh"
+    generate_palace_plc_mesh(
+        path, outer_bounds=geometry.outer_bounds,
+        conductors=geometry.conductors, dielectrics=geometry.dielectrics,
+        max_planar_area_m2=1e-6, max_vertical_step_m=1e-3)
+    manifest_path = tmp_path / "unrefined.msh.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["provenance"]["mesh_parameters"]["conductor_edge_band_m"] = 3e-4
+    manifest["provenance"]["mesh_parameters"][
+        "conductor_edge_max_planar_area_m2"] = 2.5e-8
+    manifest["provenance_sha256"] = canonical_sha256(manifest["provenance"])
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    with pytest.raises(ValueError, match="refinement"):
+        validate_palace_plc_mesh_manifest(manifest_path, mesh_path=path)
+
+
+def test_the_in_band_overshoot_ceiling_is_far_above_what_meshing_needs():
+    # Measured on the canary: 1 of 27,523 in-band triangles missed the cap, at
+    # 2.39x, because it was wedged against a segment Triangle may not split.
+    assert MAX_EDGE_AREA_OVERSHOOT >= 2.39 * 2
 
 
 def test_refine_levels_band_must_not_overhang_the_outermost_stackup_level():

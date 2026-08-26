@@ -10,6 +10,7 @@ import meshpy.triangle as meshpy_triangle
 import numpy as np
 from shapely import set_precision, union_all
 from shapely.geometry import LineString, Point, Polygon, box
+from shapely.prepared import prep
 from shapely.strtree import STRtree
 
 if __package__:
@@ -157,7 +158,42 @@ def _planar_quantum(outer_bounds, source_identity):
     return quantum
 
 
-def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum):
+def _conductor_boundary(conductors):
+    return union_all([_prism_polygon(item).boundary for item in conductors])
+
+
+def _resplit_conductor_segments(segments, boundary, maximum_length, quantum):
+    """Subdivide only those segments that lie on a conductor boundary.
+
+    allow_volume_steiner is False, so Triangle may not split a segment. Without
+    this the conductor polyline keeps the global sqrt(2*max_area) spacing however
+    small the local area cap is, and the edge the cap exists to resolve stays
+    unresolved.
+    """
+    near = prep(boundary.buffer(quantum * 4.0))
+    output = []
+    for start, end in segments:
+        if not (near.intersects(Point(*start)) and near.intersects(Point(*end))):
+            output.append((start, end))
+            continue
+        count = max(1, math.ceil(math.dist(start, end) / maximum_length))
+        points = [start]
+        points.extend(
+            tuple((start[axis] * (count - index) + end[axis] * index) / count
+                  for axis in range(2))
+            for index in range(1, count)
+        )
+        points.append(end)
+        output.extend(
+            (left, right) for left, right in zip(points, points[1:])
+            if left != right
+        )
+    return tuple(output)
+
+
+def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
+                 conductor_edge_band_m=None,
+                 conductor_edge_max_planar_area_m2=None):
     source_segment_max_length = (
         math.sqrt(2.0 * max_area_m2) if max_area_m2 is not None else None
     )
@@ -165,6 +201,26 @@ def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum):
         outer_bounds, conductors, dielectrics, quantum,
         source_segment_max_length,
     )
+    refinement_func = None
+    if conductor_edge_band_m is not None:
+        boundary = _conductor_boundary(conductors)
+        segments = _resplit_conductor_segments(
+            segments, boundary,
+            math.sqrt(2.0 * conductor_edge_max_planar_area_m2), quantum,
+        )
+        # Triangle's -u callback: the field singularity at a conductor edge has
+        # the copper thickness as its length scale, so the cap is applied by
+        # distance from the boundary rather than uniformly.
+        zone = prep(boundary.buffer(conductor_edge_band_m))
+
+        def refinement_func(vertices, area):
+            if area <= conductor_edge_max_planar_area_m2:
+                return False
+            return zone.intersects(Point(
+                sum(vertex[0] for vertex in vertices) / 3.0,
+                sum(vertex[1] for vertex in vertices) / 3.0,
+            ))
+
     point_ids = {}
     points = []
 
@@ -195,6 +251,7 @@ def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum):
         # MeshPy maps this to Triangle's YY option, preserving internal PLC
         # segments while still permitting interior area-refinement points.
         allow_volume_steiner=False,
+        refinement_func=refinement_func,
     )
     canonical_ids = {}
     mesh_points = []
@@ -348,6 +405,43 @@ def _validate_vertical_refinement_band(band):
     if not values[0] < values[1]:
         raise ValueError("vertical refinement band must be increasing")
     return (float(values[0]), float(values[1]))
+
+
+# Triangle may not split a segment (allow_volume_steiner is False), so a few
+# elements wedged against an unsplittable segment cannot reach the in-band area
+# cap however hard it is asked. Measured on the canary: 1 of 27,523 in-band
+# triangles, at 2.39x. These bound that, while still failing decisively on a
+# mesh whose recorded refinement was never actually applied -- there essentially
+# every in-band triangle is over the cap.
+MAX_EDGE_AREA_OVERSHOOT = 8.0
+MAX_EDGE_AREA_VIOLATION_FRACTION = 0.01
+
+
+def _validate_conductor_edge_refinement(band_m, max_area_m2, base_area_m2):
+    """Fail closed on the graded lateral refinement spec.
+
+    Both halves or neither: a band with no cap refines nothing, and a cap with
+    no band is a global cap wearing a local name. The cap must also be at least
+    as fine as the base area, or "refinement" would coarsen the very elements it
+    names.
+    """
+    if band_m is None and max_area_m2 is None:
+        return None, None
+    if band_m is None or max_area_m2 is None:
+        raise ValueError(
+            "conductor edge refinement needs both a band and a maximum area")
+    for value, label in ((band_m, "conductor edge band"),
+                         (max_area_m2, "conductor edge maximum planar area")):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0.0):
+            raise ValueError(f"{label} must be finite and positive")
+    if base_area_m2 is None:
+        raise ValueError(
+            "conductor edge refinement needs a maximum planar area to refine")
+    if max_area_m2 > base_area_m2:
+        raise ValueError(
+            "conductor edge maximum planar area must not exceed the global one")
+    return float(band_m), float(max_area_m2)
 
 
 def _tetrahedralize(points_2d, triangles, z_levels, region_for_cell):
@@ -585,6 +679,8 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                              outer_permittivity=1.0, max_planar_area_m2=None,
                              max_vertical_step_m=None,
                              vertical_refinement_band_m=None,
+                             conductor_edge_band_m=None,
+                             conductor_edge_max_planar_area_m2=None,
                              source_identity=None):
     path = Path(path).resolve()
     outer_bounds = BoxBounds(outer_bounds.minimum, outer_bounds.maximum)
@@ -605,6 +701,10 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
             raise ValueError(f"{label} must be null or finite and positive")
     vertical_refinement_band_m = _validate_vertical_refinement_band(
         vertical_refinement_band_m)
+    conductor_edge_band_m, conductor_edge_max_planar_area_m2 = (
+        _validate_conductor_edge_refinement(
+            conductor_edge_band_m, conductor_edge_max_planar_area_m2,
+            max_planar_area_m2))
     source_identity = json.loads(json.dumps(
         source_identity or {"kind": "direct_geometry"}, allow_nan=False
     ))
@@ -631,7 +731,8 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
     }, outer_bounds.lengths[2]), max_vertical_step_m, vertical_refinement_band_m)
     planar_quantum = _planar_quantum(outer_bounds, source_identity)
     points_2d, triangles = _planar_mesh(
-        outer_bounds, conductors, dielectrics, max_planar_area_m2, planar_quantum
+        outer_bounds, conductors, dielectrics, max_planar_area_m2, planar_quantum,
+        conductor_edge_band_m, conductor_edge_max_planar_area_m2,
     )
     conductor_polygons = tuple(_prism_polygon(item) for item in conductors)
     dielectric_polygons = tuple(_dielectric_polygon(item) for item in dielectrics)
@@ -676,6 +777,9 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
             "allow_volume_steiner": False,
             "max_planar_area_m2": max_planar_area_m2,
             "max_vertical_step_m": max_vertical_step_m,
+            "conductor_edge_band_m": conductor_edge_band_m,
+            "conductor_edge_max_planar_area_m2": (
+                conductor_edge_max_planar_area_m2),
             "vertical_refinement_band_m": (
                 list(vertical_refinement_band_m)
                 if vertical_refinement_band_m is not None else None
@@ -795,6 +899,14 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
     )
 
     outer = BoxBounds(**provenance["outer_bounds"])
+    edge_band_m, edge_area_m2 = _validate_conductor_edge_refinement(
+        provenance["mesh_parameters"].get("conductor_edge_band_m"),
+        provenance["mesh_parameters"].get("conductor_edge_max_planar_area_m2"),
+        provenance["mesh_parameters"]["max_planar_area_m2"])
+    edge_zone = (
+        prep(_conductor_boundary(conductors).buffer(edge_band_m))
+        if edge_band_m is not None else None
+    )
     z_levels = np.asarray(_refine_levels(_coalesce_levels({
         *outer.minimum[2:3], *outer.maximum[2:3],
         *(value for item in conductors for value in (item.z_min, item.z_max)),
@@ -816,6 +928,7 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
     )
 
     projected_cells = []
+    edge_band_cells = edge_band_violations = 0
     actual_edges = set()
     for index, triangle in enumerate(unique_triangles):
         coordinates = [tuple(xy_values[value]) for value in triangle]
@@ -835,15 +948,45 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
                 raise ValueError(
                     "Palace PLC mesh exceeds the maximum planar triangle area"
                 )
+        if edge_zone is not None and edge_zone.intersects(polygon.centroid):
+            edge_band_cells += 1
+            if polygon.area > edge_area_m2 + 8.0 * max(
+                    math.ulp(polygon.area), math.ulp(edge_area_m2)):
+                edge_band_violations += 1
+                if polygon.area > edge_area_m2 * MAX_EDGE_AREA_OVERSHOOT:
+                    raise ValueError(
+                        "Palace PLC cell exceeds the conductor edge planar "
+                        f"area by more than {MAX_EDGE_AREA_OVERSHOOT:g}x "
+                        "inside the refinement band"
+                    )
         actual_edges.update(
             tuple(sorted((coordinates[left], coordinates[right])))
             for left, right in ((0, 1), (1, 2), (2, 0))
         )
 
+    if edge_zone is not None:
+        if not edge_band_cells:
+            raise ValueError(
+                "Palace PLC mesh records conductor edge refinement but has no "
+                "cell inside the band, so the refinement cannot be verified"
+            )
+        violation_fraction = edge_band_violations / edge_band_cells
+        if violation_fraction > MAX_EDGE_AREA_VIOLATION_FRACTION:
+            raise ValueError(
+                f"Palace PLC mesh leaves {violation_fraction * 100.0:.2f}% of "
+                f"its {edge_band_cells} conductor edge band cells above the "
+                "refinement area, so the recorded refinement was not applied"
+            )
+
     source_segments = _geometry_lines(
         outer, conductors, dielectrics, planar_quantum,
         provenance["mesh_parameters"]["source_segment_max_length_m"],
     )
+    if edge_band_m is not None:
+        source_segments = _resplit_conductor_segments(
+            source_segments, _conductor_boundary(conductors),
+            math.sqrt(2.0 * edge_area_m2), planar_quantum,
+        )
     expected_edges = {
         tuple(sorted((tuple(start), tuple(end))))
         for start, end in source_segments
@@ -1121,6 +1264,7 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
     parameters = provenance.get("mesh_parameters")
     if (not isinstance(parameters, dict) or set(parameters) != {
             "allow_boundary_steiner", "allow_volume_steiner", "backend",
+            "conductor_edge_band_m", "conductor_edge_max_planar_area_m2",
             "max_planar_area_m2", "max_vertical_step_m", "msh_version",
             "noding_serialization_quantum_m", "planar_quantum_m", "prism_split",
             "source_segment_max_length_m", "threads",
@@ -1160,6 +1304,10 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
         raise ValueError("Palace PLC mesh parameters are invalid")
     try:
         _validate_vertical_refinement_band(parameters["vertical_refinement_band_m"])
+        _validate_conductor_edge_refinement(
+            parameters["conductor_edge_band_m"],
+            parameters["conductor_edge_max_planar_area_m2"],
+            parameters["max_planar_area_m2"])
     except ValueError:
         raise ValueError("Palace PLC mesh parameters are invalid") from None
     mesher = provenance.get("mesher")
