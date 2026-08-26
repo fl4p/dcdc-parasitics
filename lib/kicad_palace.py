@@ -16,7 +16,10 @@ from kicad_fastercap import (
     _polygonal_parts,
     copper_layer_bounds,
 )
-from kicad_palace_schema import PCB_VOLUME_DUMP_FORMAT
+from kicad_palace_schema import (
+    PCB_VOLUME_DUMP_FORMAT, check_board_outline_fill,
+    outline_bounding_area_mm2,
+)
 from palace_mesh import BoxBounds, ConductorPrism, DielectricPrism
 from provenance import canonical_sha256, file_sha256
 
@@ -69,6 +72,15 @@ def load_pcb_volume_dump(path):
             or not isinstance(dump["source_pcb_sha256"], str)
             or len(dump["source_pcb_sha256"]) != 64):
         raise ValueError("KiCad Palace dump containers are invalid")
+    # Dumps written before the outline fix hold a stroked Edge.Cuts frame rather
+    # than the board region, and load without complaint: the geometry is valid,
+    # merely 99.5% missing. Checking the producer alone would leave every such
+    # dump on disk silently reproducing its old numbers, so this is checked on
+    # the way in as well, against the outline's own extent.
+    check_board_outline_fill(
+        dump["board_outlines"],
+        outline_bounding_area_mm2(dump["board_outlines"]),
+    )
     return dump
 
 

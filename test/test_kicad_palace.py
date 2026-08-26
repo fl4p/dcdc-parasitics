@@ -22,11 +22,14 @@ from kicad_palace import (  # noqa: E402
     volumes_from_pcb_dump,
 )
 from kicad_palace_dump import (  # noqa: E402
-    MIN_OUTLINE_FILL_FRACTION,
     _all_copper_groups,
-    _check_board_outline_fill,
     _drill_record,
     _mapping,
+)
+from kicad_palace_schema import (  # noqa: E402
+    MIN_OUTLINE_FILL_FRACTION,
+    check_board_outline_fill as _check_board_outline_fill,
+    outline_bounding_area_mm2,
 )
 from palace_mesh import (  # noqa: E402
     generate_palace_mesh,
@@ -313,6 +316,64 @@ def test_board_outline_fill_verdict_is_monotone_in_the_fill_fraction():
 def test_board_outline_fill_refuses_to_pass_unevaluable_input(outlines, bounding):
     with pytest.raises(ValueError):
         _check_board_outline_fill(outlines, bounding)
+
+
+def test_outline_bounding_area_matches_the_board_extent():
+    # A stroked frame's extent is the board's extent to within the stroke width,
+    # so the ring-derived denominator exposes the defect just as KiCad's own
+    # Edge.Cuts bounding box does.
+    frame = [{
+        "shell": _rectangle_ring(45.05, 40.05),
+        "holes": (_rectangle_ring(44.95, 39.95),),
+    }]
+    assert outline_bounding_area_mm2(frame) == pytest.approx(1804.2525)
+    enclosed = [{"shell": _rectangle_ring(45.0, 40.0), "holes": ()}]
+    assert outline_bounding_area_mm2(enclosed) == pytest.approx(1800.0)
+
+
+@pytest.mark.parametrize("outlines", [
+    [],
+    [{"holes": ()}],                                   # no shell at all
+    [{"shell": ((0.0, 0.0), (1.0, 0.0)), "holes": ()}],   # not a ring
+    [{"shell": ((0.0, 0.0), (1.0, 0.0), (float("nan"), 1.0)), "holes": ()}],
+    [{"shell": ((0.0, 0.0), (1.0, 0.0), (1.0,)), "holes": ()}],
+    [{"shell": _rectangle_ring(45.0, 40.0), "holes": ((0.0, 0.0),)}],
+])
+def test_outline_extent_refuses_unreadable_geometry(outlines):
+    # Unreadable must not mean fine: it must be impossible to reach a verdict
+    # by handing the check something it cannot measure.
+    with pytest.raises(ValueError):
+        outline_bounding_area_mm2(outlines)
+    with pytest.raises(ValueError):
+        _check_board_outline_fill(outlines, 1800.0)
+
+
+def test_loading_a_stroked_dump_is_refused(tmp_path):
+    """A dump written before the fix must not load quietly.
+
+    Fixing only the producer would leave every stroked dump already on disk
+    reproducing its old numbers, because the geometry in them is valid -- just
+    almost entirely absent.
+    """
+    dump = _dump()
+    dump["board_outlines"] = [{
+        "shell": list(_rectangle_ring(45.05, 40.05)),
+        "holes": [list(_rectangle_ring(44.95, 39.95))],
+    }]
+    path = tmp_path / "stroked.json"
+    path.write_text(json.dumps(dump))
+    with pytest.raises(ValueError, match="stroked rather than enclosed"):
+        load_pcb_volume_dump(path)
+
+
+def test_loading_an_enclosed_dump_is_accepted(tmp_path):
+    dump = _dump()
+    dump["board_outlines"] = [{
+        "shell": list(_rectangle_ring(45.0, 40.0)), "holes": [],
+    }]
+    path = tmp_path / "enclosed.json"
+    path.write_text(json.dumps(dump))
+    assert load_pcb_volume_dump(path)["board_outlines"]
 
 
 def test_refine_levels_band_must_not_overhang_the_outermost_stackup_level():
