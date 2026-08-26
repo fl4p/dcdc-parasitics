@@ -729,6 +729,116 @@ Two things this does **not** say:
   the lateral triangulation rather than the z re-levelling. Bisection (§cba5176)
   is still right, but it is the smaller of the two effects.
 
+### 0.15 The nested ladder, finally built — and it is not Triangle that builds it
+
+§0.13.3 said the nested path was blocked on Triangle's `-Y`. That was wrong twice
+over, and the way it was wrong is the useful part.
+
+**First correction: the missing flag was `-p`, not `-Y`.**
+`meshpy.triangle.refine()` decides whether to pass `p` by testing `input_p.faces`
+— the *output* edge array — while the PLC segments live in `facets`. On a mesh
+from `build()` that test is always false, so `-r` runs without the segments ever
+being declared. They were never destroyed by refinement; they were never
+presented to it.
+
+```
+razjQ   (what MeshPy sends)   4 of 8 segments 100% uncovered
+razjpQ  (segments declared)   0 of 8 uncovered, 0 parent vertices lost
+```
+
+**Second correction: `-p` is necessary and not sufficient.** With the segments
+properly declared Triangle still drops them once the mesh is refined far enough:
+
+```
+seed 8e-6, rounds 0-4    0 uncovered      round 5    2 uncovered
+seed 5e-8, rounds 0-1    0 uncovered      round 2   23 uncovered
+                                          round 3   77 uncovered
+                                          round 4  108 uncovered
+```
+
+They are gone from Triangle's own segment list. It is not the input's fault: of
+2532 source segments exactly one pair meets anywhere other than a shared
+endpoint, and that pair is a duplicate, so the PSLG is valid. Dropping `j` does
+not change the count; **adding `Y` does not change the count**; quality meshing
+makes it far worse (46 uncovered). Triangle's `-r` mode cannot be trusted to
+carry a PLC to this depth however it is invoked, so it is no longer used for
+nesting.
+
+**What builds the ladder instead: uniform 1-to-4 subdivision.** No mesher is
+involved, so none of that surface exists.
+
+- Every parent vertex is a child vertex → the rungs are exactly nested, and
+  Rayleigh–Ritz monotonicity is owed rather than hoped for.
+- Every parent edge becomes two collinear halves → a source segment that was an
+  edge stays covered by edges, by construction.
+- The four children are similar to the parent → shape quality is exactly
+  preserved and a graded seed keeps its grading.
+- Element size halves *exactly* each rung, which is a cleaner ladder than
+  halving an area (a √2 step in length).
+
+Verified on the written meshes, not merely in a unit test:
+
+```
+v3u0  77794 nodes   383106 tets    3156 planar xy
+v3u1 293348 nodes  1532424 tets   12529 planar xy
+parent nodes missing from child: 0     parent xy missing: 0
+z levels 25 -> 25, none lost           tets 383106 -> 1532424 = exactly 4.00x
+```
+
+3156 vertices + 9373 edges = 12529, which is the subdivision arithmetic being
+exactly what it claims. The z levels are identical between rungs, so this is a
+pure lateral ladder with the vertical axis held.
+
+The price is 4× the triangles per rung rather than 2×. That is the right trade:
+an inexactly nested ladder measures re-meshing noise, and on this model that
+noise moved 45 of 171 matrix entries by more than the whole acceptance band.
+
+#### 0.15.1 Three topology guards were measuring length where they meant distance
+
+Getting a nested mesh past the validator exposed the same bug in three places,
+and it is worth stating in general terms because it will recur.
+
+**A segment lying along an edge that is bent off it by one ULP shares only a
+measure-zero set with it.** So `difference` returns *the whole segment* and
+`covers` returns False. By length that is indistinguishable from a segment that
+was dropped outright:
+
+```
+covered but bent   689 segments report 100% uncovered, straying <= 2.794e-17 m
+genuinely dropped  50 segments, 25%-100% uncovered, straying 1.9e-3 m
+```
+
+Nine orders apart, identical under a length test. The crossing guard had the
+same flaw and reported a **1.765e-3 m penetration into a cell 1e-3 m across** —
+an impossible depth, which is what gave it away.
+
+Fixes, all measured rather than reasoned about:
+
+1. Anything the exact test flags is re-tested against grid-snapped geometry.
+   **Snapping is strictly a fallback.** On a 2e-3 m fixture a segment whose raw
+   residue is exactly `0.0` comes back 100% uncovered when snapped to 1.11e-16,
+   so the exact test keeps the last word when it says "covered".
+2. **The grid must be a power of ten.** GEOS snaps by scaling by `1/gridSize`,
+   so a grid that is not exactly representable pushes collinear points off each
+   other. The comparison that leaves 0 uncovered at 1e-13 leaves **160 at
+   2.05e-13 and 141–193 at every power of two from 2⁻⁴⁶ to 2⁻³⁶**. Powers of
+   two being worse than powers of ten is the counter-intuitive part; the source
+   coordinates are themselves a decimal grid. This cost two wrong diagnoses
+   before it was measured.
+3. When no grid clears both bars — above the rounding, below the geometry
+   quantum — `_coverage_grid_m` returns `None` and the unsnapped verdict stands,
+   which fails closed.
+4. The failure messages now report the **stray distance**, because that is the
+   one number that separates "dropped" from "covered but bent". Neither the
+   residue length nor the count can.
+
+Runtime cost of the guard work, measured: 4.2 s at 383k tets, 17.2 s at 1.53M —
+4.1× for 4× the mesh, so linear, with nothing superlinear introduced.
+
+**None of the guards were weakened to get a mesh through.** Every one of them
+was correct to refuse what it refused; three of them were reporting the wrong
+number about it.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
