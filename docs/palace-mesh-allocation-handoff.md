@@ -253,40 +253,96 @@ per window. The sequence is not in an asymptotic regime, so extrapolation is
 meaningless here. (This is worth remembering against §4's p-ladder Aitken of
 11.706 pF, which was quoted as a limit.)
 
-**Why, measured — and it is not the obvious answer.** `quality_meshing=False`
-means Triangle applies no shape-quality floor, and extrusion turns each bad
-triangle into a column of bad tets. Normalised shape measure
-`12(3V)^(2/3)/Σedge²` (1.0 = regular, → 0 = sliver), from `tet_quality.py`:
+**Why: see §0.10.** An earlier draft of this section blamed element shape
+quality, on the strength of the isotropy measure `12(3V)^(2/3)/Σedge²`, which
+runs a median of 0.039–0.202 across the rungs with a tail at 1e-6. That was the
+wrong metric and the wrong conclusion — see §0.10.1. Element quality is fine.
 
-| rung | median | < 0.05 | < 0.1 | min |
-|---|---|---|---|---|
-| v3r1 | 0.039 | 57.4% | 74.9% | 1e-6 |
-| v3r2 | 0.051 | 49.2% | 65.6% | 1e-6 |
-| v3r3 | 0.094 | 30.1% | 50.8% | 1e-6 |
-| v3r4 | 0.202 | 14.8% | 34.7% | 1e-6 |
-| v3r5 | 0.177 | 7.3% | 20.0% | 1e-6 |
+### 0.10 Which axis: measured, and it is the lateral one
 
-Quality is **not** constant across the ladder — it improves 4.5× in the median
-from r1 to r5, because halving both knobs together makes cells more isotropic.
-That is the problem: **each rung changes element shape as well as element size,
-so the ladder never isolated `h` and its differences are not a convergence
-sequence at all.** That fully explains the erratic observed order without
-needing slivers to be the cause. Meanwhile a degenerate tail survives every
-rung — the minimum is 1e-6 throughout, and 7.3% of the finest mesh is still
-below 0.05.
+#### 0.10.1 Element quality is not the problem — the isotropy metric was
 
-So the §2 item that was real all along is the one nobody acted on:
-**there is no shape-quality floor.** Two things follow, and both are
-`mesh_parameters` schema changes to a shared gated component — Fab's call:
+The isotropy measure penalises *every* thin element, but a flat well-formed
+element in a 27.5 µm mask layer is perfectly sound for FEM. What actually breaks
+the interpolation error bound is the **maximum angle** approaching 180°
+(Babuška–Aziz), not the aspect ratio. Max dihedral angle on v3r5:
 
-1. Enable Triangle quality meshing (`quality_meshing=True`, `min_angle`), which
-   bounds the planar angle and therefore the extruded aspect ratio. Measured in
-   §0.5, q25 costs 68,868 triangles against 11,114 — affordable now.
-2. Re-run the ladder varying **one** knob at a time against a fixed quality
-   floor, so the differences mean what the 2% + 1 fF gate assumes they mean.
+| volume | tets | median | p95 | p99 | max | >170° | >178° |
+|---|---|---|---|---|---|---|---|
+| outer | 120,038 | 90.00 | 104.11 | 163.46 | 179.98 | 0.72% | 0.00% |
+| dielectric 1 | 42,943 | 90.69 | 152.88 | 166.65 | 179.98 | 0.17% | 0.04% |
+| B.Mask | 2,521 | 90.26 | 139.29 | 163.38 | 179.98 | 0.20% | 0.12% |
+| F.Mask | 1,834 | 90.18 | 131.85 | 163.65 | 173.10 | 0.05% | 0.00% |
 
-Until then §4 stands: **there is still no trustworthy canary value.** 129.1146 pF
-is the finest measurement, not a converged number, and must not be quoted as one.
+Median ~90°, under 0.72% above 170°, essentially nothing above 178°. **The mesh
+is sound.** A quality floor would have been a schema change to a shared gated
+component to fix an axis that is not broken — the §6 trap, caught one step
+before implementation.
+
+#### 0.10.2 The vertical axis is already converged
+
+Halve exactly one knob from v3r4 (1e-6, 1e-4):
+
+| mesh | trace pF | Δ from v3r4 | share |
+|---|---|---|---|
+| v3r4 (1e-6, 1e-4) | 133.3821 | — | — |
+| **v3lat** (5e-7, **1e-4**) | 129.1868 | **−4195.3 fF** | **98.3%** |
+| **v3vert** (1e-6, **5e-5**) | 133.3127 | **−69.4 fF** | **1.6%** |
+| v3r5 (5e-7, 5e-5) | 129.1146 | −4267.5 fF | 100% |
+
+The singles sum to −4264.7 fF against −4267.5 for both, so the axes separate
+cleanly with no interaction term. **Vertical is done: 69 fF on 133 pF is 0.05%,
+far inside the band.** The z-ladder, the band, and b20u all refined the axis
+carrying 1.6% of the error. §2 had the two axes exactly the wrong way round.
+
+#### 0.10.3 The lateral ladder is clean, and hopeless
+
+Pure lateral at fixed vstep 1e-4, order 1 + BoomerAMG:
+
+| area m² | tets | trace pF | Δrel | Δabs fF | pos_off | recip F |
+|---|---|---|---|---|---|---|
+| 2.0e-6 | 715,428 | 138.0156 | — | — | 0 | 1.6e-23 |
+| 1.0e-6 | 1,158,066 | 133.3821 | −3.47% | −4633.4 | 0 | 3.0e-23 |
+| 5.0e-7 | 2,048,832 | 129.1868 | −3.25% | −4195.3 | 0 | 1.2e-23 |
+| 2.5e-7 | 3,806,928 | 125.3696 | −3.04% | −3817.2 | 0 | 7.5e-24 |
+
+Isolating one axis finally gives an asymptotic sequence: difference ratios
+**0.905, 0.910** and observed order **0.14, 0.14**, with Aitken now *stable* at
+**89.01 → 86.84 pF** against the 30% swings of the joint ladder (§0.9). The
+joint ladder was erratic because it varied two axes at once, not because
+anything was wrong with the solve.
+
+But **p ≈ 0.14 is unusable**. At 0.91 per area-halving, reaching 2% of an
+eventual ~100 pF needs 6.9 more halvings — **4.4e8 tets**, at a 66 µm element
+edge. Uniform lateral refinement is not a route to this number. And note the
+gap: 125.37 pF measured against an ~87 pF extrapolated limit.
+
+#### 0.10.4 Why, and what it implies
+
+66 µm is the tell: it is the **copper thickness, 35 µm**, to within a factor of
+two. The remaining error is the field singularity at conductor edges, whose
+length scale is the copper thickness, and the finest lateral element tried is
+**707 µm — 20× too coarse there**. Uniform refinement reaches that scale
+everywhere, at absurd cost; grading reaches it only where it is needed.
+
+Two things this is **not**, both checked rather than assumed:
+
+- **Not element quality** (§0.10.1).
+- **Not elements bridging conductor gaps.** Tets touching two terminal surfaces
+  hold flat at **10,270 / 10,631 / 10,524 / 10,715** across the 5.3× lateral
+  ladder, over 32–35 pairs. They are resolution-independent — conductors
+  adjacent in the PLC share nodes, and `allow_volume_steiner=False` preserves
+  those segments at every refinement. This also means §4's "an XY-refined mesh
+  at 4e-7 m² has zero cross-terminal tets" needs re-checking; it does not hold
+  on the canary.
+
+So **§5 step 2 was right after all, for a reason nobody had**: a lateral
+refinement region is the only affordable route. §0.5's argument against it was
+about *allocation*, and was correct about allocation — the hollow board was the
+allocation defect. Once the board is solid, the lateral axis is the
+convergence-limiting one and it needs grading, not uniform refinement. The
+target is now quantitative: **element size approaching the 35 µm copper
+thickness near conductor edges, and only there.**
 
 ### 0.7 Next steps (replacing §5)
 
