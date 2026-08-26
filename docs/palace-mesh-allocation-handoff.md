@@ -641,6 +641,45 @@ Two consequences to carry into the implementation:
    itself, so that pre-split is redundant there — but the *coarsest* rung is
    still a `build()`, so it cannot simply be deleted.
 
+### 0.14 The vertical ladder converges — entrywise — and shows why
+
+```
+rung       elem_um      tets   trace_pF   d_abs_fF    d_rel
+v3e05       100.00   5808024    99.5917          -        -
+v3v50        50.00   9585594    99.3013    -290.33   -0.29%
+v3v25        25.00  17140734    99.2100     -91.37   -0.09%
+
+trace:  CONVERGED  (contraction 0.315, observed order 1.67, Aitken 99.1680 pF)
+matrix: CONVERGED  all 171 entries; worst finest step 0.60 fF (0.19%) at C[6][9]
+```
+
+**This is the first ladder in the project to pass anything**, and the first to
+pass entrywise — the same gate that reports the lateral ladder UNEVALUABLE
+because 45 of its 171 entries are noise-dominated.
+
+The reason is the whole diagnosis in one line: **`_planar_mesh` does not take
+`max_vertical_step_m`, so all three rungs share a bit-identical lateral
+triangulation** (42,486 xy points each). They are accidentally nested in the
+axis that carries the noise, so nothing had to cancel — there was no
+perturbation to begin with. Change the lateral mesh instead and 45 entries move
+by more than the band; hold it fixed and every one of the 171 settles.
+
+That is direct evidence that §0.13.1's prescription works: when rungs are nested,
+the entrywise gate becomes readable. It is the strongest corroboration available
+short of running the nested lateral ladder itself.
+
+Two things this does **not** say:
+
+- **The canary is not converged.** This is one axis. The lateral axis still
+  moves 7.3% a rung and is the one that matters (§0.10.4). A converged vertical
+  axis on an unconverged lateral one is not a converged matrix, and 99.21 pF is
+  a measurement, not a limit.
+- **z nesting was not what saved it.** The z-levels are *not* nested across
+  these rungs — 15 of 25 coarse levels are absent from `v3v50` (§0.12.1). The
+  ladder converged anyway, which places the re-meshing noise overwhelmingly in
+  the lateral triangulation rather than the z re-levelling. Bisection (§cba5176)
+  is still right, but it is the smaller of the two effects.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
