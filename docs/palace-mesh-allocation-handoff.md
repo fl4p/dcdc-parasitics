@@ -1097,6 +1097,57 @@ elements is at least that large however the prisms are cut, and no ordering rule
 was ever going to rescue a mesh this coarse — the fix removes the arbitrariness,
 not the error.
 
+### 0.19 Where this leaves the canary, and what to do next
+
+**State.** Two independent nested ladders converge at first order (contraction
+0.476 and 0.495, observed order 1.07 and 1.02) and neither has converged: the
+finest steps are 19.47% and 18.10% against a 2% + 1 fF band. The canary still
+has **no trustworthy value**, and after §0.17 it has fewer defensible ones than
+before — every capacitance in this document that came from an index-ordered mesh
+carries a ~21% numbering uncertainty.
+
+**Uniform refinement cannot close it.** At a contraction of 0.476 per rung:
+
+```
++1 rung   9.27%    24.5M tets
++2 rung   4.41%    98.1M tets
++3 rung   2.10%   392.3M tets
++4 rung   1.00%  1569.3M tets
+```
+
+Halving the vertical step count buys a factor of 4 and does not change that
+conclusion. More tetrahedra is not the answer.
+
+**Three candidate routes, cheapest first.**
+
+1. **Raise the element order.** At O(h²) the contraction becomes ~0.25, so
+   19.47% → 4.9% → 1.2% closes in two rungs rather than four. `probe.py` already
+   takes the order as its second argument, so this is testable on the meshes
+   that already exist. The constraint is memory: order 2 on 6.1M tets is roughly
+   8× the degrees of freedom, so expect the ladder to have to start coarser.
+   The p-ladder scripts under `out/` were written for this and are pinned to
+   refused v2 geometry — repoint them at v3 rather than writing new ones.
+2. **Red–green local refinement.** Subdivide only inside the conductor edge
+   band, where the singularity is, and bisect the neighbours to restore
+   conformity. Keeps vertex nesting, and spends elements where the error lives
+   instead of tiling the whole board. It breaks the exactly-4ᵏ triangle guard in
+   `_nested_refinement`, which would need a per-region count instead.
+3. **Split the axes.** Converge laterally at a deliberately coarse vertical
+   step, then apply the vertical correction separately — §0.14 already did the
+   vertical half this way. Not a proof of joint convergence, but the gate is
+   per-axis and this is the standard practice.
+
+**Before any of that, re-run what is already here.** Every ladder in this
+document predates the coordinate-ordering fix. §0.11's graded ladder, §0.14's
+vertical ladder, and the §0.9 and §0.10 measurements were all built on
+index-ordered meshes and are contaminated to the tune of §0.17's 21%. The
+vertical ladder in particular *passed* the entrywise gate, and that pass should
+not be relied on until it is reproduced under the fixed ordering — a ladder can
+pass for the wrong reason as easily as it can fail for one.
+
+**Do not** reorder the gate: the canary must demonstrate convergence before
+Fugu is requalified, per §1.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
