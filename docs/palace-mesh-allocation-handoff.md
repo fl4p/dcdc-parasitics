@@ -1155,13 +1155,15 @@ conclusion. More tetrahedra is not the answer.
    scaling closes it again, and this time measured rather than inferred:
 
    ```
-   order 2, SuperLU    383k tets     53 s   8.4 GB   completed
-                      1.53M tets  >1800 s            killed, exit -9
+   order 2, SuperLU    383k tets     53 s    8.4 GB   completed
+                      1.53M tets  >1800 s   14.1 GB   killed, exit -9
    ```
 
    A 4× mesh makes the direct solve **more than 34× slower** and it does not
-   finish inside the 1800 s wall. So order 2 is affordable at roughly 400k tets
-   and not at 1.5M, which is a one-rung window — and a ladder needs three.
+   finish inside the 1800 s wall. Note what the kill was *not*: peak RSS was
+   14.07 GB against the resource class's 24 GiB ceiling, so memory had 10 GB of
+   headroom and the binding constraint was wall time alone. The 34× is a lower
+   bound on the true cost, not a measurement of it.
 
    **This does not close p-refinement, it relocates it.** A three-rung *p*=2
    ladder would sit at roughly 24k / 96k / 383k tets, all of which are
@@ -1170,6 +1172,9 @@ conclusion. More tetrahedra is not the answer.
    ladder over coarse meshes may converge where p=1 over fine ones does not.
    The meshes do not exist yet — it needs a seed about 16× coarser than `v3l0`.
    That is the next experiment, and it is a build job rather than a solve job.
+   **§0.20 ran that build job. The seed does not exist and cannot be built:
+   the PLC floors the lateral mesh long before 24k tets.** Read §0.20 before
+   acting on this paragraph.
    The p-ladder scripts under `out/` were written for this and are pinned to
    refused v2 geometry — repoint them at v3 rather than writing new ones. Each
    pins it in exactly one line (`GEOMETRY = Path(...simple-hb-user-space-
@@ -1214,6 +1219,133 @@ pass for the wrong reason as easily as it can fail for one.
 
 **Do not** reorder the gate: the canary must demonstrate convergence before
 Fugu is requalified, per §1.
+
+### 0.20 Every trace in this document is an upper bound — and the best one is 24 pF
+
+§0.19 sent the next agent to build a seed "about 16× coarser than `v3l0`" for a
+three-rung order-2 ladder at 24k / 96k / 383k tets. That build job was run. It
+fails, and the reason it fails is worth more than the ladder would have been.
+
+**The lateral mesh is floored by the PLC, not by the area constraint.**
+`max_planar_area_m2` stops doing anything once it exceeds the size the conductor
+outlines already force. Same geometry, same vertical settings as `v3l0`, only
+the area target moved:
+
+```
+max_planar_area_m2   nodes    tets      vs v3l0
+8e-6   (v3l0)        77794    383106      1.00x
+1.28e-4 (16x)        58781    279186      1.37x coarser
+5.12e-4 (64x)        22506     97842      3.92x
+2.048e-3 (256x)      22406     97422      3.93x   <- saturated
+```
+
+A 256× larger area target buys 3.93× fewer tetrahedra and then stops: the last
+two rows differ by 0.4%. Roughly 2350 planar points are not a resolution choice,
+they are the conductor outlines themselves. There is no 24k-tet mesh of this
+board, so there is no three-rung order-2 h-ladder. Route 1 as §0.19 framed it is
+closed, and this time for a structural reason rather than a cost one.
+
+**The floor mesh.** Dropping `max_vertical_step_m` as well (levels at material
+interfaces only) gives the smallest mesh this geometry admits:
+
+```
+v3cz   area 1.28e-4, no vertical step   22886 nodes   99546 tets
+```
+
+**p-refinement does not need three meshes.** The mesh is a PLC extrusion: every
+conductor and dielectric boundary is exactly a facet, at every order. Raising
+the polynomial order on a *fixed* mesh therefore converges to the true solution
+of the same geometry with no geometric error to chase — and, unlike the h-ladder
+of §0.15.2, the spaces really are nested, because they share the mesh. On `v3cz`,
+SuperLU direct, 8 ranks:
+
+```
+p    trace_pF     delta_pF    d_rel    contraction   wall     RSS
+1    215.9080            -        -              -    5.0 s   1.5 GB
+2     63.9914    -151.9166  -237.40%             -   12.0 s        -   REJECTED
+3     38.0788     -25.9126   -68.05%         0.171   28.1 s  13.4 GB
+4     28.6703      -9.4085   -32.82%         0.363   78.8 s  14.8 GB
+5     24.1859      -4.4845   -18.54%         0.477  523.4 s  20.9 GB
+```
+
+**The diagonal is the energy — verified, not assumed.** The claim that these are
+upper bounds rests on `C_ii` being the Ritz energy rather than an independently
+computed surface flux, so it was checked rather than argued:
+
+```
+2 * E_elec[i] / C_raw[i][i] = 376.7303134   for all 18 terminals
+  p3 spread 6.1e-13   p4 1.6e-12   p5 2.1e-12
+```
+
+That constant is the free-space impedance, i.e. the solver's nondimensionalisation.
+`C_ii` **is** twice the discrete field energy over a fixed constant, to twelve
+digits. The same identity, the same constant, holds on the BoomerAMG h-ladder
+runs (`v3l0/1/2`, `v3gl0/1/2`, spreads 1.7e-13 to 6.9e-13), so it is a property
+of the extraction and not of the direct solver.
+
+Rayleigh–Ritz then applies with no caveats: over nested spaces the discrete
+energy decreases monotonically toward the true energy from above. Therefore
+
+> **every capacitance trace in this document is an upper bound on the true
+> trace, and the smallest one measured is 24.19 pF.**
+
+**This refutes the order-1 extrapolations outright.** §0.18's ladder contracts
+toward an Aitken limit of 90.14 pF, and the earlier index-ordered work drifted
+toward 99.6 pF. Both sit **3.7× above a proven upper bound**. They were never
+estimates of the limit. §0.19 said "quote neither"; the reason is now stronger
+than the caution was — they are not merely untrustworthy, they are excluded.
+
+**And it says the h-ladder is the wrong axis by a wide margin.** Compare the
+best h result against a coarse-mesh p result:
+
+```
+v3l2  order 1   6129696 tets   109.5380 pF     <- 6.1M tets
+v3cz  order 3     99546 tets    38.0788 pF     <- 62x fewer, 2.9x better bound
+v3cz  order 5     99546 tets    24.1859 pF     <- 62x fewer, 4.5x better bound
+```
+
+Sixty-two times fewer elements and a bound 4.5× tighter. Every tetrahedron spent
+on the order-1 h-ladder bought less than raising the order on the smallest mesh
+the geometry allows.
+
+**What the p-ladder does not do is converge either.** The contraction ratio is
+*worsening* — 0.171, 0.363, 0.477 — which is the signature of algebraic rather
+than exponential convergence, and it is heading for roughly the same ~0.48 the
+h-ladder settled at. A geometric tail at 0.477 puts the limit near 20.1 pF, but
+a rising ratio makes even that an optimistic read. The finest step is 18.54%
+against a 2% + 1 fF band. **The canary still has no value, only a much better
+bound on one.**
+
+Two candidate causes, and they are distinguishable cheaply:
+
+- **Conductor-edge singularity.** The potential goes as r^α at a re-entrant
+  copper edge; p-refinement on a fixed mesh converges only algebraically against
+  a singularity sitting at an element vertex. If this dominates, the fix is
+  grading toward the edges (`v3gl*` already exists) or hp, not more p.
+- **Air-box aspect ratio.** `v3cz` spans ~44 mm of air in a handful of elements,
+  and every h-ladder mesh confines its vertical refinement to
+  `[-0.0016, 0]` — the board — so the air's vertical resolution has never been
+  varied by *any* ladder in this document. That is an unexplored axis, and the
+  fact that p (which enriches within those tall elements) moves the answer so
+  much further than h (which does not touch them) points at it.
+
+The discriminating experiment is one mesh and one solve: rebuild `v3cz` with the
+vertical band covering the whole domain instead of the board, and compare at
+fixed order. If the trace drops sharply, the air box was the error.
+
+**One rung was rejected, and correctly.** Order 2 produced 16 positive
+off-diagonal entries, the largest `C[2][13] = +0.0127 fF` against a 2.92 pF
+diagonal — 4 parts per million, i.e. discretisation noise — and the run gate
+refused the whole run and quarantined the CSVs. Orders 1, 3, 4 and 5 on the same
+mesh have none. This is the guard behaving as designed (a non-physical matrix is
+not a small error to be tolerated), but it does mean a p-ladder can lose an
+interior rung, and `check_convergence_ladder` will not let the survivors be
+joined into one apparent step. Read the trace above from the quarantined copy
+under `postpro/.quarantine.*/`; the numbers are recorded, the run is not
+accepted.
+
+Campaign: `out/palace-qualification/simple-hb-pladder-v1/probe.py TAG ORDER`,
+one output directory per order so no grader can conflate them.
 
 ### 0.7 Next steps (replacing §5)
 
