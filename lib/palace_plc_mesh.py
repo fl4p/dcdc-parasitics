@@ -210,10 +210,25 @@ def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
       up. `refinement_func=` is accepted and still segfaults, which is why the
       grading here is expressed as per-element targets rather than reusing the
       callback the initial build uses.
-    - `refine()` takes no `allow_volume_steiner`, so it splits PLC segments the
-      -YY build forbade. That is safe -- the splits are collinear, and total
-      segment length was unchanged to 8.7e-15 relative on the canary -- but it
-      means a nested mesh must not claim `allow_volume_steiner: false`.
+    - `refine()` takes no `allow_volume_steiner`, and it does not merely split
+      PLC segments -- it drops the constrained status of some of them. On the
+      canary, 355 of 2533 source segments stop appearing verbatim as triangle
+      edges; 305 of those are honest collinear subdivisions, but **50 are up to
+      95% uncovered** (1.93 mm missing from a 2.03 mm segment). A conductor
+      boundary that is no longer an edge of the triangulation breaks the
+      point-in-polygon material assignment that depends on it.
+
+    So this function is **not yet usable for a real ladder**, and the vertex
+    check below is not sufficient to make it so: vertices can all survive while
+    the segments they bound do not. `_validate_plc_mesh_topology` catches it
+    downstream, which is why a nested build currently fails closed rather than
+    producing a wrong mesh. Making it usable needs Triangle's -Y passed through
+    refine, which MeshPy does not expose.
+
+    (An earlier note here claimed the splits were harmless because total
+    segment length was unchanged to 8.7e-15. That measured the facet list's
+    internal consistency, not whether source segments survive as edges of the
+    triangulation, and it was the wrong measurement for the question.)
 
     Nesting is checked here rather than trusted, while the parent is still in
     hand: a lost vertex means the rung is not nested and the ladder built on it

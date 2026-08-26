@@ -623,6 +623,25 @@ triangles over target: 0 of 33950 (max 1.998e-06 vs target 2.000e-06)
 
 Vertices nest exactly and the area target is honoured with nothing over it.
 
+> **CORRECTION (same session).** The paragraph below is wrong, and the nested
+> ladder failed on it. `refine()` does not merely split PLC segments; it drops
+> the constrained status of some. Measured against triangle edges: 355 of 2533
+> source segments no longer appear verbatim, 305 of those are honest collinear
+> subdivisions, and **50 are up to 95% uncovered** — 1.93 mm missing from a
+> 2.03 mm segment. A conductor boundary that is not an edge of the
+> triangulation breaks the point-in-polygon material assignment.
+>
+> The 8.7e-15 length figure below measured the *facet list's* internal
+> consistency, not whether source segments survive as edges of the mesh. It was
+> the wrong measurement for the question and it read as reassurance.
+>
+> `_validate_plc_mesh_topology` catches this, so a nested build fails closed
+> rather than producing a wrong mesh: `v3nest1..3` all refuse with "Palace PLC
+> mesh omits a noded source boundary segment: missing=50". **The nested path is
+> blocked until Triangle's -Y can be passed through refine, which MeshPy does
+> not expose.** Do not relax the topology guard to get past it — it is the only
+> thing standing between a nested rung and silently wrong materials.
+
 **The segment count is the catch, and it is a provenance problem, not a
 geometry one.** `refine()` takes no `allow_volume_steiner`, so it splits
 segments the `-YY` build forbade: 432 of 2533 no longer appear verbatim. Checked
