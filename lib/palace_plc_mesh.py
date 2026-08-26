@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import meshpy
+import meshpy._internals as meshpy_internals
 import meshpy.triangle as meshpy_triangle
 import numpy as np
 from shapely import set_precision, union_all
@@ -191,6 +192,41 @@ def _resplit_conductor_segments(segments, boundary, maximum_length, quantum):
     return tuple(output)
 
 
+_REFINE_OPTIONS = "razjpQ"
+
+
+def _refine_segment_conforming(mesh):
+    """Refine in -r mode with the PLC segments actually declared as segments.
+
+    `meshpy.triangle.refine()` builds its option string as "razj" and then adds
+    `p` only when `input.faces` is non-empty. `faces` is the *output* edge array,
+    not the segment list -- the segments live in `facets` -- so on a mesh that
+    came from `build()` the test is against the wrong array, `p` is never added,
+    and Triangle refines in -r mode without reading the segments at all. They are
+    not "destroyed" by refinement so much as never presented to it.
+
+    Measured on a square-in-a-square PLC, refining the same parent mesh under
+    each option string and asking what fraction of each source segment is still
+    covered by triangle edges:
+
+        razjQ    (what MeshPy sends)   4 of 8 segments 100% uncovered
+        razjpQ   (this)                0 of 8 uncovered, 0 parent vertices lost
+
+    So the fix is `p`, not the `-Y` an earlier note here inferred. `-Y` is
+    deliberately *not* set: it forbids Steiner points on segments, which would
+    freeze the conductor polyline at the rung-0 spacing that
+    `_resplit_conductor_segments` computed while the interior kept refining --
+    reintroducing on every rung above zero exactly the under-resolved conductor
+    edge that function exists to prevent. Letting Triangle subdivide a segment is
+    harmless here because the material assignment accepts a segment covered by
+    collinear pieces; losing the segment is what breaks it.
+    """
+    refined = meshpy_triangle.MeshInfo()
+    meshpy_internals.triangulate(
+        _REFINE_OPTIONS, mesh, refined, meshpy_triangle.MeshInfo(), None)
+    return refined
+
+
 def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
     """Halve the area targets `refinements` times by refining in place.
 
@@ -210,22 +246,19 @@ def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
       up. `refinement_func=` is accepted and still segfaults, which is why the
       grading here is expressed as per-element targets rather than reusing the
       callback the initial build uses.
-    - `refine()` takes no `allow_volume_steiner`, and it does not merely split
-      PLC segments -- it drops the constrained status of some of them. On the
-      canary, 355 of 2533 source segments stop appearing verbatim as triangle
-      edges; 305 of those are honest collinear subdivisions, but **50 are up to
-      95% uncovered** (1.93 mm missing from a 2.03 mm segment). A conductor
-      boundary that is no longer an edge of the triangulation breaks the
-      point-in-polygon material assignment that depends on it.
+    - `meshpy.triangle.refine()` does not declare the PLC segments to Triangle,
+      so they are silently dropped and a conductor boundary stops being an edge
+      of the triangulation. On the canary that left 50 of 2533 segments up to
+      95% uncovered, which would break the point-in-polygon material assignment.
+      `_refine_segment_conforming` is used instead; the reasoning is there.
 
-    So this function is **not yet usable for a real ladder**, and the vertex
-    check below is not sufficient to make it so: vertices can all survive while
-    the segments they bound do not. `_validate_plc_mesh_topology` catches it
-    downstream, which is why a nested build currently fails closed rather than
-    producing a wrong mesh. Making it usable needs Triangle's -Y passed through
-    refine, which MeshPy does not expose.
+    The vertex check below is necessary but not sufficient on its own -- every
+    vertex can survive while the segments they bound do not, which is precisely
+    what the second trap did. It is kept because it is cheap and catches a
+    different failure, and `_validate_plc_mesh_topology` covers the segments
+    downstream; both must hold.
 
-    (An earlier note here claimed the splits were harmless because total
+    (An earlier note here claimed the segment splits were harmless because total
     segment length was unchanged to 8.7e-15. That measured the facet list's
     internal consistency, not whether source segments survive as edges of the
     triangulation, and it was the wrong measurement for the question.)
@@ -251,7 +284,7 @@ def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
                 if zone.intersects(centroid):
                     target = edge_target
             mesh.element_volumes[index] = target
-        mesh = meshpy_triangle.refine(mesh)
+        mesh = _refine_segment_conforming(mesh)
         lost = parent - {tuple(float(value) for value in point)
                          for point in mesh.points}
         if lost:

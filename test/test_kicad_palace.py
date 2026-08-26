@@ -7,7 +7,8 @@ import subprocess
 import sys
 
 import pytest
-from shapely.geometry import Polygon
+from shapely import union_all
+from shapely.geometry import LineString, Polygon
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
@@ -1231,15 +1232,91 @@ def test_a_refinement_that_loses_a_parent_vertex_is_refused():
         def __setitem__(self, index, value):
             pass
 
-    original = palace_plc_mesh.meshpy_triangle.refine
-    palace_plc_mesh.meshpy_triangle.refine = (
+    original = palace_plc_mesh._refine_segment_conforming
+    palace_plc_mesh._refine_segment_conforming = (
         lambda mesh: _Mesh([(0.0, 0.0), (1.0, 0.0), (9.0, 9.0)]))
     try:
         with pytest.raises(ValueError, match="not nested in its parent"):
             palace_plc_mesh._refine_nested(
                 _Mesh([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]), 1, 1e-6, None, None)
     finally:
-        palace_plc_mesh.meshpy_triangle.refine = original
+        palace_plc_mesh._refine_segment_conforming = original
+
+
+def test_meshpy_refine_drops_segments_and_the_conforming_refine_keeps_them():
+    """Known-bad calibration for the segment fix.
+
+    The failure this pins is not hypothetical: it is what stopped the first
+    nested ladder, where 50 of 2533 conductor segments came back up to 95%
+    uncovered and the material assignment would have read the wrong side of a
+    conductor boundary. The cause is that `meshpy.triangle.refine` decides
+    whether to pass Triangle's `-p` by testing `input.faces`, the *output* edge
+    array, rather than `facets`, where the segments actually live -- so on a mesh
+    from `build()` the segments are never declared and -r never sees them.
+
+    Both halves are asserted. If a future MeshPy fixes its own option string,
+    the first assertion fails loudly rather than leaving a test that quietly
+    proves nothing.
+    """
+    points = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0),
+              (1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]
+    facets = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4)]
+    information = palace_plc_mesh.meshpy_triangle.MeshInfo()
+    information.set_points(points)
+    information.set_facets(facets)
+    parent = palace_plc_mesh.meshpy_triangle.build(
+        information, max_volume=0.5, quality_meshing=False,
+        allow_boundary_steiner=False, allow_volume_steiner=False)
+
+    def _uncovered(mesh):
+        """How many source segments are no longer covered by triangle edges?
+
+        Collinear subdivision is not a defect -- the material assignment accepts
+        a segment covered by pieces -- so coverage, not verbatim survival, is
+        the property that has to hold.
+        """
+        edges = []
+        for element in mesh.elements:
+            for start, end in ((element[0], element[1]), (element[1],
+                               element[2]), (element[2], element[0])):
+                edges.append(LineString(
+                    [tuple(mesh.points[start]), tuple(mesh.points[end])]))
+        covered = union_all(edges)
+        return sum(
+            1 for start, end in _segments
+            if not LineString([tuple(parent.points[start]),
+                               tuple(parent.points[end])]
+                              ).difference(covered).is_empty)
+
+    _segments = [tuple(facet) for facet in parent.facets]
+
+    def _seeded():
+        copy = palace_plc_mesh.meshpy_triangle.MeshInfo()
+        copy.set_points([tuple(point) for point in parent.points])
+        copy.elements.resize(len(parent.elements))
+        for index, element in enumerate(parent.elements):
+            copy.elements[index] = tuple(element)
+        copy.set_facets([tuple(facet) for facet in parent.facets])
+        copy.element_volumes.setup()
+        for index in range(len(copy.elements)):
+            copy.element_volumes[index] = 0.125
+        return copy
+
+    assert _uncovered(palace_plc_mesh.meshpy_triangle.refine(_seeded())) > 0
+    assert _uncovered(palace_plc_mesh._refine_segment_conforming(_seeded())) == 0
+
+
+def test_the_conforming_refine_declares_the_segments_to_triangle():
+    """`p` is the whole fix, and it must not drift out of the option string.
+
+    `-Y` is deliberately absent: it would forbid Steiner points on segments and
+    so freeze the conductor polyline at the spacing rung zero happened to get,
+    while the interior kept refining.
+    """
+    assert "p" in palace_plc_mesh._REFINE_OPTIONS
+    assert "Y" not in palace_plc_mesh._REFINE_OPTIONS
+    assert "r" in palace_plc_mesh._REFINE_OPTIONS
+    assert "a" in palace_plc_mesh._REFINE_OPTIONS
 
 
 def test_none_and_zero_nesting_mean_different_things(tmp_path):
