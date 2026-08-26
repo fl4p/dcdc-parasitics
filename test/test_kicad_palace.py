@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import json
+import collections
+import itertools
 import math
 import os
 from pathlib import Path
@@ -1510,3 +1512,64 @@ def test_the_stray_distance_samples_the_remainder_not_the_segment():
         remainder = LineString([(0.0, 0.0), (1.0, 0.0)]).difference(covering)
         stray = palace_plc_mesh._stray_distance_m(remainder, covering)
         assert stray == pytest.approx(gap / 2.0, rel=0.05)
+
+
+def _diagonal_owner(left, right, key):
+    """Which endpoint of the vertical quad over an edge carries the diagonal."""
+    return 0 if key(left) < key(right) else 1
+
+
+def test_the_prism_diagonal_is_inherited_through_subdivision():
+    """The property that makes a nested ladder mean anything.
+
+    Index order is not stable under refinement: subdivision appends midpoints
+    at the end of the point list, so for a parent edge A->B with A < B the
+    sub-edge A-AB keeps the parent's orientation while AB-B flips, because AB
+    now outranks B. Exactly half the sub-edges invert. Measured on the canary
+    seed: 18618 of 37236 inherited under index order, 37226 of 37236 under
+    coordinate order.
+
+    Coordinate order fixes it by construction -- a midpoint sorts between its
+    own endpoints -- and that is what makes the tetrahedralization a function
+    of the geometry rather than of the numbering.
+    """
+    points = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    triangles = ((0, 1, 2), (0, 2, 3))
+    fine, fine_triangles = palace_plc_mesh._subdivide_uniformly(
+        points, triangles, 1)
+    at = {point: index for index, point in enumerate(fine)}
+
+    inherited = {"index": 0, "coordinate": 0}
+    total = 0
+    for first, second, third in triangles:
+        for left, right in ((first, second), (second, third), (third, first)):
+            a, b = points[left], points[right]
+            middle = at[((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)]
+            for pair in ((at[a], middle), (middle, at[b])):
+                total += 1
+                if _diagonal_owner(left, right, lambda i: i) == \
+                        _diagonal_owner(*pair, key=lambda i: i):
+                    inherited["index"] += 1
+                if _diagonal_owner(left, right, lambda i: points[i]) == \
+                        _diagonal_owner(*pair, key=lambda i: fine[i]):
+                    inherited["coordinate"] += 1
+
+    assert inherited["coordinate"] == total, "coordinate order must inherit"
+    assert inherited["index"] < total, "index order must not (it inverts half)"
+
+
+def test_the_prism_split_is_conforming_under_coordinate_order():
+    """Conformity holds for any total order, but it is the property that makes
+    the mesh usable at all, so it is checked rather than argued."""
+    points = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    triangles = ((0, 1, 2), (0, 2, 3))
+    coordinates, tetrahedra = palace_plc_mesh._tetrahedralize(
+        points, triangles, (0.0, 0.5, 1.0),
+        lambda centroid, z: ("material", 1))
+    counts = collections.Counter()
+    for nodes, region, determinant in tetrahedra:
+        assert determinant > 0.0
+        for face in itertools.combinations(sorted(nodes), 3):
+            counts[face] += 1
+    assert set(counts.values()) <= {1, 2}, "a face may bound at most two tets"
+    assert sum(1 for v in counts.values() if v == 2) > 0

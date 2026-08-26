@@ -776,7 +776,38 @@ def _validate_conductor_edge_refinement(band_m, max_area_m2, base_area_m2):
     return float(band_m), float(max_area_m2)
 
 
+PRISM_SPLIT = "freudenthal-3-lexicographic"
+LEGACY_PRISM_SPLITS = ("freudenthal-3",)
+
+
 def _tetrahedralize(points_2d, triangles, z_levels, region_for_cell):
+    """Extrude the planar mesh and split each prism into three tetrahedra.
+
+    The split is conforming for *any* total order on the vertices, because two
+    prisms sharing a quad face derive its diagonal from the same pair. The order
+    used here is lexicographic **by coordinate**, not by index, and that choice
+    is the difference between a usable convergence ladder and a meaningless one.
+
+    Index order is not stable under refinement. Subdivision appends midpoints at
+    the end of the point list, so every midpoint outranks every original vertex:
+    for a parent edge A->B with A < B, the sub-quad over A-AB keeps the parent's
+    orientation while the sub-quad over AB-B flips it, because AB now outranks
+    B. The staircase alternates within every parent edge, and its character
+    changes from rung to rung.
+
+    That is not a small effect. Permuting the planar numbering alone -- same
+    coordinates, same triangles, same materials, same z levels, both meshes
+    conforming -- moved the canary trace from 146.0835 pF to 288.7963 and
+    275.7444 pF, a 49.42% spread, with 272 of 324 entries beyond the whole
+    acceptance band. Two independent nested ladders then oscillated in step
+    (+12.42% then -19.50% uniform, +13.02% then -17.96% graded), which is the
+    signature of an artefact tied to the subdivision level rather than to
+    resolution.
+
+    Coordinate order removes it by construction: a midpoint sorts *between* its
+    two endpoints, so every sub-edge inherits its parent's diagonal orientation
+    and the tetrahedralization becomes a function of the geometry alone.
+    """
     count = len(points_2d)
     coordinates = tuple(
         (point[0], point[1], z)
@@ -786,7 +817,7 @@ def _tetrahedralize(points_2d, triangles, z_levels, region_for_cell):
     for layer, (z_bottom, z_top) in enumerate(zip(z_levels, z_levels[1:])):
         z_mid = 0.5 * (z_bottom + z_top)
         for triangle in triangles:
-            ordered = tuple(sorted(triangle))
+            ordered = tuple(sorted(triangle, key=points_2d.__getitem__))
             centroid = tuple(
                 sum(points_2d[index][axis] for index in triangle) / 3.0
                 for axis in range(2)
@@ -1155,7 +1186,7 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                 math.sqrt(2.0 * max_planar_area_m2)
                 if max_planar_area_m2 is not None else None
             ),
-            "prism_split": "freudenthal-3",
+            "prism_split": PRISM_SPLIT,
             "threads": 1,
             "triangle_coordinate_system": "physical_noded_source_points",
             "msh_version": 2.2,
@@ -1715,7 +1746,8 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
             or parameters["backend"] != "meshpy-triangle-extrusion"
             or parameters["allow_boundary_steiner"] is not False
             or parameters["allow_volume_steiner"] is not False
-            or parameters["prism_split"] != "freudenthal-3"
+            or parameters["prism_split"] not in (
+                PRISM_SPLIT, *LEGACY_PRISM_SPLITS)
             or parameters["triangle_coordinate_system"] != (
                 "physical_noded_source_points"
             )
