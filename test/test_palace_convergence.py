@@ -273,3 +273,112 @@ def test_a_non_finite_delta_raises_rather_than_reading_as_in_band():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# -- entrywise matrix gate -------------------------------------------------
+
+
+from palace_convergence import check_matrix_convergence_ladder  # noqa: E402
+
+
+def _matrices(entries):
+    """entries: {(i, j): [value per rung]} -> one symmetric matrix per rung."""
+    size = 1 + max(max(pair) for pair in entries)
+    count = len(next(iter(entries.values())))
+    out = []
+    for index in range(count):
+        matrix = [[0.0] * size for _ in range(size)]
+        for (i, j), values in entries.items():
+            matrix[i][j] = matrix[j][i] = values[index]
+        out.append(matrix)
+    return out
+
+
+def _converging(limit, start, count):
+    return [limit + (start - limit) * 0.05 ** index for index in range(count)]
+
+
+def test_a_converged_matrix_passes():
+    entries = {
+        (0, 0): _converging(50e-12, 60e-12, 4),
+        (0, 1): _converging(-8e-12, -9e-12, 4),
+        (1, 1): _converging(50e-12, 60e-12, 4),
+    }
+    verdict = check_matrix_convergence_ladder(
+        _ladder([sum(v[i] for k, v in entries.items() if k[0] == k[1])
+                 for i in range(4)]), _matrices(entries))
+    assert verdict.state == "converged", verdict.reason
+    assert verdict.entry_count == 3
+
+
+def test_entries_cancelling_in_a_converged_trace_are_caught():
+    """The reason the gate must be entrywise: two couplings drifting in
+    opposite directions by 5% a rung leave the trace perfectly still."""
+    drift = [50e-12, 52.5e-12, 55e-12, 57.5e-12]
+    entries = {
+        (0, 0): drift,
+        (1, 1): [110e-12 - value for value in drift],
+        (0, 1): _converging(-8e-12, -9e-12, 4),
+    }
+    traces = [matrix[0][0] + matrix[1][1] for matrix in _matrices(entries)]
+    # The trace is constant to within round-off while each entry moves 5% a
+    # rung, so the trace gate passes it and sees nothing at all.
+    assert max(traces) - min(traces) < 1e-25
+    rungs = _ladder(traces)
+    assert check_convergence_ladder(rungs).state == "converged"
+
+    verdict = check_matrix_convergence_ladder(rungs, _matrices(entries))
+    assert verdict.state == "not_converged", verdict.reason
+    assert len(verdict.failed_entries) == 2
+
+
+def test_a_small_coupling_is_not_failed_merely_for_being_small():
+    """Sub-fF corrections are inside the absolute half of the band, so the
+    trend tests are suspended and a tiny noisy coupling still passes."""
+    entries = {
+        (0, 0): _converging(50e-12, 60e-12, 4),
+        (1, 1): _converging(50e-12, 60e-12, 4),
+        (0, 1): [-2e-15, -2.3e-15, -2.1e-15, -2.4e-15],
+    }
+    traces = [m[0][0] + m[1][1] for m in _matrices(entries)]
+    verdict = check_matrix_convergence_ladder(
+        _ladder(traces), _matrices(entries))
+    assert verdict.state == "converged", verdict.reason
+
+
+def test_a_mismatched_matrix_count_is_unevaluable():
+    rungs = _ladder(_geometric(120e-12, 100e-12, 0.05, 4))
+    entries = {(0, 0): _converging(50e-12, 60e-12, 4)}
+    verdict = check_matrix_convergence_ladder(rungs, _matrices(entries)[:2])
+    assert verdict.state == "unevaluable"
+
+
+def test_matrices_of_differing_shape_are_unevaluable():
+    rungs = _ladder(_geometric(120e-12, 100e-12, 0.05, 3))
+    matrices = [[[1e-12]], [[1e-12]], [[1e-12, 0.0], [0.0, 1e-12]]]
+    verdict = check_matrix_convergence_ladder(rungs, matrices)
+    assert verdict.state == "unevaluable"
+    assert "shape" in verdict.reason
+
+
+def test_empty_matrices_are_unevaluable_not_a_pass():
+    rungs = _ladder(_geometric(120e-12, 100e-12, 0.05, 3))
+    verdict = check_matrix_convergence_ladder(rungs, [[], [], []])
+    assert verdict.state == "unevaluable"
+
+
+def test_a_non_finite_entry_is_unevaluable():
+    rungs = _ladder(_geometric(120e-12, 100e-12, 0.05, 3))
+    matrices = _matrices({(0, 0): [1e-12, 1e-12, 1e-12]})
+    matrices[1][0][0] = float("nan")
+    verdict = check_matrix_convergence_ladder(rungs, matrices)
+    assert verdict.state == "unevaluable"
+
+
+def test_a_ladder_wide_precondition_failure_short_circuits():
+    rungs = _ladder(_geometric(120e-12, 100e-12, 0.05, 4))
+    rungs[2] = rungs[2]._replace(held={**HELD, "max_planar_area_m2": 5e-7})
+    entries = {(0, 0): _converging(50e-12, 60e-12, 4)}
+    verdict = check_matrix_convergence_ladder(rungs, _matrices(entries))
+    assert verdict.state == "unevaluable"
+    assert "max_planar_area_m2" in verdict.reason

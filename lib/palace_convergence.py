@@ -181,45 +181,150 @@ def check_convergence_ladder(rungs, noise_floor_f=None):
                     f"change at this base resolution can be attributed to "
                     f"refinement rather than to re-meshing"))
 
-    for index, (prev, nxt) in enumerate(zip(deltas, deltas[1:])):
-        # Both trend requirements are suspended once a correction is already
-        # inside the band: a settled sequence may jitter about its limit at
-        # that level without that being evidence against it.
-        if within_band(prev, traces[index + 1]):
-            continue
-        if (prev > 0.0) != (nxt > 0.0) and not within_band(
-                nxt, traces[index + 2]):
-            return verdict._replace(
-                state="not_converged",
-                reason=(
-                    f"the correction changed sign at rung "
-                    f"{solved[index + 2].label} "
-                    f"({prev * 1e15:+.2f} fF then {nxt * 1e15:+.2f} fF) while "
-                    f"still outside the band: the sequence is oscillating "
-                    f"about a centre, not approaching a limit from one side"))
-        if abs(nxt) > MAX_CONTRACTION_RATIO * abs(prev):
-            return verdict._replace(
-                state="not_converged",
-                reason=(
-                    f"the correction at rung {solved[index + 2].label} did not "
-                    f"contract ({prev * 1e15:+.2f} fF then {nxt * 1e15:+.2f} "
-                    f"fF, ratio {abs(nxt / prev):.3f} > "
-                    f"{MAX_CONTRACTION_RATIO}): refinement is not driving the "
-                    f"discretisation error out"))
-
-    if not within_band(finest_abs, traces[-1]):
-        return verdict._replace(
-            state="not_converged",
-            reason=(
-                f"the finest step of {abs(finest_abs) * 1e15:.2f} fF "
-                f"({abs(finest_rel) * 100:.2f}%) is outside the "
-                f"{REL_BAND * 100:.0f}% + {ABS_BAND_F * 1e15:.0f} fF band"))
+    problem = _judge_trend(traces, deltas, [rung.label for rung in solved])
+    if problem is not None:
+        return verdict._replace(state="not_converged", reason=problem)
     return verdict._replace(
         state="converged",
         reason=(
             f"the ladder contracts with consistent sign and its finest step "
             f"of {abs(finest_abs) * 1e15:.2f} fF "
             f"({abs(finest_rel) * 100:.2f}%) is inside the band"))
+
+
+def _judge_trend(values, deltas, labels):
+    """Why this coarse-to-fine sequence is not converging, or None.
+
+    Shared by the trace gate and the entrywise matrix gate so that both apply
+    exactly the same rule; an entry judged more leniently than the trace would
+    be a hole in the matrix gate.
+    """
+    for index, (prev, nxt) in enumerate(zip(deltas, deltas[1:])):
+        # Both trend requirements are suspended once a correction is already
+        # inside the band: a settled sequence may jitter about its limit at
+        # that level without that being evidence against it. This is also what
+        # keeps the entrywise gate usable, since a coupling whose corrections
+        # are all sub-fF is settled no matter which way they point.
+        if within_band(prev, values[index + 1]):
+            continue
+        if (prev > 0.0) != (nxt > 0.0) and not within_band(
+                nxt, values[index + 2]):
+            return (f"the correction changed sign at rung {labels[index + 2]} "
+                    f"({prev * 1e15:+.2f} fF then {nxt * 1e15:+.2f} fF) while "
+                    f"still outside the band: the sequence is oscillating "
+                    f"about a centre, not approaching a limit from one side")
+        if abs(nxt) > MAX_CONTRACTION_RATIO * abs(prev):
+            return (f"the correction at rung {labels[index + 2]} did not "
+                    f"contract ({prev * 1e15:+.2f} fF then {nxt * 1e15:+.2f} "
+                    f"fF, ratio {abs(nxt / prev):.3f} > "
+                    f"{MAX_CONTRACTION_RATIO}): refinement is not driving the "
+                    f"discretisation error out")
+    if not within_band(deltas[-1], values[-1]):
+        relative = (abs(deltas[-1] / values[-1]) * 100.0 if values[-1]
+                    else float("inf"))
+        return (f"the finest step of {abs(deltas[-1]) * 1e15:.2f} fF "
+                f"({relative:.2f}%) is outside the "
+                f"{REL_BAND * 100:.0f}% + {ABS_BAND_F * 1e15:.0f} fF band")
+    return None
+
+
+MatrixLadderVerdict = namedtuple(
+    "MatrixLadderVerdict",
+    "state reason entry_count failed_entries worst_entry trace")
+
+
+def check_matrix_convergence_ladder(rungs, matrices, noise_floor_f=None):
+    """Judge a ladder entry by entry, which is what the goal actually asks for.
+
+    The gate is specified over capacitance *matrices*, but every campaign
+    script applied it to the trace. A trace is a sum, and sums cancel: entries
+    can be moving in opposite directions by several percent each while their
+    total sits still. On Fugu that is 3403 independent couplings hiding behind
+    one number.
+
+    The absolute half of the band only makes sense here, too. One fF against a
+    100 pF trace is unreachable noise; against a fF-scale coupling it is the
+    whole tolerance, and it is what stops a small coupling failing merely for
+    being small.
+
+    `matrices` is one square matrix per rung, coarse to fine, aligned with
+    `rungs`. Only i <= j is judged: reciprocity is checked separately per rung,
+    and judging both triangles would double-report the same defect.
+    """
+    rungs = list(rungs)
+    matrices = list(matrices)
+    if len(matrices) != len(rungs):
+        return MatrixLadderVerdict(
+            "unevaluable", "a matrix was not supplied for every rung",
+            0, (), None, None)
+    trace = check_convergence_ladder(rungs, noise_floor_f=noise_floor_f)
+    if trace.state == "unevaluable":
+        # The shape, health and rung-count preconditions are ladder-wide, so
+        # there is nothing an entrywise pass could add here.
+        return MatrixLadderVerdict(
+            "unevaluable", trace.reason, 0, (), None, trace)
+
+    sizes = {len(matrix) for matrix in matrices}
+    if len(sizes) != 1 or any(
+            any(len(row) != len(matrix) for row in matrix)
+            for matrix in matrices):
+        return MatrixLadderVerdict(
+            "unevaluable",
+            f"rungs disagree on matrix shape {sorted(sizes)} or are not "
+            f"square: the entries cannot be put in correspondence",
+            0, (), None, trace)
+    size = sizes.pop()
+    if size == 0:
+        # No entries means nothing was judged, and nothing judged must not
+        # report as everything passing.
+        return MatrixLadderVerdict(
+            "unevaluable", "the matrices have no entries to judge",
+            0, (), None, trace)
+    if any(not math.isfinite(matrix[i][j])
+           for matrix in matrices for i in range(size) for j in range(size)):
+        return MatrixLadderVerdict(
+            "unevaluable", "a rung produced a non-finite matrix entry",
+            0, (), None, trace)
+
+    labels = [rung.label for rung in rungs]
+    failed = []
+    judged = []
+    for i in range(size):
+        for j in range(i, size):
+            values = [matrix[i][j] for matrix in matrices]
+            deltas = [fine - coarse for coarse, fine in zip(values, values[1:])]
+            problem = _judge_trend(values, deltas, labels)
+            relative = (abs(deltas[-1] / values[-1]) if values[-1]
+                        else math.inf)
+            judged.append(((i, j), relative, deltas[-1]))
+            if problem is not None:
+                failed.append(((i, j), problem))
+    # size >= 1 above, so there is always at least the (0, 0) entry here.
+    worst = max(judged, key=lambda item: item[1])
+
+    entries = size * (size + 1) // 2
+    if failed:
+        (i, j), problem = failed[0]
+        return MatrixLadderVerdict(
+            "not_converged",
+            f"{len(failed)} of {entries} entries have not converged; "
+            f"C[{i}][{j}]: {problem}",
+            entries, tuple(failed), worst, trace)
+    if trace.state != "converged":
+        # Belt and braces: every entry settled but the trace did not is a
+        # contradiction, and the honest answer is that something is wrong
+        # rather than a pass.
+        return MatrixLadderVerdict(
+            "not_converged",
+            f"every entry converged but the trace did not ({trace.reason}), "
+            f"which is contradictory; the ladder is not trustworthy",
+            entries, (), worst, trace)
+    return MatrixLadderVerdict(
+        "converged",
+        f"all {entries} entries converged; the worst finest step is "
+        f"{abs(worst[2]) * 1e15:.2f} fF ({worst[1] * 100:.2f}%) at "
+        f"C[{worst[0][0]}][{worst[0][1]}]",
+        entries, (), worst, trace)
 
 
 def _observed_order(solved, deltas):
