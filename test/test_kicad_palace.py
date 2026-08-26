@@ -9,6 +9,7 @@ import sys
 import pytest
 from shapely import union_all
 from shapely.geometry import LineString, Polygon
+from shapely.strtree import STRtree
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
@@ -1380,3 +1381,55 @@ def test_a_mesh_written_before_nesting_existed_still_validates(tmp_path):
     parameters["nesting_refinements"] = 2
     assert not _nesting_parameters_valid(parameters), (
         "a refined mesh must not claim intact PLC segments")
+
+
+def _cell_and_segment(depth_m):
+    """A triangle with a horizontal segment entering its interior by depth_m.
+
+    At depth 0 the segment lies exactly along the triangle's base, which is the
+    conforming case; a positive depth lifts it into the interior, which is the
+    material-assignment error the guard exists to catch.
+    """
+    cell = Polygon([(0.0, 0.0), (1e-3, 0.0), (0.0, 1e-3)])
+    segment = LineString([(0.0, depth_m), (5e-4, depth_m)])
+    return [cell], (segment,), STRtree((segment,))
+
+
+@pytest.mark.parametrize("depth_m", [1e-9, 1e-8, 5e-8, 1e-6, 1e-4])
+def test_a_real_boundary_crossing_is_caught_at_every_depth(depth_m):
+    """Known-bad calibration for the crossing tolerance, and its monotonicity.
+
+    The tolerance added for the 3.9e-17 m artefact must not become a mute
+    button. The shallowest depth here, 1e-9 m, is still fifty times *below* the
+    5e-8 m quantum the geometry is snapped to and eight orders above the ULP
+    bound -- so anything a real geometry can express is caught, and the verdict
+    does not flip back to clean as the crossing gets worse.
+    """
+    cells, lines, tree = _cell_and_segment(depth_m)
+    tolerance = palace_plc_mesh._crossing_tolerance_m(1e-3)
+    crossings = palace_plc_mesh._boundary_crossings(
+        cells, lines, tree, tolerance)
+    assert len(crossings) == 1
+    assert crossings[0][1] == pytest.approx(5e-4, rel=1e-6)
+
+
+def test_a_segment_lying_on_a_cell_edge_is_not_a_crossing():
+    cells, lines, tree = _cell_and_segment(0.0)
+    tolerance = palace_plc_mesh._crossing_tolerance_m(1e-3)
+    assert palace_plc_mesh._boundary_crossings(
+        cells, lines, tree, tolerance) == []
+
+
+def test_the_crossing_tolerance_stays_far_below_the_geometry_quantum():
+    """The bound must track the coordinate scale, not the geometry quantum.
+
+    5e-8 m is what the planar geometry is snapped to. A tolerance anywhere near
+    it would accept a conductor boundary genuinely cut by tens of nanometres.
+    At the canary's 0.167 m coordinates the bound is ~2e-16 m, which is what
+    admits the 3.9e-17 m artefact and nothing else.
+    """
+    assert palace_plc_mesh._crossing_tolerance_m(0.167) < 5e-8 / 1e6
+    assert palace_plc_mesh._crossing_tolerance_m(0.167) > 3.925e-17
+    # It scales with the coordinates rather than being a fixed epsilon.
+    assert (palace_plc_mesh._crossing_tolerance_m(1.0)
+            > palace_plc_mesh._crossing_tolerance_m(1e-3))

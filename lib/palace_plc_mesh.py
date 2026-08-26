@@ -192,6 +192,45 @@ def _resplit_conductor_segments(segments, boundary, maximum_length, quantum):
     return tuple(output)
 
 
+def _crossing_tolerance_m(coordinate_scale_m):
+    """How deep may a source segment enter a cell before it is a real crossing?
+
+    Shapely's `covers` is exact, so a segment lying *on* a triangle edge reads
+    as a crossing whenever the two representations differ in the last bit. On
+    the canary at refinement 3 that produced 2 flagged cells out of 17089, the
+    worst penetrating 3.9e-17 m -- about one ULP of a 0.167 m coordinate, and
+    nine orders of magnitude below the 5e-8 m quantum the geometry is snapped
+    to. Below this bound "crossing" is a statement about IEEE754, not the mesh.
+
+    The bound is ULP-scaled and *not* the geometry quantum on purpose. A
+    tolerance at the quantum would be a mute button: it would wave through a
+    conductor boundary genuinely cut by tens of nanometres, which is a real
+    material-assignment error rather than a rounding artefact.
+    """
+    return 8.0 * math.ulp(coordinate_scale_m)
+
+
+def _boundary_crossings(cells, source_lines, source_tree, tolerance_m):
+    """Cells whose interior a source boundary passes through.
+
+    Returns every crossing rather than raising at the first. One triangle's
+    coordinates cannot distinguish "the mesher ignored a constraint" from "one
+    sliver grazes a boundary", and that is the first question asked; the count
+    and the worst depth answer it. The happy path does the same work.
+    """
+    crossings = []
+    for index, polygon in enumerate(cells):
+        for line_index in source_tree.query(polygon):
+            intersection = polygon.intersection(source_lines[int(line_index)])
+            if intersection.is_empty or polygon.boundary.covers(intersection):
+                continue
+            depth = intersection.difference(polygon.boundary).length
+            if depth <= tolerance_m:
+                continue
+            crossings.append((index, depth, list(polygon.exterior.coords)))
+    return crossings
+
+
 _REFINE_OPTIONS = "razjpQ"
 
 
@@ -1209,15 +1248,24 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
             )
     source_lines = tuple(LineString(segment) for segment in source_segments)
     source_tree = STRtree(source_lines)
-    for index, polygon in enumerate(projected_cells):
-        for line_index in source_tree.query(polygon):
-            intersection = polygon.intersection(source_lines[int(line_index)])
-            if (not intersection.is_empty
-                    and not polygon.boundary.covers(intersection)):
-                raise ValueError(
-                    "Palace PLC tetrahedron crosses a noded source boundary: "
-                    f"triangle={index}, points={list(polygon.exterior.coords)}"
-                )
+    # Crossings are collected rather than raised on sight. One triangle and its
+    # coordinates say nothing about whether the mesher ignored a constraint or
+    # a single sliver grazes a boundary by a rounding error, and that is the
+    # first question anyone asks. The happy path does the same work either way.
+    crossing_tolerance_m = _crossing_tolerance_m(
+        max(abs(value) for value in (*outer.minimum[:2], *outer.maximum[:2])))
+    crossings = _boundary_crossings(
+        projected_cells, source_lines, source_tree, crossing_tolerance_m)
+    if crossings:
+        worst_depth_m = max(depth for _, depth, _ in crossings)
+        worst = max(crossings, key=lambda item: item[1])
+        raise ValueError(
+            "Palace PLC tetrahedron crosses a noded source boundary: "
+            f"crossings={len(crossings)} of {len(projected_cells)} cells, "
+            f"worst penetrates {worst_depth_m:.3e} m "
+            f"(tolerance {crossing_tolerance_m:.3e} m), "
+            f"triangle={worst[0]}, points={worst[2]}"
+        )
 
     conductor_polygons = tuple(_prism_polygon(item) for item in conductors)
     dielectric_polygons = tuple(_dielectric_polygon(item) for item in dielectrics)
