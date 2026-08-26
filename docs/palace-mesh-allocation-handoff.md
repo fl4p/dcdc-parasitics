@@ -1126,7 +1126,12 @@ conclusion. More tetrahedra is not the answer.
    that already exist. The constraint is memory: order 2 on 6.1M tets is roughly
    8× the degrees of freedom, so expect the ladder to have to start coarser.
    The p-ladder scripts under `out/` were written for this and are pinned to
-   refused v2 geometry — repoint them at v3 rather than writing new ones.
+   refused v2 geometry — repoint them at v3 rather than writing new ones. Each
+   pins it in exactly one line (`GEOMETRY = Path(...simple-hb-user-space-
+   geometry-v2)`), so the repoint is a one-line change per script, and
+   `simple-hb-p1-superlu-probe-v1`, `simple-hb-p3-v1` and
+   `simple-hb-p4-superlu-v1` already carry the SuperLU direct-solver settings
+   that high order needs.
 2. **Red–green local refinement.** Subdivide only inside the conductor edge
    band, where the singularity is, and bisect the neighbours to restore
    conformity. Keeps vertex nesting, and spends elements where the error lives
