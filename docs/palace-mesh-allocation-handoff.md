@@ -344,6 +344,58 @@ convergence-limiting one and it needs grading, not uniform refinement. The
 target is now quantitative: **element size approaching the 35 µm copper
 thickness near conductor edges, and only there.**
 
+### 0.11 Graded lateral refinement: 79× cheaper, still not converged
+
+Implemented as `conductor_edge_band_m` + `conductor_edge_max_planar_area_m2`
+(commit `86891c7`). Within the band of a conductor boundary, triangles are
+capped at the finer area through Triangle's `-u` callback, and conductor
+boundary *segments* are re-split at `sqrt(2 · edge area)` — not optional, since
+`allow_volume_steiner=False` forbids Triangle from splitting a segment, so the
+conductor polyline would otherwise keep the global spacing however small the cap.
+
+**Against the uniform lateral ladder, at matched cost:**
+
+| mesh | tets | trace pF |
+|---|---|---|
+| uniform 2.5e-7 | 3,806,928 | 125.3696 |
+| **graded** 1e-6 base, 200 µm band @ 1e-8 | **3,256,260** | **106.8595** |
+
+14% fewer elements, 18.5 pF further down a sequence that is monotone from above.
+Reaching 106.86 pF by uniform refinement would take ~2.6e8 tets — an **79×
+saving**, and confirmation that the error really is at the conductor edges.
+
+**The graded ladder** (base 1e-6, vstep 1e-4, band 200 µm, halving the cap):
+
+| edge area m² | edge length | tets | trace pF | Δrel | pos_off |
+|---|---|---|---|---|---|
+| 4.0e-8 | 283 µm | 1,591,332 | 122.4429 | — | 0 |
+| 2.0e-8 | 200 µm | 2,037,024 | 113.3958 | −7.98% | 0 |
+| 1.0e-8 | 141 µm | 3,256,260 | 106.8595 | −6.12% | 0 |
+| 5.0e-9 | 100 µm | 5,808,024 | 99.5917 | −7.30% | 0 |
+
+**NOT CONVERGED** at 7.30% / 7267.9 fF, and the sequence is erratic — ratios
+0.722 then **1.112**, so the differences are still *growing*. Aitken swings
+89.84 → 171.79 pF. We are still pre-asymptotic, which is consistent with the
+diagnosis: the finest edge element is 100 µm against a 35 µm copper thickness,
+so the singularity is not resolved yet.
+
+Two things confound this ladder and should be fixed before it is trusted:
+
+- The **band is fixed at 200 µm** while the cap shrinks, so it spans 0.71
+  element layers at the coarsest rung and 2.0 at the finest. The refined region
+  is not a fixed multiple of the local element size.
+- The **base area is fixed at 1e-6**, freezing the bulk error at a constant
+  offset while only the edge term moves.
+
+Matrix health stays perfect throughout: zero positive off-diagonals, reciprocity
+at 1e-23 F on all four rungs. Cost is comfortable — the finest is 5.8M tets,
+230 s, 14.2 GB.
+
+**Trend, not a value:** 122.44 → 113.40 → 106.86 → 99.59 pF is heading into the
+~87 pF region the uniform lateral ladder extrapolated to (§0.10.3), which is
+mild corroboration and nothing more. §4 still stands: **no trustworthy canary
+value.**
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
