@@ -949,6 +949,80 @@ exists no ladder on this mesher should be believed, including the ones already
 in this document. The permutation test is the way to take it: same geometry,
 same materials, different diagonals.
 
+### 0.17 The numbering sensitivity reaches answer-class meshes — and is now fixed
+
+§0.16 measured the vertex-numbering sensitivity on a deliberately absurd seed
+and said explicitly that the same measurement at the resolutions this project
+quotes was still owed. Taken now, on **v3e20** — 2.04 M tets, graded base
+1414 µm / edge 200 µm, one of the meshes this document has quoted numbers from:
+
+```
+v3e20     113.3958 pF     (natural ordering)
+v3e20p1   143.4699 pF
+v3e20p2   140.2250 pF
+trace spread 30074.02 fF = 20.96%
+entries beyond the 2% + 1 fF band: 128 of 171
+worst C[9][13]: 391.61 fF with 366.24 fF of spread (93.52%)
+```
+
+**113.3958 pF is a rung of §0.11's ladder.** Relabelling the vertices — same
+geometry, same materials, same z levels — moves it by 21%. Every capacitance in
+this document that came from an index-ordered mesh carries that uncertainty,
+and the ladders built from them were differencing rungs whose individual values
+were less certain than the differences being read.
+
+#### The cause, and why it is mechanical rather than statistical
+
+`_tetrahedralize` chose each prism's diagonal from `sorted(triangle)`, i.e. from
+**global vertex indices**. Subdivision appends midpoints at the end of the point
+list, so every midpoint outranks every original vertex. For a parent edge A→B
+with A < B, the sub-edge A–AB keeps the parent's orientation while AB–B flips,
+because AB now outranks B. Half the sub-edges invert on every rung, and which
+half is decided by the numbering rather than the geometry:
+
+```
+sub-edges inheriting their parent's diagonal
+  index order        18618 / 37236   (50.0%, exactly what the argument predicts)
+  coordinate order   37226 / 37236   (99.97%)
+```
+
+That is also why two independent nested ladders oscillated in step — same
+artefact, not a shared physical effect:
+
+```
+v3u   146.0835 -> 166.8052 (+12.42%) -> 139.5821 (-19.50%)   uniform
+v3g   140.2311 -> 161.2289 (+13.02%) -> 136.6850 (-17.96%)   graded
+```
+
+#### The fix, verified rather than argued
+
+Ordering the split by **coordinate** instead of index makes a midpoint sort
+between its own endpoints, so every sub-edge inherits its parent's diagonal and
+the tetrahedralization becomes a function of the geometry alone. Conformity is
+unaffected: it holds for any total order, because two prisms sharing a quad
+face derive its diagonal from the same pair.
+
+The verification is exact, not statistical. Two arbitrarily different index
+permutations of the same 2.04 M-tet geometry:
+
+```
+coordinate order   2037024 of 2037024 tets shared (100.0000%), set equality True
+index order         563640 of 2037024 tets shared (27.7%)
+```
+
+Under coordinate ordering there is no noise floor to measure, because there is
+nothing left to vary. `prism_split` in provenance becomes
+`freudenthal-3-lexicographic`; the old value is still accepted so existing
+meshes keep validating, but **a mesh recording `freudenthal-3` should be treated
+as carrying the §0.16 uncertainty**.
+
+#### What is still open
+
+This removes a mechanism that was demonstrably injecting 20–50% swings. It does
+not follow that the ladder now converges — that is being measured, and the
+answer is not in yet. Every ladder in this document predates the fix and should
+be re-run before any of its conclusions are relied on.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
