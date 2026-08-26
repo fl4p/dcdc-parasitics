@@ -701,22 +701,49 @@ def _refine_levels(levels, maximum_step, band=None, nested=False):
     # reports it -- so the comparison is made at the same relative tolerance
     # _coalesce_levels uses to decide that two levels are the same level.
     tolerance = max(1e-15, 1e-10 * abs(levels[-1] - levels[0]))
+    if band is not None and (band[1] <= levels[0] + tolerance
+                             or band[0] >= levels[-1] - tolerance):
+        # A band outside the model refines nothing at all, and returning the
+        # levels unchanged would report a refined mesh that was never refined.
+        raise ValueError(
+            f"vertical refinement band {band} does not overlap the model's "
+            f"z extent [{levels[0]}, {levels[-1]}], so it would refine nothing")
     refined = [levels[0]]
     for low, high in zip(levels, levels[1:]):
-        # A band confines subdivision to gaps overlapping it, so refining the
-        # board stackup does not also tile the surrounding air.
-        if band is not None and (high <= band[0] + tolerance
-                                 or low >= band[1] - tolerance):
-            refined.append(high)
+        # The band confines subdivision to *its own extent*, not to whole gaps
+        # that happen to touch it. Clipping matters because the base levels come
+        # from the stackup, so the gaps are enormous -- the canary's air gap runs
+        # 44 mm from the outer boundary to the board. Subdividing a whole gap for
+        # overlapping the band means any band narrower than a gap silently does
+        # nothing, which is what the earlier version did: a band of +/-20 mm on
+        # this geometry produced a mesh identical to no band at all, with no
+        # error, and graded vertical refinement was unreachable through the API.
+        start, stop = (low, high) if band is None else (
+            max(low, band[0]), min(high, band[1]))
+        # Snap back to the gap's own ends so an input level always survives
+        # refinement exactly, rather than being displaced by a band edge that
+        # sits a rounding error away from it.
+        if start - low <= tolerance:
+            start = low
+        if high - stop <= tolerance:
+            stop = high
+        if stop <= start + tolerance:
+            refined.append(high)          # gap lies wholly outside the band
             continue
-        count = _subdivision_count(high - low, maximum_step, nested)
-        refined.extend(low + (high - low) * index / count
-                       for index in range(1, count))
-        # Interpolating the last point rather than reusing `high` lands it up to
-        # an ulp past the gap it closes, which puts a spurious level just inside
-        # the neighbouring gap and breaks the invariant that every input level
-        # survives refinement exactly.
-        refined.append(high)
+        for begin, end, subdivide in ((low, start, False),
+                                      (start, stop, True),
+                                      (stop, high, False)):
+            if end <= begin + tolerance:
+                continue
+            if subdivide:
+                count = _subdivision_count(end - begin, maximum_step, nested)
+                refined.extend(begin + (end - begin) * index / count
+                               for index in range(1, count))
+            # Appending the endpoint rather than interpolating it: interpolation
+            # lands up to an ulp past the interval it closes, which puts a
+            # spurious level just inside the neighbouring one and breaks the
+            # invariant that every input level survives refinement exactly.
+            refined.append(end)
     return tuple(refined)
 
 

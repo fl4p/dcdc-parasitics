@@ -541,16 +541,69 @@ def test_the_in_band_overshoot_ceiling_is_far_above_what_meshing_needs():
     assert MAX_EDGE_AREA_OVERSHOOT >= 2.39 * 2
 
 
-def test_refine_levels_band_must_not_overhang_the_outermost_stackup_level():
-    # A band edge past the outermost stackup level makes the adjoining air gap
-    # overlap the band, so that whole gap is refined -- the caller must clamp
-    # the band to existing levels to get the intended saving.
+def test_refine_levels_band_refines_its_overhang_and_not_the_whole_gap():
+    # Superseded behaviour, and the reason this test changed: a band edge past
+    # the outermost stackup level used to make the *entire* adjoining air gap
+    # overlap the band, so all 44 mm of it were subdivided and the caller was
+    # told to clamp the band by hand. The band now clips to its own extent, so
+    # an overhang costs the overhang and nothing more.
     levels = (-0.045, -1e-3, 0.0, 0.045)
     clamped = _refine_levels(levels, 2.5e-4, (-1e-3, 0.0))
     overhanging = _refine_levels(levels, 2.5e-4, (-1.1e-3, 0.0))
     assert not [z for z in clamped if -0.045 < z < -1e-3]
-    assert [z for z in overhanging if -0.045 < z < -1e-3]
-    assert len(overhanging) > 10 * len(clamped)
+    inside = [z for z in overhanging if -0.045 < z < -1e-3]
+    assert inside, "the 0.1 mm of overhang is inside the band and must refine"
+    assert min(inside) >= -1.1e-3 - 1e-15, "nothing below the band edge refines"
+    assert len(overhanging) - len(clamped) <= 2
+
+
+def test_a_band_narrower_than_the_stackup_gaps_still_refines():
+    # The defect this replaces: the band was tested only against gaps it either
+    # contained or missed entirely, so nobody noticed that a band *inside* a gap
+    # subdivided the whole gap. On the canary that made every band narrower than
+    # 44 mm identical to no band at all -- silently, with no error, which is how
+    # it survived. Measured before the fix: a +/-20 mm band produced exactly the
+    # unbanded level set.
+    levels = (-0.0458, -0.0016, -0.00155, 0.0, 0.0442)
+    unbanded = _refine_levels(levels, 2.5e-3)
+    narrow = _refine_levels(levels, 2.5e-3, (-0.02, 0.02))
+    assert narrow != unbanded
+    assert len(narrow) < len(unbanded)
+    assert all(-0.02 - 1e-12 <= z <= 0.02 + 1e-12
+               for z in narrow if z not in levels)
+
+
+def test_the_band_edges_become_levels_and_bound_the_refinement():
+    levels = (-0.0458, 0.0, 0.0442)
+    band = (-0.02, 0.015)
+    refined = _refine_levels(levels, 2.5e-3, band)
+    assert any(abs(z - band[0]) < 1e-15 for z in refined)
+    assert any(abs(z - band[1]) < 1e-15 for z in refined)
+    outside = [z for z in refined if z < band[0] - 1e-12 or z > band[1] + 1e-12]
+    assert set(outside) <= set(levels)
+
+
+def test_narrowing_the_band_never_adds_levels():
+    levels = (-0.0458, -0.0016, -0.00155, 0.0, 0.0442)
+    widths = (0.04, 0.02, 0.01, 0.005, 0.002)
+    counts = [len(_refine_levels(levels, 1e-3, (-w, w))) for w in widths]
+    assert counts == sorted(counts, reverse=True), counts
+
+
+def test_a_band_outside_the_model_is_refused_rather_than_refining_nothing():
+    levels = (-0.0458, 0.0, 0.0442)
+    with pytest.raises(ValueError, match="does not overlap"):
+        _refine_levels(levels, 1e-3, (0.1, 0.2))
+    with pytest.raises(ValueError, match="does not overlap"):
+        _refine_levels(levels, 1e-3, (-0.3, -0.2))
+
+
+def test_every_input_level_survives_a_clipped_band_exactly():
+    levels = (-0.0458, -0.0016, -0.00155, 0.0, 0.0442)
+    for band in ((-0.02, 0.02), (-0.005, 0.005), (-0.0016, 0.0), (-0.05, 0.05)):
+        refined = _refine_levels(levels, 1e-3, band)
+        for level in levels:
+            assert level in refined, (band, level)
 
 
 @pytest.mark.parametrize("band", [
