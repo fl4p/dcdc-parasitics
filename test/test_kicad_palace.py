@@ -38,6 +38,7 @@ from palace_mesh import (  # noqa: E402
 )
 import palace_plc_mesh  # noqa: E402
 from palace_plc_mesh import (  # noqa: E402
+    _nesting_parameters_valid,
     MAX_EDGE_AREA_OVERSHOOT,
     _refine_levels,
     _subdivision_count,
@@ -1192,7 +1193,7 @@ def test_nesting_bisects_the_z_levels_too(tmp_path):
     assert levels(tmp_path / "z0.msh") <= levels(tmp_path / "z1.msh")
 
 
-@pytest.mark.parametrize("bad", [-1, True, 1.5, "1", None])
+@pytest.mark.parametrize("bad", [-1, True, 1.5, "1", [], 2.0])
 def test_a_bad_nesting_count_is_refused(tmp_path, bad):
     geometry = volumes_from_pcb_dump(
         _dump(), _stackup(), plating_thickness_m=25e-6)
@@ -1239,3 +1240,66 @@ def test_a_refinement_that_loses_a_parent_vertex_is_refused():
                 _Mesh([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]), 1, 1e-6, None, None)
     finally:
         palace_plc_mesh.meshpy_triangle.refine = original
+
+
+def test_none_and_zero_nesting_mean_different_things(tmp_path):
+    """None is "not a ladder rung": z gaps take the fewest pieces satisfying the
+    step, which is what every mesh written before nesting recorded. Zero is
+    "rung zero": no planar refinement yet, but the z levels already bisect so
+    rung 0 nests with rung 1. Collapsing the two would leave the coarsest rung
+    unnested in z against everything above it."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    common = _nesting_common(geometry)
+    generate_palace_plc_mesh(
+        tmp_path / "none.msh", nesting_refinements=None, **common)
+    generate_palace_plc_mesh(
+        tmp_path / "zero.msh", nesting_refinements=0, **common)
+    generate_palace_plc_mesh(
+        tmp_path / "one.msh", nesting_refinements=1, **common)
+
+    def levels(name):
+        out = set()
+        with open(tmp_path / name) as handle:
+            for line in handle:
+                if line.startswith("$Nodes"):
+                    break
+            for _ in range(int(next(handle))):
+                out.add(float(next(handle).split()[3]))
+        return out
+
+    # rung 0 nests into rung 1; the standalone mesh is not required to
+    assert levels("zero.msh") <= levels("one.msh")
+    parameters = json.loads(
+        (tmp_path / "none.msh.manifest.json").read_text()
+    )["provenance"]["mesh_parameters"]
+    assert parameters["nesting_refinements"] is None
+    assert parameters["plc_segments_intact"] is True
+
+
+def test_a_mesh_written_before_nesting_existed_still_validates(tmp_path):
+    """The nesting keys are optional, so the meshes already on disk are not
+    invalidated by adding them. Absence is a complete statement of an unnested
+    mesh; a half-present pair is not."""
+    geometry = volumes_from_pcb_dump(
+        _dump(), _stackup(), plating_thickness_m=25e-6)
+    result = generate_palace_plc_mesh(
+        tmp_path / "legacy.msh", **_nesting_common(geometry))
+    path = tmp_path / "legacy.msh.manifest.json"
+    manifest = json.loads(path.read_text())
+    parameters = manifest["provenance"]["mesh_parameters"]
+    del parameters["nesting_refinements"]
+    del parameters["plc_segments_intact"]
+    assert _nesting_parameters_valid(parameters)
+
+    parameters["nesting_refinements"] = 0
+    assert not _nesting_parameters_valid(parameters), (
+        "a refinement count without the segment statement must be refused")
+    parameters["plc_segments_intact"] = False
+    assert not _nesting_parameters_valid(parameters), (
+        "rung zero has not been refined, so its segments are intact")
+    parameters["plc_segments_intact"] = True
+    assert _nesting_parameters_valid(parameters)
+    parameters["nesting_refinements"] = 2
+    assert not _nesting_parameters_valid(parameters), (
+        "a refined mesh must not claim intact PLC segments")

@@ -248,10 +248,33 @@ def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
     return mesh
 
 
+def _nesting_parameters_valid(parameters):
+    """Are the nesting parameters absent together, or present and consistent?
+
+    They must move as a pair. A manifest carrying `nesting_refinements` without
+    `plc_segments_intact` would let a reader assume segments are intact on a
+    refined mesh, and one claiming intact segments at a positive refinement
+    count would assert something Triangle's -r mode does not provide.
+    """
+    refinements = parameters.get("nesting_refinements")
+    intact = parameters.get("plc_segments_intact")
+    if "nesting_refinements" not in parameters:
+        # Written before nesting existed; the pair is absent and that is a
+        # complete, unambiguous statement of an unnested mesh.
+        return "plc_segments_intact" not in parameters
+    if "plc_segments_intact" not in parameters:
+        return False
+    if refinements is not None and (
+            isinstance(refinements, bool) or not isinstance(refinements, int)
+            or refinements < 0):
+        return False
+    return intact is (not refinements)
+
+
 def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
                  conductor_edge_band_m=None,
                  conductor_edge_max_planar_area_m2=None,
-                 nesting_refinements=0):
+                 nesting_refinements=None):
     source_segment_max_length = (
         math.sqrt(2.0 * max_area_m2) if max_area_m2 is not None else None
     )
@@ -769,7 +792,7 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                              vertical_refinement_band_m=None,
                              conductor_edge_band_m=None,
                              conductor_edge_max_planar_area_m2=None,
-                             nesting_refinements=0,
+                             nesting_refinements=None,
                              source_identity=None):
     path = Path(path).resolve()
     outer_bounds = BoxBounds(outer_bounds.minimum, outer_bounds.maximum)
@@ -788,11 +811,19 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
                 and (isinstance(value, bool) or not isinstance(value, (int, float))
                      or not math.isfinite(value) or value <= 0.0)):
             raise ValueError(f"{label} must be null or finite and positive")
-    if (isinstance(nesting_refinements, bool)
+    # None and 0 are deliberately different. None means "not a ladder rung":
+    # z gaps are cut into the fewest pieces that satisfy the step, which is
+    # what a standalone mesh wants and what every existing mesh recorded. 0
+    # means "rung zero of a nested ladder": no planar refinement yet, but the
+    # z levels already bisect, so rung 0 and rung 1 share a level set. Making
+    # 0 mean None would leave the coarsest rung unnested in z against every
+    # rung above it -- exactly the 15-of-25 lost levels this is meant to fix.
+    if nesting_refinements is not None and (
+            isinstance(nesting_refinements, bool)
             or not isinstance(nesting_refinements, int)
             or nesting_refinements < 0):
         raise ValueError(
-            "nesting refinements must be a non-negative integer")
+            "nesting refinements must be null or a non-negative integer")
     if nesting_refinements and max_planar_area_m2 is None:
         # Refinement halves an area target; without one there is nothing to
         # halve, and silently meshing unrefined would make a ladder rung
@@ -829,7 +860,8 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
         *(value for item in conductors for value in (item.z_min, item.z_max)),
         *(value for item in dielectrics for value in _dielectric_z(item)),
     }, outer_bounds.lengths[2]), max_vertical_step_m,
-        vertical_refinement_band_m, nested=bool(nesting_refinements))
+        vertical_refinement_band_m,
+        nested=nesting_refinements is not None)
     planar_quantum = _planar_quantum(outer_bounds, source_identity)
     points_2d, triangles = _planar_mesh(
         outer_bounds, conductors, dielectrics, max_planar_area_m2, planar_quantum,
@@ -889,7 +921,7 @@ def generate_palace_plc_mesh(path, *, outer_bounds, conductors, dielectrics=(),
             # who needs intact segments must be told that separately rather
             # than inferring it from a flag that is no longer the whole
             # story.
-            "plc_segments_intact": nesting_refinements == 0,
+            "plc_segments_intact": not nesting_refinements,
             "vertical_refinement_band_m": (
                 list(vertical_refinement_band_m)
                 if vertical_refinement_band_m is not None else None
@@ -1017,8 +1049,10 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
         prep(_conductor_boundary(conductors).buffer(edge_band_m))
         if edge_band_m is not None else None
     )
+    # Absent means a mesh written before nesting existed, which is exactly
+    # the None case: equal-division levels.
     nesting_refinements = provenance["mesh_parameters"].get(
-        "nesting_refinements", 0)
+        "nesting_refinements")
     z_levels = np.asarray(_refine_levels(_coalesce_levels({
         *outer.minimum[2:3], *outer.maximum[2:3],
         *(value for item in conductors for value in (item.z_min, item.z_max)),
@@ -1029,7 +1063,7 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
         # A nested mesh bisects its z gaps, so revalidating it against
         # equal-division levels would reconstruct a level set the mesh never
         # had and reject a sound mesh.
-        nested=bool(nesting_refinements)))
+        nested=nesting_refinements is not None))
     node_level_indices = _nearest_level_indices(points[:, :, 2], z_levels)
     low_indices = node_level_indices.min(axis=1)
     high_indices = node_level_indices.max(axis=1)
@@ -1378,11 +1412,17 @@ def validate_palace_plc_mesh_manifest(path, *, mesh_path=None):
             )):
         raise ValueError("Palace PLC source reconstruction differs from mesh geometry")
     parameters = provenance.get("mesh_parameters")
-    if (not isinstance(parameters, dict) or set(parameters) != {
+    # The nesting keys are optional: a mesh written before nesting existed
+    # omits them, and their absence unambiguously means an unnested mesh.
+    # Everything else is still an exact set, so an unknown or missing
+    # parameter is still refused.
+    if (not isinstance(parameters, dict)
+            or not _nesting_parameters_valid(parameters)
+            or set(parameters) - {
+                "nesting_refinements", "plc_segments_intact"} != {
             "allow_boundary_steiner", "allow_volume_steiner", "backend",
             "conductor_edge_band_m", "conductor_edge_max_planar_area_m2",
             "max_planar_area_m2", "max_vertical_step_m", "msh_version",
-            "nesting_refinements", "plc_segments_intact",
             "noding_serialization_quantum_m", "planar_quantum_m", "prism_split",
             "source_segment_max_length_m", "threads",
             "triangle_coordinate_system", "vertical_refinement_band_m"}
