@@ -1220,104 +1220,87 @@ def test_nesting_without_a_planar_area_is_refused(tmp_path):
 def test_a_refinement_that_loses_a_parent_vertex_is_refused():
     """Known-bad calibration for the nesting guard: hand it a 'refinement' that
     drops a vertex and it must raise rather than return an unnested rung."""
-    class _Mesh:
-        def __init__(self, points):
-            self.points = points
-            self.elements = [(0, 1, 2)]
-            self.element_volumes = _Volumes()
-
-    class _Volumes:
-        def setup(self):
-            pass
-
-        def __setitem__(self, index, value):
-            pass
-
-    original = palace_plc_mesh._refine_segment_conforming
-    palace_plc_mesh._refine_segment_conforming = (
-        lambda mesh: _Mesh([(0.0, 0.0), (1.0, 0.0), (9.0, 9.0)]))
+    original = palace_plc_mesh._subdivide_uniformly
+    palace_plc_mesh._subdivide_uniformly = (
+        lambda points, triangles, refinements: (
+            ((0.0, 0.0), (1.0, 0.0), (9.0, 9.0)), triangles))
     try:
         with pytest.raises(ValueError, match="not nested in its parent"):
-            palace_plc_mesh._refine_nested(
-                _Mesh([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]), 1, 1e-6, None, None)
+            palace_plc_mesh._nested_refinement(
+                ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0)), ((0, 1, 2),), 1)
     finally:
-        palace_plc_mesh._refine_segment_conforming = original
+        palace_plc_mesh._subdivide_uniformly = original
 
 
-def test_meshpy_refine_drops_segments_and_the_conforming_refine_keeps_them():
-    """Known-bad calibration for the segment fix.
+def test_uniform_subdivision_is_exactly_nested_and_conforming():
+    """The two properties the ladder rests on, on a mesh with a shared edge.
 
-    The failure this pins is not hypothetical: it is what stopped the first
-    nested ladder, where 50 of 2533 conductor segments came back up to 95%
-    uncovered and the material assignment would have read the wrong side of a
-    conductor boundary. The cause is that `meshpy.triangle.refine` decides
-    whether to pass Triangle's `-p` by testing `input.faces`, the *output* edge
-    array, rather than `facets`, where the segments actually live -- so on a mesh
-    from `build()` the segments are never declared and -r never sees them.
-
-    Both halves are asserted. If a future MeshPy fixes its own option string,
-    the first assertion fails loudly rather than leaving a test that quietly
-    proves nothing.
+    Nesting is what buys Rayleigh-Ritz monotonicity and cancels re-meshing
+    noise on a difference. Conformity is what stops the shared edge acquiring a
+    hanging node -- both triangles must be handed the *same* midpoint vertex,
+    not two vertices that merely compare equal.
     """
-    points = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0),
-              (1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]
-    facets = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4)]
-    information = palace_plc_mesh.meshpy_triangle.MeshInfo()
-    information.set_points(points)
-    information.set_facets(facets)
-    parent = palace_plc_mesh.meshpy_triangle.build(
-        information, max_volume=0.5, quality_meshing=False,
-        allow_boundary_steiner=False, allow_volume_steiner=False)
-
-    def _uncovered(mesh):
-        """How many source segments are no longer covered by triangle edges?
-
-        Collinear subdivision is not a defect -- the material assignment accepts
-        a segment covered by pieces -- so coverage, not verbatim survival, is
-        the property that has to hold.
-        """
-        edges = []
-        for element in mesh.elements:
-            for start, end in ((element[0], element[1]), (element[1],
-                               element[2]), (element[2], element[0])):
-                edges.append(LineString(
-                    [tuple(mesh.points[start]), tuple(mesh.points[end])]))
-        covered = union_all(edges)
-        return sum(
-            1 for start, end in _segments
-            if not LineString([tuple(parent.points[start]),
-                               tuple(parent.points[end])]
-                              ).difference(covered).is_empty)
-
-    _segments = [tuple(facet) for facet in parent.facets]
-
-    def _seeded():
-        copy = palace_plc_mesh.meshpy_triangle.MeshInfo()
-        copy.set_points([tuple(point) for point in parent.points])
-        copy.elements.resize(len(parent.elements))
-        for index, element in enumerate(parent.elements):
-            copy.elements[index] = tuple(element)
-        copy.set_facets([tuple(facet) for facet in parent.facets])
-        copy.element_volumes.setup()
-        for index in range(len(copy.elements)):
-            copy.element_volumes[index] = 0.125
-        return copy
-
-    assert _uncovered(palace_plc_mesh.meshpy_triangle.refine(_seeded())) > 0
-    assert _uncovered(palace_plc_mesh._refine_segment_conforming(_seeded())) == 0
+    points = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    triangles = ((0, 1, 2), (0, 2, 3))
+    fine_points, fine_triangles = palace_plc_mesh._subdivide_uniformly(
+        points, triangles, 1)
+    assert set(points) <= set(fine_points)
+    assert len(fine_triangles) == 4 * len(triangles)
+    # 4 corners + 5 edge midpoints (the diagonal's midpoint is shared).
+    assert len(fine_points) == 9
+    assert len(set(fine_points)) == len(fine_points)
+    diagonal_midpoint = fine_points.index((0.5, 0.5))
+    # Three of each parent's four children touch the midpoint of a given
+    # parent edge, so the two parents sharing the diagonal contribute six.
+    # Seeing six rather than three is the point: both parents resolved the
+    # shared edge to the *same* vertex index, so there is no hanging node.
+    touching = [t for t in fine_triangles if diagonal_midpoint in t]
+    assert len(touching) == 6, "the shared edge midpoint must be one vertex"
 
 
-def test_the_conforming_refine_declares_the_segments_to_triangle():
-    """`p` is the whole fix, and it must not drift out of the option string.
+def test_uniform_subdivision_halves_the_element_size_each_rung():
+    points = ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))
+    triangles = ((0, 1, 2),)
 
-    `-Y` is deliberately absent: it would forbid Steiner points on segments and
-    so freeze the conductor polyline at the spacing rung zero happened to get,
-    while the interior kept refining.
+    def largest_area(pts, tris):
+        return max(
+            abs((pts[b][0] - pts[a][0]) * (pts[c][1] - pts[a][1])
+                - (pts[b][1] - pts[a][1]) * (pts[c][0] - pts[a][0])) / 2.0
+            for a, b, c in tris)
+
+    previous = largest_area(points, triangles)
+    for refinements in (1, 2, 3):
+        fine = palace_plc_mesh._subdivide_uniformly(
+            points, triangles, refinements)
+        assert largest_area(*fine) == pytest.approx(
+            previous / 4.0 ** (refinements - 1) / 4.0)
+    assert largest_area(*palace_plc_mesh._subdivide_uniformly(
+        points, triangles, 3)) == pytest.approx(0.5 / 64.0)
+
+
+def test_uniform_subdivision_keeps_every_parent_edge_covered():
+    """A source segment that was an edge must still be covered by edges.
+
+    This is the property Triangle's -r mode could not hold: with `p` it lost 2
+    of 2532 segments at refinement 5, and from a finer seed 23 by refinement 2,
+    rising to 108 by refinement 4 -- dropped outright, 25% to 100% of their
+    length left uncovered. Subdivision cannot lose one, because each edge
+    becomes two collinear halves of itself.
     """
-    assert "p" in palace_plc_mesh._REFINE_OPTIONS
-    assert "Y" not in palace_plc_mesh._REFINE_OPTIONS
-    assert "r" in palace_plc_mesh._REFINE_OPTIONS
-    assert "a" in palace_plc_mesh._REFINE_OPTIONS
+    points = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    triangles = ((0, 1, 2), (0, 2, 3))
+    parent_edges = [
+        LineString([points[a], points[b]])
+        for a, b, c in triangles for a, b in ((a, b), (b, c), (c, a))
+    ]
+    fine_points, fine_triangles = palace_plc_mesh._subdivide_uniformly(
+        points, triangles, 3)
+    fine_edges = union_all([
+        LineString([fine_points[a], fine_points[b]])
+        for a, b, c in fine_triangles for a, b in ((a, b), (b, c), (c, a))
+    ])
+    for edge in parent_edges:
+        assert edge.difference(fine_edges).length == 0.0
 
 
 def test_none_and_zero_nesting_mean_different_things(tmp_path):
@@ -1408,7 +1391,7 @@ def test_a_real_boundary_crossing_is_caught_at_every_depth(depth_m):
     cells, lines, tree = _cell_and_segment(depth_m)
     tolerance = palace_plc_mesh._crossing_tolerance_m(1e-3)
     crossings = palace_plc_mesh._boundary_crossings(
-        cells, lines, tree, tolerance)
+        cells, lines, tree, tolerance, 5e-8 / 1e4)
     assert len(crossings) == 1
     assert crossings[0][1] == pytest.approx(5e-4, rel=1e-6)
 
@@ -1417,7 +1400,7 @@ def test_a_segment_lying_on_a_cell_edge_is_not_a_crossing():
     cells, lines, tree = _cell_and_segment(0.0)
     tolerance = palace_plc_mesh._crossing_tolerance_m(1e-3)
     assert palace_plc_mesh._boundary_crossings(
-        cells, lines, tree, tolerance) == []
+        cells, lines, tree, tolerance, 5e-8 / 1e4) == []
 
 
 def test_the_crossing_tolerance_stays_far_below_the_geometry_quantum():

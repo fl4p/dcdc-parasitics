@@ -6,7 +6,6 @@ import math
 from pathlib import Path
 
 import meshpy
-import meshpy._internals as meshpy_internals
 import meshpy.triangle as meshpy_triangle
 import numpy as np
 from shapely import set_precision, union_all
@@ -210,64 +209,168 @@ def _crossing_tolerance_m(coordinate_scale_m):
     return 8.0 * math.ulp(coordinate_scale_m)
 
 
-def _boundary_crossings(cells, source_lines, source_tree, tolerance_m):
+def _coverage_grid_m(coordinate_scale_m, quantum_m):
+    """The grid used to re-decide "does this segment lie on this edge", or None.
+
+    A residue length cannot answer that question by itself. A segment lying
+    along an edge that is bent off it by one ULP shares only a measure-zero set
+    with it, so `difference` returns the whole segment -- indistinguishable, by
+    length, from a segment that was dropped outright. Snapping both sides to a
+    common grid makes them exactly collinear again. Measured on the canary after
+    one uniform subdivision: 689 segments report 100% uncovered while straying
+    at most 2.794e-17 m from the edges covering them, against 1.9e-3 m for
+    segments Triangle genuinely dropped.
+
+    The grid is relative to the coordinate magnitude because that is what sets
+    the rounding being absorbed, and it is rounded down to a power of ten. Both
+    of those are load-bearing and were measured, not assumed:
+
+    - It cannot sit near the ULP. On a 2e-3 m fixture a segment whose raw
+      residue is exactly 0.0 comes back 100% uncovered when snapped to
+      1.1e-16, and correct from 1e-15 up.
+    - It has to be a power of ten. GEOS snaps by scaling by 1/gridSize, so a
+      grid that is not exactly representable rounds inconsistently and pushes
+      collinear points off each other. On the canary the same comparison that
+      leaves 0 segments uncovered at 1e-13 leaves 160 at 2.05e-13 and 141 to
+      193 at every power of two from 2^-46 to 2^-36. The source coordinates are
+      themselves a decimal grid, which is the company this keeps.
+
+    Snapping is the fallback, never the primary test, for the first reason.
+
+    Returns None when no safe grid exists -- when it would approach the quantum
+    the source geometry itself is snapped to, and would start absorbing real
+    geometry rather than rounding. The caller then keeps the unsnapped verdict,
+    which fails closed.
+    """
+    grid = 10.0 ** math.floor(math.log10(coordinate_scale_m * 1e-12))
+    if grid >= quantum_m / 4.0:
+        return None
+    return grid
+
+
+def _boundary_crossings(cells, source_lines, source_tree, tolerance_m, grid_m):
     """Cells whose interior a source boundary passes through.
+
+    Two-stage on purpose. The exact test is cheap and clears the overwhelming
+    majority of cells, but it cannot be trusted on its own: a segment lying
+    *along* a cell edge shares only a measure-zero set with it once the two
+    representations differ in the last bit, so `covers` says no and the
+    "depth" comes back as the entire overlap. After one uniform subdivision
+    that mislabelled 1356 of 24824 cells, the worst reporting a 1.765e-3 m
+    penetration into a cell about 1e-3 m across -- an impossible depth, which
+    is what gives the artefact away.
+
+    Anything the exact test flags is therefore re-tested against both geometries
+    snapped to a grid, which makes an edge-lying segment exactly collinear
+    again. Real crossings survive snapping; the grid is four orders below the
+    quantum the geometry itself is snapped to.
 
     Returns every crossing rather than raising at the first. One triangle's
     coordinates cannot distinguish "the mesher ignored a constraint" from "one
     sliver grazes a boundary", and that is the first question asked; the count
-    and the worst depth answer it. The happy path does the same work.
+    and the worst depth answer it.
     """
     crossings = []
     for index, polygon in enumerate(cells):
+        snapped = None
         for line_index in source_tree.query(polygon):
-            intersection = polygon.intersection(source_lines[int(line_index)])
+            line = source_lines[int(line_index)]
+            intersection = polygon.intersection(line)
             if intersection.is_empty or polygon.boundary.covers(intersection):
                 continue
-            depth = intersection.difference(polygon.boundary).length
+            if grid_m is not None:
+                if snapped is None:
+                    snapped = set_precision(polygon, grid_m)
+                exact = set_precision(line, grid_m)
+                intersection = snapped.intersection(exact)
+                if (intersection.is_empty
+                        or snapped.boundary.covers(intersection)):
+                    continue
+                depth = intersection.difference(snapped.boundary).length
+            else:
+                depth = intersection.difference(polygon.boundary).length
             if depth <= tolerance_m:
                 continue
             crossings.append((index, depth, list(polygon.exterior.coords)))
     return crossings
 
 
-_REFINE_OPTIONS = "razjpQ"
+def _subdivide_uniformly(points, triangles, refinements):
+    """Split every triangle into four by its edge midpoints, `refinements` times.
 
+    This replaces Triangle's -r mode as the nesting mechanism, because -r cannot
+    be trusted to keep the PLC segments however it is invoked. Declaring them
+    with `p` (which `meshpy.triangle.refine` never does -- it gates the flag on
+    `faces`, the output edge array, while the segments live in `facets`) fixes
+    the shallow case and not the deep one. Measured, counting source segments no
+    longer covered by any triangle edge:
 
-def _refine_segment_conforming(mesh):
-    """Refine in -r mode with the PLC segments actually declared as segments.
+        seed 8e-6, rounds 0-4      0 uncovered        round 5    2 uncovered
+        seed 5e-8, rounds 0-1      0 uncovered        round 2   23 uncovered
+                                                      round 3   77 uncovered
+                                                      round 4  108 uncovered
 
-    `meshpy.triangle.refine()` builds its option string as "razj" and then adds
-    `p` only when `input.faces` is non-empty. `faces` is the *output* edge array,
-    not the segment list -- the segments live in `facets` -- so on a mesh that
-    came from `build()` the test is against the wrong array, `p` is never added,
-    and Triangle refines in -r mode without reading the segments at all. They are
-    not "destroyed" by refinement so much as never presented to it.
+    The lost segments are dropped from Triangle's own segment list, and it is
+    not the input's fault: of 2532 source segments exactly one pair meets
+    anywhere other than a shared endpoint, and that pair is a duplicate, so the
+    PSLG is valid. Neither dropping `j` nor adding `Y` changes the count, and
+    quality meshing makes it far worse (46 uncovered, 100%).
 
-    Measured on a square-in-a-square PLC, refining the same parent mesh under
-    each option string and asking what fraction of each source segment is still
-    covered by triangle edges:
+    Uniform subdivision has none of that surface because no mesher is involved:
 
-        razjQ    (what MeshPy sends)   4 of 8 segments 100% uncovered
-        razjpQ   (this)                0 of 8 uncovered, 0 parent vertices lost
+    - Every parent vertex is a child vertex, so the rungs are exactly nested and
+      Rayleigh-Ritz monotonicity is owed rather than hoped for.
+    - Every parent edge becomes two collinear halves, so a source segment that
+      was an edge stays covered by edges, by construction rather than by luck.
+    - The four children are similar to the parent, so shape quality is exactly
+      preserved and a graded seed keeps its grading.
+    - Element size halves exactly each rung, which is a cleaner ladder than
+      halving an area (a sqrt(2) step in length).
 
-    So the fix is `p`, not the `-Y` an earlier note here inferred. `-Y` is
-    deliberately *not* set: it forbids Steiner points on segments, which would
-    freeze the conductor polyline at the rung-0 spacing that
-    `_resplit_conductor_segments` computed while the interior kept refining --
-    reintroducing on every rung above zero exactly the under-resolved conductor
-    edge that function exists to prevent. Letting Triangle subdivide a segment is
-    harmless here because the material assignment accepts a segment covered by
-    collinear pieces; losing the segment is what breaks it.
+    The price is 4x the triangles per rung instead of 2x. For a convergence
+    ladder that is the right trade: an inexactly nested ladder measures
+    re-meshing noise, and on this model that noise moved 45 of 171 matrix
+    entries by more than the whole acceptance band.
+
+    Midpoints are keyed by the sorted index pair, so the two triangles sharing
+    an edge get the identical vertex and the result is conforming -- no hanging
+    nodes, nothing to reconcile.
     """
-    refined = meshpy_triangle.MeshInfo()
-    meshpy_internals.triangulate(
-        _REFINE_OPTIONS, mesh, refined, meshpy_triangle.MeshInfo(), None)
-    return refined
+    points = list(points)
+    index = {point: position for position, point in enumerate(points)}
+    for _ in range(refinements):
+        midpoints = {}
+
+        def midpoint(left, right):
+            key = (left, right) if left < right else (right, left)
+            found = midpoints.get(key)
+            if found is not None:
+                return found
+            start, end = points[key[0]], points[key[1]]
+            candidate = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+            found = index.get(candidate)
+            if found is None:
+                found = len(points)
+                index[candidate] = found
+                points.append(candidate)
+            midpoints[key] = found
+            return found
+
+        divided = []
+        for first, second, third in triangles:
+            left = midpoint(first, second)
+            right = midpoint(second, third)
+            base = midpoint(third, first)
+            divided.append((first, left, base))
+            divided.append((left, second, right))
+            divided.append((base, right, third))
+            divided.append((left, right, base))
+        triangles = divided
+    return tuple(points), tuple(triangles)
 
 
-def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
-    """Halve the area targets `refinements` times by refining in place.
+def _nested_refinement(points, triangles, refinements):
+    """Subdivide uniformly and verify the result really is nested.
 
     Calling build() again at a finer constraint returns an unrelated
     triangulation. That costs a convergence ladder both things it depends on:
@@ -277,62 +380,24 @@ def _refine_nested(mesh, refinements, base_area_m2, edge_area_m2, zone):
     by more than the whole acceptance band, the worst by 63.8%, while the trace
     moved 0.238% and hid it.
 
-    Triangle's -r mode refines the existing triangulation instead, keeping every
-    vertex. Two traps, both measured rather than assumed:
-
-    - MeshPy does not allocate the per-element area array that -r reads, so
-      `refine(mesh)` segfaults with no traceback until `element_volumes` is set
-      up. `refinement_func=` is accepted and still segfaults, which is why the
-      grading here is expressed as per-element targets rather than reusing the
-      callback the initial build uses.
-    - `meshpy.triangle.refine()` does not declare the PLC segments to Triangle,
-      so they are silently dropped and a conductor boundary stops being an edge
-      of the triangulation. On the canary that left 50 of 2533 segments up to
-      95% uncovered, which would break the point-in-polygon material assignment.
-      `_refine_segment_conforming` is used instead; the reasoning is there.
-
-    The vertex check below is necessary but not sufficient on its own -- every
-    vertex can survive while the segments they bound do not, which is precisely
-    what the second trap did. It is kept because it is cheap and catches a
-    different failure, and `_validate_plc_mesh_topology` covers the segments
-    downstream; both must hold.
-
-    (An earlier note here claimed the segment splits were harmless because total
-    segment length was unchanged to 8.7e-15. That measured the facet list's
-    internal consistency, not whether source segments survive as edges of the
-    triangulation, and it was the wrong measurement for the question.)
-
     Nesting is checked here rather than trusted, while the parent is still in
-    hand: a lost vertex means the rung is not nested and the ladder built on it
-    would be reading noise again.
+    hand. It is guaranteed by construction for uniform subdivision, so this
+    guard is aimed at a bug in that construction, not at the mesher -- and it is
+    deliberately not the only check: `_validate_plc_mesh_topology` still has to
+    find every source segment covered downstream, because a vertex check passes
+    cleanly on a refinement that kept every vertex and dropped every segment,
+    which is exactly what Triangle's -r mode did.
     """
-    for step in range(1, refinements + 1):
-        scale = 2.0 ** step
-        base_target = base_area_m2 / scale
-        edge_target = None if edge_area_m2 is None else edge_area_m2 / scale
-        parent = {tuple(float(value) for value in point)
-                  for point in mesh.points}
-        mesh.element_volumes.setup()
-        for index, element in enumerate(mesh.elements):
-            target = base_target
-            if edge_target is not None and zone is not None:
-                centroid = Point(
-                    sum(mesh.points[i][0] for i in element) / 3.0,
-                    sum(mesh.points[i][1] for i in element) / 3.0,
-                )
-                if zone.intersects(centroid):
-                    target = edge_target
-            mesh.element_volumes[index] = target
-        mesh = _refine_segment_conforming(mesh)
-        lost = parent - {tuple(float(value) for value in point)
-                         for point in mesh.points}
-        if lost:
-            raise ValueError(
-                f"Palace PLC nested refinement lost {len(lost)} of "
-                f"{len(parent)} parent vertices at refinement {step}: the rung "
-                f"is not nested in its parent, so a ladder over it would carry "
-                f"re-meshing noise it is meant to have removed")
-    return mesh
+    parent = set(points)
+    points, triangles = _subdivide_uniformly(points, triangles, refinements)
+    lost = parent - set(points)
+    if lost:
+        raise ValueError(
+            f"Palace PLC nested refinement lost {len(lost)} of {len(parent)} "
+            f"parent vertices: the rung is not nested in its parent, so a "
+            f"ladder over it would carry re-meshing noise it is meant to have "
+            f"removed")
+    return points, triangles
 
 
 def _nesting_parameters_valid(parameters):
@@ -422,10 +487,6 @@ def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
         allow_volume_steiner=False,
         refinement_func=refinement_func,
     )
-    if nesting_refinements:
-        mesh = _refine_nested(
-            mesh, nesting_refinements, max_area_m2,
-            conductor_edge_max_planar_area_m2, zone)
     canonical_ids = {}
     mesh_points = []
     remap = {}
@@ -447,6 +508,12 @@ def _planar_mesh(outer_bounds, conductors, dielectrics, max_area_m2, quantum,
     triangles = tuple(triangles)
     if not mesh_points or not triangles:
         raise RuntimeError("MeshPy produced an empty planar PLC")
+    # Subdivision runs on the canonicalised triangulation, after duplicate
+    # points have been merged, so a midpoint cannot land on a coordinate that
+    # exists under a second index and silently unweld two triangles.
+    if nesting_refinements:
+        mesh_points, triangles = _nested_refinement(
+            mesh_points, triangles, nesting_refinements)
     if max_area_m2 is not None:
         maximum_area = max(
             abs(
@@ -1228,6 +1295,9 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
         tuple(sorted((tuple(start), tuple(end))))
         for start, end in source_segments
     }
+    coordinate_scale_m = max(
+        abs(value) for value in (*outer.minimum[:2], *outer.maximum[:2]))
+    coverage_grid_m = _coverage_grid_m(coordinate_scale_m, planar_quantum)
     missing_edges = expected_edges - actual_edges
     if missing_edges:
         actual_lines = tuple(LineString(edge) for edge in actual_edges)
@@ -1238,13 +1308,54 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
             candidates = [
                 actual_lines[int(index)] for index in actual_tree.query(line)
             ]
-            if (not candidates
-                    or not line.difference(union_all(candidates)).is_empty):
-                uncovered.append(edge)
+            # Residue length alone cannot answer this. A source segment
+            # covered by mesh edges that are bent off it by a single ULP shares
+            # only a measure-zero set with the straight line, so `difference`
+            # returns *the whole segment* -- indistinguishable by length from a
+            # segment that was dropped outright. Measured on the canary after
+            # one uniform subdivision: 689 segments report 100% uncovered, and
+            # the furthest any of them strays from the edges covering it is
+            # 2.794e-17 m, one ULP of a 0.14 m coordinate. Segments Triangle
+            # genuinely dropped were 1.9e-3 m away, nine orders further out.
+            #
+            # So the question is how far the remainder actually lies from the
+            # edges, not how long it is.
+            if not candidates:
+                uncovered.append((line.length, line.length, edge))
+                continue
+            covering = union_all(candidates)
+            remainder = line.difference(covering)
+            if remainder.is_empty:
+                continue
+            # Only now is it worth snapping. The exact test is both cheaper and
+            # more trustworthy, and on a mesh whose edges happen to land exactly
+            # on the segments it answers every case on its own.
+            if coverage_grid_m is not None:
+                remainder = set_precision(line, coverage_grid_m).difference(
+                    set_precision(covering, coverage_grid_m))
+                if remainder.is_empty:
+                    continue
+            uncovered.append((remainder.length,
+                              remainder.length / line.length, edge))
         if uncovered:
+            worst = max(uncovered)
+            # How far the segment actually strays from the edges near it is the
+            # number that separates "dropped" from "covered but bent": the
+            # measured values are ~1e-17 m for rounding and ~1e-3 m for a
+            # segment Triangle genuinely lost. Computed once, for the worst
+            # offender only, on a path that is already failing.
+            line = LineString(worst[2])
+            near = [actual_lines[int(index)]
+                    for index in actual_tree.query(line)]
+            stray = (float("inf") if not near else max(
+                line.interpolate(step / 32.0, normalized=True).distance(
+                    union_all(near)) for step in range(33)))
             raise ValueError(
                 "Palace PLC mesh omits a noded source boundary segment: "
-                f"missing={len(uncovered)}, sample={uncovered[0]}"
+                f"missing={len(uncovered)} of {len(expected_edges)}, worst "
+                f"leaves {worst[0]:.3e} m uncovered ({worst[1] * 100.0:.2f}% "
+                f"of the segment) and strays {stray:.3e} m from the nearest "
+                f"edges, sample={worst[2]}"
             )
     source_lines = tuple(LineString(segment) for segment in source_segments)
     source_tree = STRtree(source_lines)
@@ -1252,10 +1363,10 @@ def _full_cell_materials(points, provenance, conductors, dielectrics):
     # coordinates say nothing about whether the mesher ignored a constraint or
     # a single sliver grazes a boundary by a rounding error, and that is the
     # first question anyone asks. The happy path does the same work either way.
-    crossing_tolerance_m = _crossing_tolerance_m(
-        max(abs(value) for value in (*outer.minimum[:2], *outer.maximum[:2])))
+    crossing_tolerance_m = _crossing_tolerance_m(coordinate_scale_m)
     crossings = _boundary_crossings(
-        projected_cells, source_lines, source_tree, crossing_tolerance_m)
+        projected_cells, source_lines, source_tree, crossing_tolerance_m,
+        coverage_grid_m)
     if crossings:
         worst_depth_m = max(depth for _, depth, _ in crossings)
         worst = max(crossings, key=lambda item: item[1])
