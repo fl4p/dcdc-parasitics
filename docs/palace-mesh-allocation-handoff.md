@@ -921,6 +921,20 @@ Checked rather than assumed, because a 49% spread invites disbelief:
   9.16% below 0.01), so this is **not** a quality artefact
 - different mesh SHA-1s in the two solve directories, so each solve really did
   read its own mesh
+- **both meshes are conforming**, which was asserted before it was checked:
+  identical face histograms, every interior face shared by exactly 2 tets,
+  58866 boundary faces in each (`{1: 58866, 2: 736779}` for both)
+- every written surface triangle is a genuine face of a tet in the same mesh
+  (0 orphans in all three), so the terminal surfaces Palace integrates over are
+  not broken by the relabelling
+
+The second graded ladder then reproduced the pattern independently — a
+different seed, different grading, same shape:
+
+```
+v3u0 -> v3u1   +12.42%   (uniform, base 4000 -> 2000 um)
+v3g0 -> v3g1   +13.02%   (graded, base 4000 um / edge 800 -> 400 um)
+```
 
 **Consequence.** At this resolution the answer is a function of the vertex
 numbering. The v3u ladder's 146 → 167 → 140 pF was not measuring refinement; a
