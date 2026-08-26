@@ -312,13 +312,20 @@ def _boundary_crossings(cells, source_lines, source_tree, tolerance_m, grid_m):
                 if snapped is None:
                     snapped = set_precision(polygon, grid_m)
                 exact = set_precision(line, grid_m)
-                intersection = snapped.intersection(exact)
-                if (intersection.is_empty
-                        or snapped.boundary.covers(intersection)):
+                reduced = snapped.intersection(exact)
+                if (reduced.is_empty
+                        or snapped.boundary.covers(reduced)):
                     continue
-                depth = intersection.difference(snapped.boundary).length
-            else:
-                depth = intersection.difference(polygon.boundary).length
+            inside = intersection.difference(polygon.boundary)
+            if inside.is_empty:
+                continue
+            # How far into the cell the segment actually reaches. The LENGTH of
+            # `inside` cannot answer that: a segment lying along a cell edge
+            # whose representation differs by one ULP produces an intersection
+            # as long as the edge, and `covers` rejects it -- which is how a
+            # 113 um "penetration" into a cell 266 um across was reported, and
+            # earlier a 1.765e-3 m one into a cell 1e-3 m across.
+            depth = _stray_distance_m(inside, polygon.boundary)
             if depth <= tolerance_m:
                 continue
             crossings.append((index, depth, list(polygon.exterior.coords)))

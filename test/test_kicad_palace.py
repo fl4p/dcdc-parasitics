@@ -1393,7 +1393,10 @@ def test_a_real_boundary_crossing_is_caught_at_every_depth(depth_m):
     crossings = palace_plc_mesh._boundary_crossings(
         cells, lines, tree, tolerance, 5e-8 / 1e4)
     assert len(crossings) == 1
-    assert crossings[0][1] == pytest.approx(5e-4, rel=1e-6)
+    # The recorded quantity is how deep the segment reaches into the cell, not
+    # how long the overlap is. Those differ by orders of magnitude and only the
+    # depth distinguishes a real crossing from a segment lying on an edge.
+    assert crossings[0][1] == pytest.approx(depth_m, rel=0.05)
 
 
 def test_a_segment_lying_on_a_cell_edge_is_not_a_crossing():
