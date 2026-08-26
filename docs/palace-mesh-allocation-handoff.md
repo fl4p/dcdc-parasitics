@@ -476,6 +476,74 @@ already converged" **stale** — it was measured when the lateral element was
 1.4 mm, so 94 µm vertical looked converged by comparison. Under test as `v3v50`
 / `v3v25` (vstep 5e-5, 2.5e-5, lateral held at `v3e05`).
 
+### 0.13 Re-meshing noise, and why the ladder design itself is wrong
+
+Three meshes at nominally identical resolution (base area perturbed ±1%, so the
+resolution is unchanged but Triangle returns a different triangulation):
+
+| tag | base m² | tets | trace pF |
+|---|---|---|---|
+| `v3n99` | 9.9e-7 | 5,800,470 | 99.7826 |
+| `v3e05` | 1.0e-6 | 5,808,024 | 99.5917 |
+| `v3n101` | 1.01e-6 | 5,797,908 | 99.5455 |
+
+**Trace spread: 237 fF, 0.238%** — well inside the band. On that number alone
+the ladder is readable and the §0.12 stall is real signal, not luck.
+
+**Entry by entry it is not.** 45 of the 171 entries move more than the entire
+2% + 1 fF band under nothing but regeneration:
+
+```
+  i   j      |C| fF   spread fF   spread %
+  0   6       99.72       63.59      63.77
+  0  12       69.13       34.85      50.41
+  4  12        4.86        1.89      38.79
+  4  11        4.62        1.74      37.69
+  4   6        5.82        2.13      36.65
+```
+
+The trace hid this for exactly the reason it hides cancelling drift (§ the
+entrywise gate): it is a sum, and the re-meshing errors in it cancel. This is a
+lower bound — segment splitting is deterministic at fixed edge area, so
+perturbing the base understates how much the edge zone can move.
+
+Run against the fixed-band ladder with these floors, the canary is
+**UNEVALUABLE, not NOT_CONVERGED**:
+
+```
+45 of 171 entries move more than the 2% + 1 fF band when the mesh is merely
+regenerated at the same resolution, worst C[6][6] at 152.53 fF; no amount of
+refinement can demonstrate convergence against that
+```
+
+That is the more accurate verdict and it is worse news than non-convergence,
+because it is not fixable by refining harder.
+
+#### 0.13.1 The consequence: rungs must be nested
+
+Every ladder run so far — z, lateral, joint, graded, scaled — built each rung as
+an **independent mesh**. That is the defect. Two consequences follow, and both
+are structural rather than tuning problems:
+
+1. **Rayleigh–Ritz does not apply.** The monotone-from-above guarantee holds for
+   *nested* function spaces. Independent triangulations are not nested, so
+   monotonicity was never owed to us, and §0.10.3's reading of monotone decrease
+   as evidence of approach was reading a coincidence.
+2. **Re-meshing noise never cancels.** Each rung carries an independent
+   O(60%)-per-entry perturbation. Differencing two rungs adds their noise
+   instead of removing it.
+
+Under nested refinement both problems vanish by construction: the coarse space
+is a subspace of the fine one, energy decreases monotonically, and the shared
+node positions mean the entry-level noise is common-mode rather than
+independent.
+
+This is a mesher feature that does not exist yet. `_planar_mesh` calls Triangle
+fresh each time; nesting needs Triangle's refine mode over the previous
+triangulation (MeshPy exposes `triangle.refine`), and a z-level set built by
+bisecting the previous one so the coarse levels remain a subset. **No canary
+number should be quoted as converged until the ladder is nested.**
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
