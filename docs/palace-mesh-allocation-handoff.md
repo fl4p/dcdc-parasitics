@@ -767,8 +767,9 @@ nesting.
 **What builds the ladder instead: uniform 1-to-4 subdivision.** No mesher is
 involved, so none of that surface exists.
 
-- Every parent vertex is a child vertex → the rungs are exactly nested, and
-  Rayleigh–Ritz monotonicity is owed rather than hoped for.
+- Every parent vertex is a child vertex and every parent triangle is the union
+  of four children → the planar mesh is exactly nested, so a rung is a
+  deterministic refinement of its parent rather than an unrelated triangulation.
 - Every parent edge becomes two collinear halves → a source segment that was an
   edge stays covered by edges, by construction.
 - The four children are similar to the parent → shape quality is exactly
@@ -792,6 +793,57 @@ pure lateral ladder with the vertical axis held.
 The price is 4× the triangles per rung rather than 2×. That is the right trade:
 an inexactly nested ladder measures re-meshing noise, and on this model that
 noise moved 45 of 171 matrix entries by more than the whole acceptance band.
+
+#### 0.15.2 CORRECTION — the 3D spaces are not nested, so monotonicity is not owed
+
+The bullet above originally read "the rungs are exactly nested, and
+Rayleigh–Ritz monotonicity is owed rather than hoped for". **The nesting claim
+is 2D and the FEM is 3D.**
+
+`_tetrahedralize` splits each prism by the ordering of its triangle's *global*
+vertex indices, which subdivision renumbers — but the mismatch is structural,
+not a consequence of that rule. A corner sub-prism has positive area on both the
+top and bottom planes, while each of the parent prism's three tets degenerates
+to a point or an edge on one of them, so **no parent tet is a union of child
+tets under any diagonal convention**. Measured on one prism:
+
+```
+parent tets 3, child tets 12
+child tets straddling more than one parent tet: 11 of 12
+```
+
+So the parent P1 space is not a subspace of the child P1 space, the energy is
+not obliged to decrease, and **a rung that moves the trace upward is not by
+itself evidence of a defect**. This matters immediately: the first uniform
+ladder did exactly that.
+
+```
+rung   elem_um       tets   trace_pF   d_abs_fF    d_rel
+v3u0   4000.00     383106   146.0835          -        -
+v3u1   2000.00    1532424   166.8052   20721.70   +12.42%
+```
+
+Two things are worth separating here. The +12.42% is *permitted* by the above —
+it is not proof of a broken mesh. But it is also not a usable ladder: a 4 mm
+element on a 45 mm board is far outside the asymptotic range, and the sign of a
+correction there carries no information either way. The seed was simply too
+coarse, which §0.15.3 addresses.
+
+What nesting still buys, and the reason to keep it, is the removal of the
+**re-meshing perturbation** — the thing actually measured hurting the ladder
+(45 of 171 entries beyond the band). It does not buy monotonicity, and this
+document should not have said it did.
+
+One residual worth flagging rather than assuming away: because the prism
+diagonals are re-chosen at every rung, some *re-tetrahedralization* difference
+survives between rungs. It is far more local than a full re-mesh — the vertices
+and the planar triangulation are identical — but it has not been measured. The
+honest statement is that the noise floor on a nested ladder is **unmeasured, not
+zero**; §0.13.3's caveat still stands in a narrower form.
+
+Regression check on the mechanism, which is sound: `v3nest0` (built before any
+of this work) and `v3u0` (built after) are the same mesh and give a bit-identical
+trace of 146.0835 pF.
 
 #### 0.15.1 Three topology guards were measuring length where they meant distance
 

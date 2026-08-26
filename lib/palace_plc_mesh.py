@@ -323,14 +323,33 @@ def _subdivide_uniformly(points, triangles, refinements):
 
     Uniform subdivision has none of that surface because no mesher is involved:
 
-    - Every parent vertex is a child vertex, so the rungs are exactly nested and
-      Rayleigh-Ritz monotonicity is owed rather than hoped for.
+    - Every parent vertex is a child vertex, and every parent triangle is the
+      union of four child triangles, so the planar mesh is exactly nested and
+      the rung is a deterministic refinement of its parent rather than an
+      unrelated triangulation of the same region.
     - Every parent edge becomes two collinear halves, so a source segment that
       was an edge stays covered by edges, by construction rather than by luck.
     - The four children are similar to the parent, so shape quality is exactly
       preserved and a graded seed keeps its grading.
     - Element size halves exactly each rung, which is a cleaner ladder than
       halving an area (a sqrt(2) step in length).
+
+    What this does **not** buy is Rayleigh-Ritz monotonicity, and an earlier
+    version of this docstring claimed it did. That claim was 2D and the FEM is
+    3D. `_tetrahedralize` splits each prism by the ordering of its triangle's
+    *global* vertex indices, which subdivision renumbers, so the child diagonals
+    are chosen independently of the parent's -- and the mismatch is structural
+    rather than a consequence of that rule. A corner sub-prism has positive area
+    on both the top and bottom planes, while each of the parent's three tets
+    degenerates to a point or an edge on one of them, so no parent tet can be a
+    union of child tets under any diagonal convention. Measured on one prism:
+    11 of 12 child tets straddle more than one parent tet.
+
+    The consequence is that the parent P1 space is not a subspace of the child
+    P1 space, the energy is not obliged to decrease, and a rung that moves the
+    trace *upward* is not by itself evidence of a defect. What the nesting does
+    remove is the re-meshing perturbation, which is what was actually measured
+    hurting the ladder.
 
     The price is 4x the triangles per rung instead of 2x. For a convergence
     ladder that is the right trade: an inexactly nested ladder measures
@@ -378,12 +397,12 @@ def _nested_refinement(points, triangles, refinements):
     """Subdivide uniformly and verify the result really is nested.
 
     Calling build() again at a finer constraint returns an unrelated
-    triangulation. That costs a convergence ladder both things it depends on:
-    Rayleigh-Ritz monotonicity is owed only to nested spaces, and the re-meshing
-    perturbation adds on every difference instead of cancelling. Measured on the
-    canary, regenerating at the same resolution moved 45 of 171 matrix entries
-    by more than the whole acceptance band, the worst by 63.8%, while the trace
-    moved 0.238% and hid it.
+    triangulation, so the re-meshing perturbation adds on every difference
+    instead of cancelling. Measured on the canary, regenerating at the same
+    resolution moved 45 of 171 matrix entries by more than the whole acceptance
+    band, the worst by 63.8%, while the trace moved 0.238% and hid it. That is
+    what nesting removes -- not monotonicity, which the extruded prism split
+    cannot deliver whatever the planar mesh does; see `_subdivide_uniformly`.
 
     Nesting is checked here rather than trusted, while the parent is still in
     hand. It is guaranteed by construction for uniform subdivision, so this
