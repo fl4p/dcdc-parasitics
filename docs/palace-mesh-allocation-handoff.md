@@ -1059,6 +1059,36 @@ three more halvings — 24M, 98M, 392M tets uniformly, which is not reachable.
 Only graded refinement can get there, which is what the conductor edge band
 exists for, and a graded ladder under the fixed ordering is the next measurement.
 
+#### Reproduced on a second, independent mesh family
+
+The graded ladder was rebuilt under the fixed ordering, same A/B:
+
+```
+index order (v3g)                          coordinate order (v3gl)
+140.2311                                   179.1552
+161.2289  +13.02%                          136.7797  -30.98%
+136.6850  -17.96%                          115.8193  -18.10%
+contraction 1.169, order -0.23, sign flip  contraction 0.495, order 1.02, monotone
+```
+
+Side by side with the uniform ladder:
+
+```
+                 rung 0     rung 1     rung 2   contraction  order  finest step
+v3l  (uniform)  175.6309   130.8634   109.5380     0.476     1.07     19.47%
+v3gl (graded)   179.1552   136.7797   115.8193     0.495     1.02     18.10%
+```
+
+Two mesh families, different seeds, different grading, both contracting at
+essentially ½ with an observed order of 1.0. That is first-order convergence
+reproduced rather than asserted, and it is the strongest evidence so far that
+this model can be converged at all.
+
+It is also why neither Aitken figure should be quoted: they are 90.14 pF and
+95.30 pF, 5.7% apart. Two ladders that agree on their *rate* to within 4% still
+disagree on their *limit* by 5.7%, because both are extrapolating from ~18%
+outside the band. The gate calls them meaningless and the gate is right.
+
 One more thing this pins down. v3u0 and v3l0 are the *same geometry at the same
 resolution*, differing only in diagonal choice, and their quality distributions
 are indistinguishable (p50 0.10654 vs 0.10653; 9.15% vs 9.18% of tets below
