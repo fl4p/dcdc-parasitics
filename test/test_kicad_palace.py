@@ -39,6 +39,7 @@ from palace_mesh import (  # noqa: E402
 from palace_plc_mesh import (  # noqa: E402
     MAX_EDGE_AREA_OVERSHOOT,
     _refine_levels,
+    _subdivision_count,
     _validate_conductor_edge_refinement,
     generate_palace_plc_mesh,
     validate_palace_plc_mesh_manifest,
@@ -203,6 +204,76 @@ def test_refine_levels_band_refines_stackup_and_leaves_air_gaps():
     assert set(levels).issubset(set(refined))
     # Same step without a band spends its budget on the 90 mm of air instead.
     assert len(refined) < len(_refine_levels(levels, 2.5e-4))
+
+
+# The canary's real stackup, so the nesting tests below are about the geometry
+# the project actually meshes rather than a convenient one.
+CANARY_LEVELS = (-0.04585, -0.0016, -0.00159, -0.0015725, -0.001555,
+                 -0.000045, -0.00001, 0.0, 0.04425)
+CANARY_BAND = (-0.0016, 0.0)
+
+
+def test_equal_division_does_not_nest_between_rungs():
+    """Why bisection is needed at all. ceil(gap / step) is the fewest pieces
+    that satisfy the step, but halving the step then reshuffles the interior
+    levels instead of adding to them, and the coarse set stops being a subset.
+    Fifteen of twenty-five is what two real canary meshes showed."""
+    coarse = _refine_levels(CANARY_LEVELS, 1e-4, CANARY_BAND)
+    fine = _refine_levels(CANARY_LEVELS, 5e-5, CANARY_BAND)
+    lost = set(coarse) - set(fine)
+    assert len(coarse) == 24 and len(fine) == 39
+    assert len(lost) == 15
+
+
+@pytest.mark.parametrize("step", [4e-4, 2e-4, 1e-4, 5e-5, 2.5e-5, 1.25e-5])
+def test_bisected_levels_nest_exactly_when_the_step_halves(step):
+    """Rounding the piece count up to a power of two makes halving the step
+    double it, and equal division into 2n pieces contains every division point
+    of n. The coarse levels survive bit-for-bit, not merely to a tolerance."""
+    coarse = _refine_levels(CANARY_LEVELS, step, CANARY_BAND, nested=True)
+    fine = _refine_levels(CANARY_LEVELS, step / 2.0, CANARY_BAND, nested=True)
+    assert set(coarse) <= set(fine), sorted(set(coarse) - set(fine))
+
+
+def test_bisected_levels_still_satisfy_the_step():
+    refined = _refine_levels(CANARY_LEVELS, 1e-4, CANARY_BAND, nested=True)
+    inside = [z for z in refined if CANARY_BAND[0] <= z <= CANARY_BAND[1]]
+    gaps = [b - a for a, b in zip(inside, inside[1:])]
+    assert gaps and max(gaps) <= 1e-4 * (1.0 + 1e-12)
+
+
+def test_nesting_costs_at_most_a_doubling_of_pieces():
+    """The price of nesting is bounded: a power-of-two count is never more than
+    twice the minimum, so the level set cannot blow up."""
+    for step in (4e-4, 2e-4, 1e-4, 5e-5, 2.5e-5):
+        plain = _refine_levels(CANARY_LEVELS, step, CANARY_BAND)
+        nested = _refine_levels(CANARY_LEVELS, step, CANARY_BAND, nested=True)
+        assert len(nested) <= 2 * len(plain)
+
+
+@pytest.mark.parametrize("gap,step,expected", [
+    (1.0, 1.0, 1), (1.0, 0.6, 2), (1.0, 0.5, 2), (1.0, 0.4, 4),
+    (1.0, 0.26, 4), (1.0, 0.25, 4), (1.0, 0.24, 8), (1.0, 0.125, 8),
+])
+def test_subdivision_count_rounds_up_to_a_power_of_two_when_nested(
+        gap, step, expected):
+    assert _subdivision_count(gap, step, True) == expected
+    assert _subdivision_count(gap, step, False) == math.ceil(gap / step)
+
+
+def test_subdivision_count_never_returns_zero_pieces():
+    """A gap smaller than the step still needs one piece; zero would drop the
+    gap entirely."""
+    assert _subdivision_count(1e-9, 1.0, True) == 1
+    assert _subdivision_count(1e-9, 1.0, False) == 1
+    assert _subdivision_count(0.0, 1.0, True) == 1
+
+
+def test_nested_refinement_is_off_by_default():
+    """Existing meshes must be reproduced bit-for-bit, so the flag defaults to
+    the old behaviour and both spellings agree."""
+    assert (_refine_levels(CANARY_LEVELS, 5e-5, CANARY_BAND)
+            == _refine_levels(CANARY_LEVELS, 5e-5, CANARY_BAND, nested=False))
 
 
 def test_refine_levels_band_edge_tolerates_float_error_in_the_stackup_level():

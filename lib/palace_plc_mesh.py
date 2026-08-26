@@ -357,7 +357,32 @@ def _coalesce_levels(values, span):
     return tuple(sum(group) / len(group) for group in groups)
 
 
-def _refine_levels(levels, maximum_step, band=None):
+def _subdivision_count(gap, maximum_step, nested):
+    """How many equal pieces a gap is cut into.
+
+    `ceil(gap / step)` is the fewest pieces that satisfy the step, and it is
+    what a single mesh wants. It is the wrong answer for a *ladder*: halving the
+    step takes a 1.51 mm core from 16 pieces to 31, and equal division at 16 and
+    at 31 share almost no interior level, so the coarse level set is not a
+    subset of the fine one. Measured between two real rungs, 15 of 25 coarse
+    z-levels were absent from the fine mesh.
+
+    Rounding up to a power of two instead makes halving the step double the
+    count exactly, and equal division into 2n pieces contains every division
+    point of n pieces. The coarse levels then survive bit-for-bit -- index 2k of
+    2n and index k of n are the same IEEE754 quotient, because scaling a
+    correctly-rounded division by an exact power of two changes nothing.
+
+    The cost is up to 2x more levels than the step strictly requires, which is
+    the price of a ladder whose rungs are nested.
+    """
+    count = max(1, math.ceil(gap / maximum_step))
+    if not nested:
+        return count
+    return 2 ** (count - 1).bit_length()
+
+
+def _refine_levels(levels, maximum_step, band=None, nested=False):
     if maximum_step is None:
         return levels
     # The band edges are supplied as round numbers while the levels are derived
@@ -377,7 +402,7 @@ def _refine_levels(levels, maximum_step, band=None):
                                  or low >= band[1] - tolerance):
             refined.append(high)
             continue
-        count = max(1, math.ceil((high - low) / maximum_step))
+        count = _subdivision_count(high - low, maximum_step, nested)
         refined.extend(low + (high - low) * index / count
                        for index in range(1, count))
         # Interpolating the last point rather than reusing `high` lands it up to
