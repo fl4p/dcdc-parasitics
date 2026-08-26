@@ -1150,11 +1150,26 @@ conclusion. More tetrahedra is not the answer.
    SuperLU       53 s   completed, no failures, 8.4 GB
    ```
 
-   So the route is open, and the earlier note here calling it closed was wrong
-   — it generalised from the iterative solver to the method. What is not yet
-   known is how the direct solve scales: 8.4 GB at 383k tets against 36 GB of
-   machine, so the ladder may only reach two or three rungs before it does not
-   fit. Measure rung 1 before planning around it.
+   The route is open *as a solve*, and the earlier note here calling it closed
+   was wrong — it generalised from the iterative solver to the method. But the
+   scaling closes it again, and this time measured rather than inferred:
+
+   ```
+   order 2, SuperLU    383k tets     53 s   8.4 GB   completed
+                      1.53M tets  >1800 s            killed, exit -9
+   ```
+
+   A 4× mesh makes the direct solve **more than 34× slower** and it does not
+   finish inside the 1800 s wall. So order 2 is affordable at roughly 400k tets
+   and not at 1.5M, which is a one-rung window — and a ladder needs three.
+
+   **This does not close p-refinement, it relocates it.** A three-rung *p*=2
+   ladder would sit at roughly 24k / 96k / 383k tets, all of which are
+   affordable. Whether that is useful is an open and cheap question: p=2 on the
+   coarsest mesh already moved the trace from 175.63 pF to 57.35 pF, so a p=2
+   ladder over coarse meshes may converge where p=1 over fine ones does not.
+   The meshes do not exist yet — it needs a seed about 16× coarser than `v3l0`.
+   That is the next experiment, and it is a build job rather than a solve job.
    The p-ladder scripts under `out/` were written for this and are pinned to
    refused v2 geometry — repoint them at v3 rather than writing new ones. Each
    pins it in exactly one line (`GEOMETRY = Path(...simple-hb-user-space-
