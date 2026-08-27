@@ -2142,16 +2142,57 @@ process that has exited occupies nothing.
 `memory_info().rss` at 1.55 µs** — 0.73×, on 20000 calls each. The honest metric
 is the cheaper one. At nine tracked members that is 10 µs per sample.
 
-**The consequence for this campaign, stated plainly.** The 24 GiB ceiling now
-bounds a quantity that does not collapse under swap, so runs that previously
-passed it while swapping will now be killed by it. `v3k1-p3` was accepted at
-22.56 GB "peak RSS" while the machine held 30+ GB of swap (§0.26); the same run
-today would very likely exceed 24 GiB of footprint and be rejected. That is the
-guard working. It also means the affordability table in §0.26 is optimistic and
-the order-3 combined ladder may not be re-runnable on this host at all under an
-honest ceiling — which is information, not a regression. Results already on disk
-were accepted under the old metric and are unaffected; what changes is what can
-be run next.
+**Measured on the real workload, and it is not a small correction.** `v3k0-p2`
+was re-run twice under the new monitor with a second sampler reading both
+quantities over the same eight ranks:
+
+| run | summed RSS | summed footprint | ratio |
+| --- | --- | --- | --- |
+| run-01 (2026-08-27, old metric) | 15.82 GB | — | — |
+| run-02 | 15.41 GB (sampler) | 6.80 GB | 0.43 |
+| run-03 | 15.41 GB (sampler) | 5.85 GB | 0.38 |
+
+**Summed RSS over an MPI tree counts shared pages once per rank.** The shared
+libraries, the memory-mapped 100 MB mesh, and MPI's shared segments are each
+counted eight times over. Footprint attributes them once. So the old number was
+not merely blind to swap — for a healthy run it was inflated by roughly 2.5×.
+
+**Which means the ceiling value is now uncalibrated, in the loose direction.**
+24 GiB was a round number chosen against the inflated quantity. In real terms it
+was enforcing about 9–10 GB of tree footprint; against footprint it permits
+25.8 GB of a 36 GB machine, leaving ~10 GB for macOS and the user's
+applications. The metric is now right and the *number* is a policy question that
+did not previously have to be answered honestly:
+
+- Keeping 24 GiB is defensible as an absolute — it is a real 70% of RAM — but it
+  is a **materially more permissive** guard than what was actually in force, and
+  the §0.26 affordability findings ("order 3 affordable to ~372k tets, not 581k")
+  were measured under the tighter effective limit.
+- If the intent was to keep the solver tree under about a quarter of RAM, the
+  number to write is nearer **9 GiB**, not 24.
+
+That choice is left to the owner; it is a different decision from fixing the
+metric and it depends on what else runs on this host.
+
+**One link in the chain is argued, not measured.** That footprint counts pages
+the compressor has written to the swap file — not merely pages it has compressed
+in RAM — is the property that makes it catch the §0.26 condition, and verifying
+it directly requires recreating the state that panicked the machine. The support
+for it is that jetsam ranks victims on this counter and could not function
+otherwise, and that the system OOM guard on this machine says so in as many
+words. Treat it as strongly evidenced rather than as measured here.
+
+**Run-to-run reproducibility, checked in passing.** The three `v3k0-p2` matrices
+are not bit-identical — MPI reduction order is not fixed — but they agree to
+`max|ΔC| = 1.6e-24 F`, which is `1e-9` fF, nine orders below the 1 fF gate. The
+traces agree to all six printed digits at 23.446952 pF. Ladder gradings are
+unaffected by which run is read.
+
+**The consequence for this campaign.** Runs that previously passed the ceiling
+while swapping can now be killed by it, which is the guard working. Results
+already on disk were accepted under the old metric and are unaffected; what
+changes is what can be run next — and, given the 2.5× measured above, more of it
+than before rather than less, until the ceiling value is revisited.
 
 ### 0.7 Next steps (replacing §5)
 
