@@ -2,6 +2,7 @@
 from dataclasses import asdict
 import json
 import os
+import pathlib
 import sys
 import time
 
@@ -35,9 +36,92 @@ def _limits(**overrides):
     return ProcessLimits(**values)
 
 
+# --------------------------------------------------------------------------- #
+# the memory metric
+#
+# These calibrate the 2026-08-27 change from resident set size to memory
+# footprint. The defect they answer to: a Palace run held 38.5 GB of swap on a
+# 36 GB machine while reporting about 6 GB of RSS against a 24 GiB ceiling that
+# never fired, because the resident set is by definition the part that stays in
+# RAM and so falls as the situation gets worse.
+# --------------------------------------------------------------------------- #
+@pytest.mark.skipif(sys.platform != "darwin", reason="reads a Darwin struct")
+def test_the_struct_offset_really_is_the_footprint_field():
+    """A wrong offset returns a plausible number from a neighbouring field.
+
+    ri_resident_size sits immediately before ri_phys_footprint in rusage_info,
+    and it is independently observable as psutil's RSS. If reading one field
+    earlier reproduces RSS exactly, the layout is right and the field the module
+    reads is the one it means to.
+    """
+    import ctypes
+
+    buffer = ctypes.create_string_buffer(process_monitor._RUSAGE_INFO_V0_BYTES)
+    assert process_monitor._proc_pid_rusage(
+        os.getpid(), process_monitor._RUSAGE_INFO_V0, ctypes.byref(buffer)) == 0
+    offset = process_monitor._PHYS_FOOTPRINT_OFFSET - 8
+    resident = int.from_bytes(buffer.raw[offset:offset + 8], sys.byteorder)
+    assert resident == psutil.Process(os.getpid()).memory_info().rss
+
+
+def test_the_footprint_tracks_dirty_anonymous_memory():
+    """The pages that get compressed and swapped are the ones that must count.
+
+    Footprint is not RSS and is not asserted to be: it excludes clean
+    file-backed pages. What it must do is rise with anonymous dirty memory,
+    because that is the memory a hog takes to the swap file.
+    """
+    megabytes = 192
+    before = process_monitor._process_footprint(os.getpid())
+    assert before is not None
+    ballast = bytearray(megabytes * 1024**2)
+    ballast[::4096] = b"\x01" * len(ballast[::4096])       # touch every page
+    after = process_monitor._process_footprint(os.getpid())
+    del ballast
+    assert after - before >= megabytes * 1024**2 * 0.75
+
+
+def test_a_process_that_is_gone_measures_zero_not_unreadable():
+    """The one error that legitimately means nothing is being used."""
+    assert process_monitor._process_footprint(2**21 - 1) == 0
+
+
+def test_an_unreadable_member_raises_rather_than_counting_as_zero(monkeypatch):
+    """Unevaluable is not OK. It is the whole reason the old code was wrong.
+
+    The previous implementation caught the read failure per member and moved on,
+    so a tree it could not measure reported a smaller number -- fail-open at
+    exactly the moment the machine is least able to answer questions about
+    processes.
+    """
+    monkeypatch.setattr(process_monitor, "_process_footprint", lambda pid: None)
+    with pytest.raises(process_monitor.MemoryMetricUnavailable):
+        process_monitor._tree_memory(
+            psutil.Process(os.getpid()), psutil.Process(os.getpid()).create_time(),
+            {}, "token-that-matches-nothing")
+
+
+def test_an_unmeasurable_platform_refuses_to_launch_at_all(tmp_path, monkeypatch):
+    """A precondition, not a discovery made after the tree already exists."""
+    monkeypatch.setattr(process_monitor, "_process_footprint", None)
+    with pytest.raises(process_monitor.MemoryMetricUnavailable):
+        run_monitored_process(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, limits=_limits())
+
+
+def test_the_memory_failure_no_longer_claims_to_be_about_rss():
+    """Provenance: the message must name the quantity that was bounded."""
+    source = (
+        pathlib.Path(process_monitor.__file__).read_text())
+    assert "peak RSS exceeded" not in source
+    assert "peak memory footprint exceeded" in source
+    assert process_monitor.MEMORY_METRIC in (
+        "darwin:ri_phys_footprint", "linux:VmRSS+VmSwap")
+
+
 def test_monitor_exception_kills_and_reaps_started_process(tmp_path, monkeypatch):
     pid_path = tmp_path / "child.pid"
-    real_tree_rss = process_monitor._tree_rss
+    real_tree_memory = process_monitor._tree_memory
     injected = False
 
     def fail_after_start(*args, **kwargs):
@@ -45,9 +129,9 @@ def test_monitor_exception_kills_and_reaps_started_process(tmp_path, monkeypatch
         if not injected:
             injected = True
             raise RuntimeError("injected monitor failure")
-        return real_tree_rss(*args, **kwargs)
+        return real_tree_memory(*args, **kwargs)
 
-    monkeypatch.setattr(process_monitor, "_tree_rss", fail_after_start)
+    monkeypatch.setattr(process_monitor, "_tree_memory", fail_after_start)
     with pytest.raises(RuntimeError, match="injected monitor failure"):
         run_monitored_process(
             [sys.executable, "-c", (
@@ -66,7 +150,7 @@ def test_monitor_exception_kills_and_reaps_started_process(tmp_path, monkeypatch
 def test_secondary_cleanup_interrupt_is_tagged_while_process_survives(
         tmp_path, monkeypatch):
     monkeypatch.setattr(
-        process_monitor, "_tree_rss",
+        process_monitor, "_tree_memory",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             RuntimeError("monitor failed")),
     )
@@ -367,7 +451,8 @@ def test_stream_limits_stop_output_panels_and_rss(tmp_path):
         limits=_limits(peak_rss_bytes=5_000_000),
     )
     assert memory.peak_rss_bytes > 5_000_000
-    assert any("peak RSS exceeded" in failure for failure in memory.limit_failures)
+    assert any("peak memory footprint exceeded" in failure
+               for failure in memory.limit_failures)
 
 
 @pytest.mark.parametrize(
@@ -557,7 +642,8 @@ def test_rss_limit_includes_reparented_new_session_grandchild(tmp_path):
     )
     assert time.monotonic() - started < 3.0
     assert result.peak_rss_bytes > limit
-    assert any("peak RSS exceeded" in item for item in result.limit_failures)
+    assert any("peak memory footprint exceeded" in item
+               for item in result.limit_failures)
 
 
 def test_wall_limit_tracks_orphan_with_redirected_standard_streams(tmp_path):

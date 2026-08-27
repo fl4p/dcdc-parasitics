@@ -2077,6 +2077,82 @@ memory metric is fixed.
 
 Empty run directory and its evidence: `v3k5-p2/run-02/WHY-THIS-RUN-IS-EMPTY.txt`.
 
+### 0.29 The memory ceiling now measures memory
+
+§0.26 identified the metric defect and left it to the owner because
+`lib/process_monitor.py` is shared. The owner called it. This is what changed.
+
+**The measurement.** `_tree_rss` became `_tree_memory` and sums the platform's
+memory *footprint* instead of resident set size — on Darwin `ri_phys_footprint`
+from `proc_pid_rusage`, the quantity jetsam kills on and Activity Monitor labels
+"Memory"; on Linux `VmRSS + VmSwap`. Neither falls when pages leave RAM, which
+is the entire property RSS lacked.
+
+**What did not change: the serialized field is still `peak_rss_bytes`.** That is
+deliberate and it is the one thing to know before reading any number here. The
+name is baked into the resource-sample schema of every run manifest on disk, all
+of which are validated against an exact key set, so renaming it would have
+failed every accepted run in this campaign retroactively — the same trap §0.27
+avoided with the resource class. The field name is legacy; `MEMORY_METRIC` in
+`process_monitor` names the quantity, the failure string is now "peak memory
+footprint exceeded", and this paragraph is the third place it is written down.
+
+**Peak figures across the change do not compare.** Footprint excludes clean
+file-backed pages, so a healthy run measures somewhat *below* its RSS; it
+includes compressed and swapped pages, so a swapping run measures far above.
+Every peak in §0.23–§0.26 is RSS. Do not put them in a column with anything
+measured after this commit.
+
+**Unevaluable now raises.** The old loop caught a failed read per member and
+carried on, returning a smaller total — fail-open at exactly the moment the
+machine is least able to answer questions about processes. A member that cannot
+be measured now raises `MemoryMetricUnavailable`, the tree is killed, and no
+witness is written at all. `ESRCH` is the single error mapped to zero, because a
+process that has exited occupies nothing.
+
+**Guard review checklist:**
+
+1. *Unevaluable input.* Raises. A run whose peak memory is unknown has not been
+   shown to fit under a ceiling — it has only failed to be shown to exceed one.
+   Test: `test_an_unreadable_member_raises_rather_than_counting_as_zero`.
+2. *Monotonicity.* `peak_memory` is a running max and the witness validator
+   already rejects non-monotonic samples. A worse memory state cannot produce a
+   smaller number — which is precisely what RSS could do.
+3. *Preconditions.* `require_memory_metric()` is called before `Popen`, so a
+   platform with no footprint metric is a launch error rather than a run that
+   quietly went unbounded. Test:
+   `test_an_unmeasurable_platform_refuses_to_launch_at_all`.
+4. *Source of truth.* The struct offset is the thing most likely to be silently
+   wrong — a wrong one returns a plausible number from `ri_wired_size` or
+   `ri_pageins` next door. `test_the_struct_offset_really_is_the_footprint_field`
+   reads the neighbouring `ri_resident_size` and requires it to reproduce
+   psutil's RSS exactly, which pins the layout.
+5. *Persistence.* Nothing is cached; every sample is a fresh read.
+6. *Provenance.* `MEMORY_METRIC` is exported and asserted; the failure message
+   names the quantity; `test_the_memory_failure_no_longer_claims_to_be_about_rss`
+   fails if anyone restores the old wording.
+7. *Known-bad calibration.* `test_the_footprint_tracks_dirty_anonymous_memory`
+   allocates 192 MB of touched anonymous pages — the kind that get compressed and
+   swapped — and requires the metric to move with them. The existing end-to-end
+   breach tests now exercise the footprint path.
+8. *Fix vs mute.* This changes the bounded quantity, not the reporting of it.
+   The ceiling value did not move.
+
+*Runtime cost:* `proc_pid_rusage` measures at **1.12 µs/call against psutil
+`memory_info().rss` at 1.55 µs** — 0.73×, on 20000 calls each. The honest metric
+is the cheaper one. At nine tracked members that is 10 µs per sample.
+
+**The consequence for this campaign, stated plainly.** The 24 GiB ceiling now
+bounds a quantity that does not collapse under swap, so runs that previously
+passed it while swapping will now be killed by it. `v3k1-p3` was accepted at
+22.56 GB "peak RSS" while the machine held 30+ GB of swap (§0.26); the same run
+today would very likely exceed 24 GiB of footprint and be rejected. That is the
+guard working. It also means the affordability table in §0.26 is optimistic and
+the order-3 combined ladder may not be re-runnable on this host at all under an
+honest ceiling — which is information, not a regression. Results already on disk
+were accepted under the old metric and are unaffected; what changes is what can
+be run next.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the

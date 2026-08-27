@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded subprocess execution with byte-exact stream capture."""
 import contextvars
+import ctypes
 from dataclasses import dataclass
 import hashlib
 import json
@@ -22,6 +23,105 @@ MONITOR_TOKEN_ENV = "DCDC_PROCESS_MONITOR_TOKEN"
 
 class ProcessCleanupError(RuntimeError):
     pass
+
+
+class MemoryMetricUnavailable(RuntimeError):
+    """The tree's memory could not be measured, so no bound can be asserted.
+
+    Raised rather than tolerated. A member whose memory cannot be read is not a
+    member using none, and a run whose peak memory is unknown has not been shown
+    to fit under a ceiling -- it has only failed to be shown to exceed one.
+    """
+
+
+# What the `peak_rss_bytes` field of every witness holds since 2026-08-27.
+#
+# The name is not the metric, and the name is the one that could not change: it
+# is baked into the resource-sample schema of every run manifest already on
+# disk, all of which are validated against an exact key set. The quantity it
+# names did change, from resident set size to the platform's memory footprint,
+# because RSS cannot bound a process that swaps. The resident set is by
+# definition the part that stays in RAM, so it *falls* as the situation gets
+# worse: a Palace run held 38.5 GB of swap on a 36 GB machine -- past the
+# excursion that had panicked the same machine the day before -- while reporting
+# about 6 GB of RSS against a 24 GiB ceiling that never came close to firing.
+#
+# Footprint does not compare to RSS in either direction. It excludes clean
+# file-backed pages, so an idle process measures smaller than its RSS, and it
+# includes compressed and swapped pages, so a hog measures larger. Peak figures
+# recorded before 2026-08-27 are RSS and are not comparable to later ones.
+_RUSAGE_INFO_V0 = 0
+_RUSAGE_INFO_V0_BYTES = 16 + 10 * 8        # ri_uuid[16] then ten uint64 fields
+_PHYS_FOOTPRINT_OFFSET = 16 + 7 * 8        # the eighth of those fields
+_ESRCH = 3
+
+
+def _darwin_footprint(pid):
+    """ri_phys_footprint for one pid: bytes, 0 if gone, None if unreadable.
+
+    This is the quantity jetsam kills on and Activity Monitor reports as
+    "Memory". ESRCH is the single error mapped to zero, because a process that
+    has exited occupies nothing; every other error means the number is unknown,
+    which is not the same as small.
+    """
+    buffer = ctypes.create_string_buffer(_RUSAGE_INFO_V0_BYTES)
+    ctypes.set_errno(0)
+    if _proc_pid_rusage(pid, _RUSAGE_INFO_V0, ctypes.byref(buffer)) != 0:
+        return 0 if ctypes.get_errno() == _ESRCH else None
+    return int.from_bytes(
+        buffer.raw[_PHYS_FOOTPRINT_OFFSET:_PHYS_FOOTPRINT_OFFSET + 8],
+        sys.byteorder)
+
+
+def _linux_footprint(pid):
+    """VmRSS + VmSwap for one pid: bytes, 0 if gone, None if unreadable.
+
+    Linux has no single phys_footprint counter; the sum of the resident set and
+    the process's own swap is the closest honest equivalent, and it has the
+    property that matters -- it does not fall when pages are swapped out.
+    """
+    try:
+        with open(f"/proc/{pid}/status", "rt") as handle:
+            wanted = {"VmRSS:": None, "VmSwap:": None}
+            for line in handle:
+                name = line.split(maxsplit=1)[0] if line.split() else ""
+                if name in wanted:
+                    wanted[name] = int(line.split()[1]) * 1024
+    except (FileNotFoundError, ProcessLookupError):
+        return 0
+    except (OSError, ValueError, IndexError):
+        return None
+    if wanted["VmRSS:"] is None:
+        return None                        # kernel thread, or the entry vanished
+    return wanted["VmRSS:"] + (wanted["VmSwap:"] or 0)
+
+
+if sys.platform == "darwin":
+    _proc_pid_rusage = ctypes.CDLL(
+        "/usr/lib/libSystem.dylib", use_errno=True).proc_pid_rusage
+    _proc_pid_rusage.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
+    _proc_pid_rusage.restype = ctypes.c_int
+    MEMORY_METRIC = "darwin:ri_phys_footprint"
+    _process_footprint = _darwin_footprint
+elif sys.platform.startswith("linux"):
+    MEMORY_METRIC = "linux:VmRSS+VmSwap"
+    _process_footprint = _linux_footprint
+else:
+    MEMORY_METRIC = None
+    _process_footprint = None
+
+
+def require_memory_metric():
+    """Refuse to launch where the peak-memory bound could not be enforced.
+
+    A precondition, checked before the tree exists rather than discovered at the
+    first sample, so an unsupported platform is a launch error and never a run
+    that quietly went unbounded.
+    """
+    if _process_footprint is None:
+        raise MemoryMetricUnavailable(
+            f"no memory-footprint metric for platform {sys.platform!r}: a peak "
+            "memory bound cannot be enforced, so no bounded run may start here")
 
 
 _TREE_MAY_BE_ALIVE = contextvars.ContextVar(
@@ -236,7 +336,7 @@ def validate_process_event_witness(execution, stdout, stderr):
         (elapsed > limits["wall_time_s"],
          f"wall time exceeded {limits['wall_time_s']:g}s"),
         (expected_final["peak_rss_bytes"] > limits["peak_rss_bytes"],
-         f"peak RSS exceeded {limits['peak_rss_bytes']} bytes"),
+         f"peak memory footprint exceeded {limits['peak_rss_bytes']} bytes"),
         (expected_final["output_bytes"] + expected_final["directory_growth_bytes"]
          > limits["output_bytes"],
          f"output exceeded {limits['output_bytes']} bytes"),
@@ -314,7 +414,14 @@ def _tracked_members(tracked_descendants):
     return members
 
 
-def _tree_rss(process, leader_created, tracked_descendants, token):
+def _tree_memory(process, leader_created, tracked_descendants, token):
+    """Summed memory footprint of the tracked tree, in bytes.
+
+    Raises MemoryMetricUnavailable rather than skipping a member it cannot read.
+    The previous version swallowed those failures and returned a smaller number,
+    which is fail-open twice over: it under-reports exactly when the machine is
+    least able to answer questions about processes.
+    """
     _discover_descendants(process, leader_created, tracked_descendants)
     _discover_token_processes(tracked_descendants, token, process.pid)
     total = 0
@@ -323,10 +430,11 @@ def _tree_rss(process, leader_created, tracked_descendants, token):
     if leader is not None:
         members.append(leader)
     for member in members:
-        try:
-            total += member.memory_info().rss
-        except (psutil.Error, ProcessLookupError):
-            pass
+        value = _process_footprint(member.pid)
+        if value is None:
+            raise MemoryMetricUnavailable(
+                f"memory footprint of pid {member.pid} could not be read")
+        total += value
     return total
 
 
@@ -403,6 +511,7 @@ def _cleanup_exceptional_process(
 def run_monitored_process(
         command, *, cwd, limits, environment=None, additional_output_paths=()):
     """Run a process, killing its tree immediately when a resource gate fails."""
+    require_memory_metric()
     command = tuple(str(value) for value in command)
     launch_command = _platform_command(command)
     cwd = str(Path(cwd).resolve())
@@ -464,13 +573,12 @@ def run_monitored_process(
         scan_tails = {"stdout": "", "stderr": ""}
         active_readers = len(threads)
         last_disk_check = started
-        peak_rss = 0
+        peak_memory = 0
         directory_growth = 0
         max_panels = 0
         max_gmres = 0
         gmres_seen = False
         failures = []
-        monitor_process = psutil.Process(os.getpid())
 
         while _tree_alive(process, tracked_descendants, token) or active_readers:
             now = time.monotonic()
@@ -508,14 +616,14 @@ def run_monitored_process(
             except queue.Empty:
                 pass
 
-            rss = _tree_rss(
+            memory = _tree_memory(
                 process, leader_created, tracked_descendants, token
             )
-            try:
-                rss += monitor_process.memory_info().rss
-            except (psutil.Error, ProcessLookupError):
-                pass
-            peak_rss = max(peak_rss, rss)
+            own = _process_footprint(os.getpid())
+            if own is None:
+                raise MemoryMetricUnavailable(
+                    "memory footprint of the monitor itself could not be read")
+            peak_memory = max(peak_memory, memory + own)
             output_size = len(buffers["stdout"]) + len(buffers["stderr"])
             if now - last_disk_check >= 0.25:
                 directory_growth = max(
@@ -528,8 +636,8 @@ def run_monitored_process(
             checks = (
                 (now - started > limits.wall_time_s,
                  f"wall time exceeded {limits.wall_time_s:g}s"),
-                (peak_rss > limits.peak_rss_bytes,
-                 f"peak RSS exceeded {limits.peak_rss_bytes} bytes"),
+                (peak_memory > limits.peak_rss_bytes,
+                 f"peak memory footprint exceeded {limits.peak_rss_bytes} bytes"),
                 (output_size + directory_growth > limits.output_bytes,
                  f"output exceeded {limits.output_bytes} bytes"),
                 (max_panels > limits.refined_panels,
@@ -541,7 +649,7 @@ def run_monitored_process(
             )
             sample = {
                 "monotonic_ns": time.monotonic_ns() - started_ns,
-                "peak_rss_bytes": peak_rss,
+                "peak_rss_bytes": peak_memory,
                 "output_bytes": output_size,
                 "directory_growth_bytes": directory_growth,
                 "max_refined_panels": max_panels,
@@ -582,8 +690,8 @@ def run_monitored_process(
         final_checks = (
             (elapsed_for_checks > limits.wall_time_s,
              f"wall time exceeded {limits.wall_time_s:g}s"),
-            (peak_rss > limits.peak_rss_bytes,
-             f"peak RSS exceeded {limits.peak_rss_bytes} bytes"),
+            (peak_memory > limits.peak_rss_bytes,
+             f"peak memory footprint exceeded {limits.peak_rss_bytes} bytes"),
             (output_size + directory_growth > limits.output_bytes,
              f"output exceeded {limits.output_bytes} bytes"),
             (max_panels > limits.refined_panels,
@@ -600,7 +708,7 @@ def run_monitored_process(
                 postexit_failures.append(message)
         final_sample = {
             "monotonic_ns": time.monotonic_ns() - started_ns,
-            "peak_rss_bytes": peak_rss,
+            "peak_rss_bytes": peak_memory,
             "output_bytes": output_size,
             "directory_growth_bytes": directory_growth,
             "max_refined_panels": max_panels,
@@ -629,7 +737,7 @@ def run_monitored_process(
             stdout=bytes(buffers["stdout"]),
             stderr=bytes(buffers["stderr"]),
             elapsed_s=elapsed,
-            peak_rss_bytes=peak_rss,
+            peak_rss_bytes=peak_memory,
             output_bytes=output_size,
             directory_growth_bytes=directory_growth,
             max_refined_panels=max_panels,

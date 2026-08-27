@@ -212,7 +212,7 @@ def test_wall_timeout_requires_exclusive_cause_and_no_final_matrix(
     run = json.loads(caught.value.manifest_path.read_text())
     if mutation == "second_limit":
         limit = run["execution"]["limits"]["peak_rss_bytes"]
-        failure = f"peak RSS exceeded {limit} bytes"
+        failure = f"peak memory footprint exceeded {limit} bytes"
         run["execution"]["limit_failures"].append(failure)
         run["execution"]["monitor_events"][2]["detail"] += f"; {failure}"
         run["execution"]["peak_rss_bytes"] = limit + 1
