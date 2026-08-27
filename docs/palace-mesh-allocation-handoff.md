@@ -1858,9 +1858,39 @@ board's smallest conductors, in a ladder whose other 163 entries converge.
    which stopped `v3a2-p4` and `v3k5`'s memory never approached.
 2. Combined grading at order 3, which reached the tightest bound per rung of
    anything measured (`v3g2-p3`, 378k tets, 18.3979 pF, 21.5 GB).
-3. `C[6][15]` remains unexplained: it moves 0.1% under 4× lateral refinement and
-   is not converging under vertical refinement either, so neither axis accounts
-   for it.
+3. ~~`C[6][15]` remains unexplained.~~ **Withdrawn the same day.** Tracing it
+   across the whole vertical ladder rather than reading its final percentage
+   shows it converging cleanly:
+
+   ```
+   C[6][15]  -159.417  -118.932  -102.731  -97.853  -95.824 fF
+   deltas      +40.485   +16.201    +4.878   +2.029
+   ratios                   0.400     0.301    0.416
+   ```
+
+   Its finest step is 2.12% against a 2% band — the most marginal entry in the
+   matrix, not an anomalous one. Being unmoved by lateral refinement is not a
+   puzzle either: it means the entry is already converged in that axis. I called
+   it unexplained on the strength of two numbers without looking at the
+   sequence.
+
+**And the combined ladder is doing what it was built to do.** Comparing the same
+entries across the two ladders shows lateral grading working on exactly the
+entries §0.24 predicted:
+
+```
+              vertical graded, 5 rungs    both axes graded, 4 rungs
+C[8][9]       -67.378 fF, step 8.01%      -47.243 fF, step 2.70%
+C[6][8]       -64.112 fF                  -54.718 fF
+C[6][15]      -95.824 fF, step 2.12%      -95.165 fF
+```
+
+`C[8][9]` — the worst entry in the matrix and a 0.6 mm pad — improves from 8.01%
+to 2.70% with one *fewer* rung once the lateral mesh is graded, while `C[6][15]`,
+which was already lateral-converged, lands on the same value from both. That is
+the signature of the diagnosis being right, and it puts the fifth rung of the
+combined ladder within reach of the entrywise band rather than merely closer to
+it.
 
 **Do not** read the trace passing as the canary passing, and do not reorder the
 gate: Fugu stays downstream of an entrywise pass, per §1.
