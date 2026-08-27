@@ -2157,22 +2157,38 @@ libraries, the memory-mapped 100 MB mesh, and MPI's shared segments are each
 counted eight times over. Footprint attributes them once. So the old number was
 not merely blind to swap — for a healthy run it was inflated by roughly 2.5×.
 
-**Which means the ceiling value is now uncalibrated, in the loose direction.**
-24 GiB was a round number chosen against the inflated quantity. In real terms it
-was enforcing about 9–10 GB of tree footprint; against footprint it permits
-25.8 GB of a 36 GB machine, leaving ~10 GB for macOS and the user's
-applications. The metric is now right and the *number* is a policy question that
-did not previously have to be answered honestly:
+**That ratio does not extrapolate, and the ceiling is not too loose — measured.**
+The obvious inference from a single 0.38 ratio is that 24 GiB has become ~2.5×
+more permissive and should be lowered to about 9 GiB. That inference is wrong,
+and re-running the upper rungs shows why. The shared-page overcount is roughly a
+fixed quantity; the factorisation's private memory is what grows. So the ratio
+climbs with the rung, and past the point where the machine starts compressing,
+it crosses one:
 
-- Keeping 24 GiB is defensible as an absolute — it is a real 70% of RAM — but it
-  is a **materially more permissive** guard than what was actually in force, and
-  the §0.26 affordability findings ("order 3 affordable to ~372k tets, not 581k")
-  were measured under the tighter effective limit.
-- If the intent was to keep the solver tree under about a quarter of RAM, the
-  number to write is nearer **9 GiB**, not 24.
+| rung | tets | old peak RSS | new peak footprint | footprint / RSS |
+| --- | --- | --- | --- | --- |
+| `v3k0-p2` | 266994 | 15.82 GB | 6.80 GB | 0.43 |
+| `v3k3-p2` | 581382 | 20.99 GB | 18.90 GB | 0.90 |
+| `v3k4-p2` | 1002870 | 21.38 GB | **24.49 GB** | **1.15** |
 
-That choice is left to the owner; it is a different decision from fixing the
-metric and it depends on what else runs on this host.
+**This is the §0.26 defect caught in the act.** Between 581k and 1.00M
+tetrahedra the summed RSS goes essentially flat — 20.99 to 21.38 GB, a 2% rise
+for a 72% larger problem — because the additional memory is being compressed
+rather than kept resident. Footprint over the same step rises 30%. RSS was not
+merely a different number; it had stopped responding to the workload.
+
+**`v3k4-p2` is now rejected: 24.49 GB against the 24 GiB ceiling.** That rung is
+in the four-rung ladder of §0.25. Its recorded result stands — the matrix was
+produced by a direct factorisation that ran to completion, and swapping costs
+time rather than accuracy — but the run is not reproducible on this host under
+an honest ceiling, and `grade_p.py` now refuses to grade that ladder because the
+newest run under the tag is a rejection. That refusal is the intended design and
+it is telling the truth.
+
+So the ceiling needs no recalibration. **24 GiB of footprint is approximately
+this machine's real limit for this workload**, which is why the runs that
+exceeded it are exactly the runs that drove the machine into swap. The number
+was accidentally right and the metric was wrong.
 
 **One link in the chain is argued, not measured.** That footprint counts pages
 the compressor has written to the swap file — not merely pages it has compressed
@@ -2193,6 +2209,60 @@ while swapping can now be killed by it, which is the guard working. Results
 already on disk were accepted under the old metric and are unaffected; what
 changes is what can be run next — and, given the 2.5× measured above, more of it
 than before rather than less, until the ceiling value is revisited.
+
+### 0.30 Distance to the goal: one rung in convergence, one machine in memory
+
+Two separate distances, and they have different answers.
+
+**Convergence: one rung, and it is projectable.** Of the 171 entries in the
+four-rung combined ladder, 18 unique entries (37 counting both triangles) sit
+outside 2% + 1 fF. Every one of them is contracting, ratios 0.254 to 0.348, and
+**none has a ratio at or above 1**. Projecting each failing entry's next step as
+`step x ratio` and comparing it to its own band:
+
+| entry | C (fF) | step (fF) | x band now | ratio | x band projected |
+| --- | --- | --- | --- | --- | --- |
+| C[0][16] | -140.41 | 6.76 | 1.78 | 0.277 | 0.49 |
+| C[6][9] | -55.30 | 3.34 | 1.59 | 0.347 | 0.55 |
+| C[6][15] | -95.17 | 4.54 | 1.56 | 0.270 | 0.42 |
+| C[6][8] | -54.72 | 3.19 | 1.52 | 0.348 | 0.53 |
+
+The worst projected entry lands at **0.55 of its band** — roughly 2x margin. One
+more halving of the vertical step closes the entrywise gate on every entry, and
+the trace step goes from 1.63% to about 0.46%. This is the least uncertain thing
+in this document: nothing is stalling, nothing is oscillating, and the required
+rung is a single named computation.
+
+**Memory: the ladder is already over budget, so the rung is not one step away.**
+§0.29 measured `v3k4-p2` — the ladder's existing top rung — at 24.49 GB of
+footprint against a 24 GiB ceiling. The fifth rung is 1.85x that mesh with
+superlinear factorisation growth. The 38.5 GB of swap it drove (§0.28) is the
+direct evidence of what it needs, and it is more than this machine has.
+
+**The escape routes, and which are already closed:**
+
+- *Iterative solve instead of a factorisation.* **Measured closed.** BoomerAMG at
+  order 2 stalls at a reduction factor of 0.949 — the preconditioner does
+  essentially nothing on the order-2 system (§0.19). It is not a size problem.
+- *A smaller refinement step for the fifth rung* (sqrt(2) rather than 2, ~1.3M
+  tets). The gate's observed-order calculation uses the actual size ratio, so
+  this is arithmetically legal — and it should be **refused**, because it shrinks
+  the finest step without proving anything more about the solution. It is the
+  gate-weakening §6 warns about, wearing a mesh parameter as a disguise.
+- *A machine with more memory.* Open, and the only route that is neither closed
+  by measurement nor a dodge.
+- *A solver that does not factorise the whole system at order 2.* Open and
+  untested — Palace's p-multigrid hierarchy was disabled for these runs
+  (`multigrid_max_levels=1`) because the direct solve was chosen deliberately.
+  Whether a proper p-multigrid hierarchy converges at order 2 where flat
+  BoomerAMG stalls has not been measured, and it is the cheapest experiment left.
+
+**Beyond the canary.** Fugu is 82 terminals against the canary's 18, on a larger
+board, and §1 puts it strictly downstream of an entrywise canary pass. The solve
+cost is per right-hand side — 215 s each at v3k5 size — so the terminal count
+alone is a 4.5x multiplier on top of a larger mesh. Nothing about the canary's
+resource picture makes Fugu look reachable on this host either. Treat the canary
+gate as the near goal and Fugu as a separate procurement question.
 
 ### 0.7 Next steps (replacing §5)
 
