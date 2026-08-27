@@ -1646,6 +1646,107 @@ gets laundered into a ladder. An earlier draft of the grid here reported
 `v3a2-p4` as the tightest bound available, having keyed on the matrix rather
 than on the run's own verdict; that was wrong and this is the correction.
 
+### 0.24 The trace converges — grading the vertical band was the whole difference
+
+§0.23 left both axes needing four more rungs than memory allows. The reason was
+not the axis, it was that the elements were in the wrong place, and the API that
+would have put them in the right place was broken.
+
+**The band was a no-op.** `_refine_levels` skipped a gap only if it lay entirely
+outside `vertical_refinement_band_m`; a gap that merely *overlapped* was
+subdivided over its whole length. The base levels come from the stackup, so the
+canary's air gap is a single 44 mm span, and therefore **every band narrower than
+44 mm did nothing at all** — silently, no error. A ±20 mm band produced a level
+set identical to no band: 39 levels either way. Fixed in `cab1d39` so the band
+clips to its own extent; a band that misses the model now raises rather than
+reporting a refined mesh that was never refined. All 14 existing canary meshes
+still validate against their stored hashes, because every band used before this
+was either stackup-aligned or full-domain.
+
+**The error is near-board, and there is an optimum.** Same element budget, spent
+four ways, order 2:
+
+```
+mesh           band        z step      tets   trace_pF
+v3a4      full 90 mm      2.50 mm    585066    25.7497
+v3g1       +/- 20 mm      1.84 mm    385146    25.3213
+v3g2       +/-  5 mm      0.50 mm    378234    20.6158   <- optimum
+v3g3       +/-  2 mm      0.20 mm    369018    21.1804
+```
+
+A graded 385k-tetrahedron mesh beats a uniform 585k one, and the ±5 mm band is
+better than both its neighbours — so the field structure that matters extends
+about 5 mm from a 1.6 mm board, roughly three board thicknesses, and everything
+beyond that can be a single element 25 mm tall. Narrowing further starves the
+transition and gets worse again.
+
+**The graded ladder, order 2, five rungs, ±5 mm band:**
+
+```
+rung          z step       tets   trace_pF    d_rel   pos_off   recip_F
+v3h1-p2       2.000 mm   170946    25.2223        -         0  2.71e-26
+v3h2-p2       1.000 mm   240042    21.8779  -15.29%        0  8.78e-27
+v3g2-p2       0.500 mm   378234    20.6158   -6.12%        0  7.57e-27
+v3h4-p2       0.250 mm   656922    20.2321   -1.90%        0  7.47e-27
+v3h5-p2       0.125 mm  1214298    20.0760   -0.78%        0  1.33e-26
+
+trace:  CONVERGED — finest step 0.78%, inside the 2% + 1 fF band
+        contraction 0.377, 0.304, 0.407     observed order 1.30
+        Aitken limit 19.9691 pF
+matrix: NOT_CONVERGED — 8 of 171 entries (was 37 at four rungs)
+```
+
+**This is the first ladder in this document to pass anything.** Against the same
+axis run uniformly, which reached observed order 0.72 and a 9.61% finest step,
+grading alone moved the order to 1.30 and the finest step to 0.78%. Nothing else
+changed: same geometry, same lateral mesh, same solver, same order.
+
+Order 3 on the same band is tighter still and one rung shorter for the memory:
+
+```
+v3h1-p3   2.000 mm   170946   19.8193
+v3h2-p3   1.000 mm   240042   18.8054   -5.39%
+v3g2-p3   0.500 mm   378234   18.3979   -2.22%     contraction 0.402, order 1.32
+```
+
+**18.3979 pF is now the tightest accepted upper bound on the canary trace**,
+against §0.18's order-1 Aitken limit of 90.14 pF — a factor of 4.9 — and its own
+Aitken limit of 18.1240 pF sits inside the 17.8–20.1 pF band that §0.23's seven
+independent extrapolations pointed at.
+
+**What the last 8 entries are, and why this ladder cannot close them.** They are
+not spread over the matrix; they sit on terminals 6, 8, 9 and 15, which are the
+smallest conductors on the board:
+
+```
+Net-(U1-VCCI-Pad3)      2.35 x 6.95 mm
+unconnected-(U1-DIS-Pad5)  1.95 x 0.60 mm
+unconnected-(U1-DT-Pad6)   1.95 x 0.60 mm
+unconnected-(U1-NC-Pad7)   1.95 x 0.60 mm
+```
+
+0.6 mm SOIC pads in a mesh whose free lateral element is 16 mm. That predicts
+they are lateral-limited, and the matched pair `v3a3`/`v3al` (identical but for a
+4× lateral refinement) confirms it for the worst of them:
+
+```
+                 16 mm lat    4 mm lat   change
+C[8][9]           -217.71f    -105.30f    51.6%   still failing
+C[8][8]            599.22f     404.66f    32.5%   still failing
+C[0][0]           5685.66f    5249.54f     7.7%   converged
+C[1][3]          -1169.75f   -1073.37f     8.2%   converged
+```
+
+The failing entries move 32–52% under lateral refinement against 7–19% for
+converged ones. A vertical ladder cannot close them however far it runs.
+(`C[6][15]` moves 0.1% and is the exception; whatever limits that one is neither
+axis and is not yet identified.)
+
+**Next**: graded *lateral* refinement around the small pads, which the library
+already supports via `conductor_edge_band_m` / `conductor_edge_max_planar_area_m2`
+and which the `v3gl*` meshes already exercise — combined with the ±5 mm vertical
+band. That is the remaining axis, and it is the one the last 8 entries name.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
