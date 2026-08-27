@@ -25,6 +25,15 @@ class ProcessCleanupError(RuntimeError):
     pass
 
 
+class WallClockUnavailable(RuntimeError):
+    """No sleep-inclusive clock, so elapsed time could not be measured.
+
+    Raised rather than falling back to `time.monotonic`. A wall-time limit
+    enforced on a clock that stops when the machine sleeps is not a wall-time
+    limit; it silently grants the run however long the lid was shut.
+    """
+
+
 class MemoryMetricUnavailable(RuntimeError):
     """The tree's memory could not be measured, so no bound can be asserted.
 
@@ -111,6 +120,56 @@ else:
     _process_footprint = None
 
 
+# What every `monotonic_ns` and `elapsed_s` in a witness is measured on since
+# 2026-08-27.
+#
+# `time.monotonic()` was the obvious choice and is the wrong one. On Darwin it
+# is `mach_absolute_time`, which does not advance while the system is asleep, so
+# a run that spans a lid close is recorded as shorter than it was and its
+# wall-time limit is relaxed by exactly that much, silently. Measured on this
+# host: a 4151 s Palace run was recorded at 3834.7 s because the machine slept
+# for 317 s in the middle of it, and the discrepancy surfaced only because
+# Palace's own clock disagreed and a cross-check caught it.
+#
+# The sleep-inclusive monotonic clock is spelled differently on each platform.
+# On Darwin `CLOCK_MONOTONIC` is `mach_continuous_time` and counts sleep, while
+# `CLOCK_MONOTONIC_RAW` and `CLOCK_UPTIME_RAW` do not. On Linux the roles
+# invert: `CLOCK_MONOTONIC` excludes suspend and `CLOCK_BOOTTIME` includes it.
+# Neither name means the same thing on both, so neither is a portable default
+# and the choice is made explicitly per platform.
+if sys.platform == "darwin":
+    WALL_CLOCK = "darwin:CLOCK_MONOTONIC"
+    _WALL_CLOCK_ID = time.CLOCK_MONOTONIC
+elif sys.platform.startswith("linux"):
+    WALL_CLOCK = "linux:CLOCK_BOOTTIME"
+    _WALL_CLOCK_ID = getattr(time, "CLOCK_BOOTTIME", None)
+else:
+    WALL_CLOCK = None
+    _WALL_CLOCK_ID = None
+if _WALL_CLOCK_ID is None:
+    WALL_CLOCK = None
+
+
+def _monotonic_ns():
+    """Nanoseconds on a monotonic clock that keeps counting through sleep."""
+    return time.clock_gettime_ns(_WALL_CLOCK_ID)
+
+
+def require_wall_clock():
+    """Refuse to launch where elapsed time could not be measured honestly.
+
+    A precondition rather than a fallback, for the same reason as
+    `require_memory_metric`: a run whose wall time is measured on a clock that
+    stops is not a bounded run, and the shortfall is invisible in the witness it
+    produces.
+    """
+    if _WALL_CLOCK_ID is None:
+        raise WallClockUnavailable(
+            f"no sleep-inclusive monotonic clock for platform {sys.platform!r}: "
+            "a wall-time bound cannot be enforced, so no bounded run may start "
+            "here")
+
+
 def require_memory_metric():
     """Refuse to launch where the peak-memory bound could not be enforced.
 
@@ -193,11 +252,11 @@ def _reader(stream, source, messages, started_ns):
             content = stream.read1(65536)
             if not content:
                 break
-            received_ns = time.monotonic_ns() - started_ns
+            received_ns = _monotonic_ns() - started_ns
             messages.put((source, byte_offset, received_ns, content))
             byte_offset += len(content)
     finally:
-        messages.put((source, byte_offset, time.monotonic_ns() - started_ns, None))
+        messages.put((source, byte_offset, _monotonic_ns() - started_ns, None))
 
 
 def validate_process_event_witness(execution, stdout, stderr):
@@ -486,10 +545,10 @@ def _cleanup_exceptional_process(
         process.kill()
     except (OSError, ProcessLookupError):
         pass
-    deadline = time.monotonic() + 5.0
+    deadline = _monotonic_ns() + 5_000_000_000
     while _tree_alive(process, tracked_descendants, token):
         _kill_tree(process, leader_created, tracked_descendants, token)
-        if time.monotonic() >= deadline:
+        if _monotonic_ns() >= deadline:
             break
         time.sleep(0.01)
     for stream in (process.stdout, process.stderr):
@@ -511,6 +570,7 @@ def _cleanup_exceptional_process(
 def run_monitored_process(
         command, *, cwd, limits, environment=None, additional_output_paths=()):
     """Run a process, killing its tree immediately when a resource gate fails."""
+    require_wall_clock()
     require_memory_metric()
     command = tuple(str(value) for value in command)
     launch_command = _platform_command(command)
@@ -523,7 +583,7 @@ def run_monitored_process(
         for other in output_roots[index + 1:]:
             if root in other.parents or other in root.parents:
                 raise ValueError("monitored output paths must not overlap")
-    started_ns = time.monotonic_ns()
+    started_ns = _monotonic_ns()
     started = started_ns / 1e9
     monitor_events = [{
         "event": "prelaunch",
@@ -550,7 +610,7 @@ def run_monitored_process(
     try:
         monitor_events.append({
             "event": "process_started",
-            "monotonic_ns": time.monotonic_ns() - started_ns,
+            "monotonic_ns": _monotonic_ns() - started_ns,
             "detail": str(process.pid),
         })
         leader_created = psutil.Process(process.pid).create_time()
@@ -581,7 +641,7 @@ def run_monitored_process(
         failures = []
 
         while _tree_alive(process, tracked_descendants, token) or active_readers:
-            now = time.monotonic()
+            now = _monotonic_ns() / 1e9
             try:
                 source, byte_offset, received_ns, content = messages.get(timeout=0.02)
                 if content is None:
@@ -648,7 +708,7 @@ def run_monitored_process(
                  f"{limits.gmres_iterations_per_rhs}"),
             )
             sample = {
-                "monotonic_ns": time.monotonic_ns() - started_ns,
+                "monotonic_ns": _monotonic_ns() - started_ns,
                 "peak_rss_bytes": peak_memory,
                 "output_bytes": output_size,
                 "directory_growth_bytes": directory_growth,
@@ -665,12 +725,12 @@ def run_monitored_process(
                 failures.extend(triggered)
                 monitor_events.append({
                     "event": "limit_detected",
-                    "monotonic_ns": time.monotonic_ns() - started_ns,
+                    "monotonic_ns": _monotonic_ns() - started_ns,
                     "detail": "; ".join(triggered),
                 })
                 monitor_events.append({
                     "event": "kill_initiated",
-                    "monotonic_ns": time.monotonic_ns() - started_ns,
+                    "monotonic_ns": _monotonic_ns() - started_ns,
                     "detail": None,
                 })
             if failures:
@@ -686,7 +746,7 @@ def run_monitored_process(
                 - baseline_size),
         )
         output_size = len(buffers["stdout"]) + len(buffers["stderr"])
-        elapsed_for_checks = (time.monotonic_ns() - started_ns) / 1e9
+        elapsed_for_checks = (_monotonic_ns() - started_ns) / 1e9
         final_checks = (
             (elapsed_for_checks > limits.wall_time_s,
              f"wall time exceeded {limits.wall_time_s:g}s"),
@@ -707,7 +767,7 @@ def run_monitored_process(
                 failures.append(message)
                 postexit_failures.append(message)
         final_sample = {
-            "monotonic_ns": time.monotonic_ns() - started_ns,
+            "monotonic_ns": _monotonic_ns() - started_ns,
             "peak_rss_bytes": peak_memory,
             "output_bytes": output_size,
             "directory_growth_bytes": directory_growth,
@@ -719,10 +779,10 @@ def run_monitored_process(
         if postexit_failures:
             monitor_events.append({
                 "event": "postexit_limit_detected",
-                "monotonic_ns": time.monotonic_ns() - started_ns,
+                "monotonic_ns": _monotonic_ns() - started_ns,
                 "detail": "; ".join(postexit_failures),
             })
-        exited_ns = time.monotonic_ns() - started_ns
+        exited_ns = _monotonic_ns() - started_ns
         monitor_events.append({
             "event": "process_exited",
             "monotonic_ns": exited_ns,

@@ -2410,6 +2410,113 @@ tolerance report different matrices, and the per-rung directories exist to keep
 exactly that kind of pair from being conflated by a grader reading the newest
 run under a tag.
 
+### 0.32 The wall-time clock stopped when the lid closed
+
+The `v3k3` AMG run was rejected with one failure and no solver failures:
+
+```
+completion_metadata: Palace execution elapsed time contradicts runtime metadata
+```
+
+`validate_execution_runtime_binding` rejects when `execution["elapsed_s"]` is
+less than Palace's own `ElapsedTime.Durations.Total`. The monitor said 3834.67 s;
+Palace said 4141.12 s. **The guard was right and the monitor was wrong**, and the
+first diagnosis written here — that Palace's `Total` was a nested sum of
+overlapping timers and could not be compared to a wall clock — was wrong. It
+rested on the observation that `Total` equals the sum of the report's `Avg`
+column to within 3e-5 relative, which is a coincidence: `Total` is printed as
+Min 4141.118 / Max 4141.123 across ranks, a spread of 5 ms, which no sum of
+per-rank averages would produce.
+
+Filesystem timestamps settle it, and they agree with Palace:
+
+| run | file mtimes | monitor | Palace `Total` |
+| --- | --- | --- | --- |
+| v3k3 AMG | 4151 s | 3834.7 s (**-316.3**) | 4141.1 s (-9.9) |
+| v3k0 AMG | 1958 s | 1952.5 s (-5.5) | 1806.7 s (-151.3) |
+
+And `pmset -g log` names the missing time:
+
+```
+2026-08-27 17:56:18  Sleep  Entering Sleep state due to 'Clamshell Sleep' ... 317 secs
+2026-08-27 18:01:35  Wake   Wake from Deep Idle
+```
+
+A 317 s lid close, in the middle of a run that spanned 17:18:40 to 18:27:51,
+against a monitor deficit of 316.3 s.
+
+**The defect.** `time.monotonic()` on Darwin is `mach_absolute_time`, which does
+not advance while the system sleeps. Every `monotonic_ns` and every `elapsed_s`
+the monitor has ever written is short by however long the machine slept during
+that run — and so is every wall-time limit *enforcement*, which is the part that
+matters: a run that sleeps is granted that time for free, silently. Measured on
+this host, against wall-clock time since boot:
+
+```
+wall since boot (includes sleep)   70138.6 s
+  time.monotonic()                 66435.9 s   deficit 3702.7 s
+  CLOCK_UPTIME_RAW                 66435.9 s   deficit 3702.7 s
+  CLOCK_MONOTONIC                  70137.8 s   deficit    0.8 s
+  CLOCK_MONOTONIC_RAW              70149.2 s   deficit  -10.5 s
+```
+
+62 minutes of accumulated sleep on a host that booted 19.5 hours ago.
+
+**The fix.** `lib/process_monitor.py` now measures on an explicitly chosen
+sleep-inclusive clock — `WALL_CLOCK`, `_monotonic_ns()`, `require_wall_clock()`,
+mirroring the `MEMORY_METRIC` / `require_memory_metric()` pair added in §0.29.
+The clock name is **not** portable and is selected per platform: on Darwin
+`CLOCK_MONOTONIC` counts sleep while `CLOCK_MONOTONIC_RAW` and
+`CLOCK_UPTIME_RAW` do not; on Linux the roles invert and `CLOCK_BOOTTIME` is
+the one that counts suspend. Neither name means the same thing on both, so
+neither is safe as a default.
+
+**Guard review checklist.**
+
+1. **Unevaluable input.** A platform with no sleep-inclusive clock sets
+   `WALL_CLOCK = None` and `require_wall_clock()` raises `WallClockUnavailable`
+   *before* launch, so an unmeasurable host is a launch error rather than a run
+   that quietly went unbounded. Same shape as the memory metric.
+2. **Monotonicity.** The new clock is monotonic by construction and is a
+   superset of the old one: it counts everything `time.monotonic()` counted plus
+   sleep, so a run can only be measured as longer, never shorter. No input makes
+   the verdict flip back to PASS; the far tail (a very long sleep) makes the
+   wall limit fire *sooner*, which is the correct direction.
+3. **Preconditions.** `require_wall_clock()` is the first statement of
+   `run_monitored_process`, ahead of `require_memory_metric()`. Verified by
+   `test_a_host_without_a_sleep_inclusive_clock_refuses_to_launch`, which
+   monkeypatches the clock id to `None` and asserts the launch raises.
+4. **Source of truth.** The quantity changed, not the name — `elapsed_s` and
+   `monotonic_ns` still mean the same thing, now measured honestly. This is the
+   opposite of the §0.29 situation and needs care for the same reason: figures
+   recorded before 2026-08-27 are sleep-excluded and are not comparable to later
+   ones on any run that spanned a sleep.
+5. **Persistence.** Nothing is cached. Each measurement is a fresh
+   `clock_gettime_ns`.
+6. **Provenance.** `WALL_CLOCK` is deliberately **not** written into the run
+   manifest. Manifest key sets are validated as exact sets, so adding a field
+   would invalidate every manifest already on disk — the same trap the
+   `peak_rss_bytes` naming comment describes. The clock is recorded here and in
+   the module comment instead.
+7. **Known-bad calibration.** `_monotonic_ns` was reverted to
+   `time.monotonic_ns()` and the tests re-run: **two of the three fail**
+   (`test_the_wall_clock_keeps_counting_through_system_sleep` and
+   `test_the_wall_clock_is_not_one_of_the_sleep_stopping_ones`), and pass again
+   with the fix restored. The discriminator is the host's accumulated sleep, so
+   on a host that has never slept the calibration cannot discriminate and
+   `pytest.skip`s explicitly rather than passing vacuously.
+8. **Fix vs mute.** This changes the measured quantity, not the message. The
+   mute-button version of this fix — loosening the inequality in
+   `validate_execution_runtime_binding`, which is what the first diagnosis here
+   would have led to — would have deleted the only signal that caught the defect
+   and left every wall limit under-counting.
+
+**Runtime cost.** `clock_gettime_ns(CLOCK_MONOTONIC)` and `monotonic_ns()` are
+the same class of vDSO call; the monitor takes a handful per sample on a poll
+loop and the change is not measurable against it.
+
+`validate_execution_runtime_binding` is **unchanged**. It did its job.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the

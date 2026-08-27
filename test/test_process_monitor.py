@@ -109,6 +109,75 @@ def test_an_unmeasurable_platform_refuses_to_launch_at_all(tmp_path, monkeypatch
             [sys.executable, "-c", "pass"], cwd=tmp_path, limits=_limits())
 
 
+def _host_sleep_since_boot_s():
+    """Wall seconds this host spent asleep since boot, or None if unknowable."""
+    import re
+    import subprocess
+    try:
+        out = subprocess.run(["sysctl", "-n", "kern.boottime"],
+                             capture_output=True, text=True, timeout=10).stdout
+        boot = int(re.search(r"sec = (\d+)", out).group(1))
+    except (OSError, subprocess.SubprocessError, AttributeError, ValueError):
+        return None
+    return (time.time() - boot) - time.monotonic()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="boottime probe is Darwin-only")
+def test_the_wall_clock_keeps_counting_through_system_sleep():
+    """Known-bad calibration: the metric this replaced must visibly fail here.
+
+    The discriminator is sleep the host has already accumulated, so it can only
+    be run where there is some -- a host that has never slept cannot tell the
+    two clocks apart, and this must be skipped there rather than passing
+    vacuously on a machine where both answers agree.
+    """
+    slept = _host_sleep_since_boot_s()
+    if slept is None:
+        pytest.skip("host sleep total could not be established")
+    if slept < 60.0:
+        pytest.skip(f"host has slept only {slept:.1f}s; too little to discriminate")
+    wall = process_monitor._monotonic_ns() / 1e9
+    stopped = time.monotonic()
+    assert wall - stopped == pytest.approx(slept, abs=5.0), (
+        "the selected clock does not count the sleep the host actually took")
+    assert stopped < wall - 60.0, (
+        "time.monotonic() did not lag, so this host cannot calibrate the fix")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="clock names differ per platform")
+def test_the_wall_clock_is_not_one_of_the_sleep_stopping_ones():
+    """CLOCK_MONOTONIC_RAW and CLOCK_UPTIME_RAW are the traps, by name."""
+    assert process_monitor.WALL_CLOCK == "darwin:CLOCK_MONOTONIC"
+    wall = process_monitor._monotonic_ns() / 1e9
+    for name in ("CLOCK_MONOTONIC_RAW", "CLOCK_UPTIME_RAW"):
+        identifier = getattr(time, name, None)
+        if identifier is None:
+            continue
+        if time.clock_gettime(identifier) < wall - 60.0:
+            continue                       # correctly excludes this host's sleep
+        assert name != "CLOCK_UPTIME_RAW", "CLOCK_UPTIME_RAW must not be the choice"
+
+
+def test_a_host_without_a_sleep_inclusive_clock_refuses_to_launch(
+        tmp_path, monkeypatch):
+    """Same fail-closed shape as the memory metric: a launch error, not a run."""
+    monkeypatch.setattr(process_monitor, "_WALL_CLOCK_ID", None)
+    with pytest.raises(process_monitor.WallClockUnavailable):
+        run_monitored_process(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, limits=_limits())
+
+
+def test_elapsed_is_measured_on_the_wall_clock_not_on_time_monotonic(tmp_path):
+    """The witness's elapsed_s must come from the clock that counts sleep."""
+    before = process_monitor._monotonic_ns()
+    execution = run_monitored_process(
+        [sys.executable, "-c", "import time; time.sleep(0.5)"],
+        cwd=tmp_path, limits=_limits())
+    span = (process_monitor._monotonic_ns() - before) / 1e9
+    assert execution.elapsed_s == pytest.approx(span, abs=0.5)
+    assert execution.elapsed_s >= 0.5
+
+
 def test_the_memory_failure_no_longer_claims_to_be_about_rss():
     """Provenance: the message must name the quantity that was bounded."""
     source = (
