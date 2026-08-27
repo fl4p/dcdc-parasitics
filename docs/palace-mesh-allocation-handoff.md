@@ -35,6 +35,9 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | Grading the vertical band takes observed order 0.72 → 1.83 (§0.24, §0.25) | the conclusion that no ladder could converge |
 | A peak-RSS ceiling cannot bound a swapping process (§0.26, §0.29) | every cost figure in §0.9–§0.25, which understates what its run took |
 | BoomerAMG at order 2 never stalled; §0.19 misread an iteration cap (§0.31) | §0.19 route 1 and §0.30's "measured closed" escape-route list |
+| AMG reproduces the direct solve to 1.8e-8 fF on two meshes (§0.33) | the last reason to treat the iterative rung as unvalidated |
+| Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
+| `time.monotonic` on Darwin stops during sleep, so every wall limit under-counted (§0.32) | every `elapsed_s` recorded before 2026-08-27 |
 
 **Two library defects fixed, both fail-open:**
 `_tetrahedralize` chose prism diagonals from vertex indices (`5d533c8`), and
@@ -56,6 +59,21 @@ put the ladder's *existing* top rung over budget at 24.49 GB. That is the cost
 of the **direct factorisation**, not of the rung — §0.31 shows the iterative
 route it was believed to have closed is open, and was misdiagnosed from a single
 summary statistic.
+
+**As of the `v3k3` rerun (§0.33), the iterative route is validated, and what
+blocks the fifth rung has changed a third time — to the wall.** AMG at order 2
+reproduces the SuperLU matrix entrywise on two meshes (worst 1.8e-8 fF, 0 of 324
+entries outside the gate, against a direct-solve run-to-run spread of 1.5e-9 fF).
+Its memory grows nearly linearly, projecting ~19.1 GB at `v3k5` — inside the
+24 GiB ceiling that stops the factorisation. Its wall projects to ~13800 s,
+outside the 7200 s `pcb_convergence` limit by about 2x. **The next decision is
+whether that wall gets raised**, and the cheap way to inform it is `v3k4` under
+AMG: one rung, ~2 hours, inside the current limit, and it pins a time exponent
+now bracketed at 1.08–1.18 from two points.
+
+Note also that every `elapsed_s` in this document recorded before 2026-08-27 is
+a **lower bound** — the monitor's clock stopped while the machine slept (§0.32).
+Peak-memory figures are unaffected.
 
 **Cost discipline.** These are full-system direct factorisations on a 36 GB
 machine and chaining them kernel-panicked it once (§0.22). Check free memory
@@ -2410,6 +2428,10 @@ tolerance report different matrices, and the per-rung directories exist to keep
 exactly that kind of pair from being conflated by a grader reading the newest
 run under a tag.
 
+**Result: §0.33.** Both `v3k0` and `v3k3` reproduce the direct solve entrywise.
+This subsection's projection — that Krylov memory grows roughly with the
+unknowns while fill-in does not — is measured there and holds.
+
 ### 0.32 The wall-time clock stopped when the lid closed
 
 The `v3k3` AMG run was rejected with one failure and no solver failures:
@@ -2516,6 +2538,78 @@ the same class of vDSO call; the monitor takes a handful per sample on a poll
 loop and the change is not measurable against it.
 
 `validate_execution_runtime_binding` is **unchanged**. It did its job.
+
+### 0.33 AMG reproduces the direct solve entrywise, on two meshes
+
+§0.31 reopened the iterative rung on the strength of a residual history. That is
+an argument that the solve *converged*, which is not the claim the gate needs.
+The claim it needs is that AMG and SuperLU produce **the same matrix**, and that
+is now measured on two meshes rather than argued.
+
+| run | reference | worst abs diff | worst rel diff | outside 2% + 1 fF |
+| --- | --- | --- | --- | --- |
+| `v3k0` AMG vs 3 SuperLU runs | trace 23.446952 pF both | 3.56e-8 fF | — | 0 of 324 |
+| `v3k3` AMG vs SuperLU run-01 | trace 19.226607 pF both | 1.81e-8 fF | 2.35e-8 | 0 of 324 |
+| `v3k3` AMG vs SuperLU run-02 | trace 19.226607 pF both | 1.81e-8 fF | 2.35e-8 | 0 of 324 |
+| *(SuperLU run-01 vs run-02)* | *baseline spread* | *1.52e-9 fF* | *2.98e-13* | *0 of 324* |
+
+AMG sits about an order of magnitude above the direct solve's own run-to-run
+spread and **seven orders below the gate's 1 fF floor**. `v3k3` is 107409 nodes
+against `v3k0`'s 53154, so this is not a single-point coincidence.
+
+The `v3k3` run also settles §0.31 in Palace's own words. All eighteen solves
+converged, in 528 to 591 iterations, at `avg. reduction factor` between 9.489e-01
+and 9.543e-01 — **per-iteration rates no better, and mostly worse, than the
+0.9409 that §0.19 called a stall**, reaching the same `Tol = 1e-12` once given
+the iterations to get there. The only thing that changed was `MaxIts`.
+
+**The rerun is also the clock fix's field test.** `v3k3` run-01 was rejected by
+`validate_execution_runtime_binding` (§0.32); run-02, under the sleep-inclusive
+clock, records `failures: []`:
+
+| run | clock | monitor `elapsed_s` | Palace `Total` | margin |
+| --- | --- | --- | --- | --- |
+| `v3k3` AMG run-01 | `time.monotonic` | 3834.7 s | 4141.1 s | **-306.4 (rejected)** |
+| `v3k3` AMG run-02 | `CLOCK_MONOTONIC` | 4174.8 s | 4144.4 s | +30.4 (meshing) |
+
+The margin is now the harness's own gmsh work, which is what it should have been
+all along. Note what the guard bought: it only fires when the swallowed sleep
+exceeds the harness overhead, so it is a *lower* bound on the defect's reach —
+`v3k0`'s +145.8 s margin means that run passed, not that its clock was honest.
+Every `elapsed_s` recorded before 2026-08-27 is a lower bound on the truth.
+
+**Scaling, refit on clean numbers.** Two AMG points, `v3k0` → `v3k3`, a 2.021x
+increase in nodes. §0.31's cost paragraph projected from the zladder run and a
+per-solve average; this is the first fit on two measured pladder rungs, and the
+first with an uncontaminated wall clock on the larger one:
+
+```
+exponent, Palace solver time   1.180
+exponent, harness wall clock   1.080     (v3k0 is old-clock, so this is an upper bound)
+exponent, peak RSS             0.947
+```
+
+Time is roughly linear in unknowns; memory is slightly sublinear. Projecting
+from `v3k3`:
+
+| rung | nodes | AMG wall | AMG peak RSS | vs 24 GiB |
+| --- | --- | --- | --- | --- |
+| `v3k4` | 179749 (1.67x) | ~7280 s | ~10.9 GB | 2.4x headroom |
+| `v3k5` | 324429 (3.02x) | ~13800 s (3.8 h) | ~19.1 GB | 1.35x headroom |
+
+**This inverts §0.30's verdict on which resource binds.** The direct solve is
+already at its ceiling one rung below the target: `v3k4-p2` run-01 completed at
+21.38 GB and run-02 was OOM-killed at 24.49 GB — the *same rung*, straddling the
+limit, so v3k4 direct is a coin flip and v3k5 direct is out of reach. AMG at
+`v3k5` projects to 19.1 GB, which fits. What it does not fit is the 7200 s
+`pcb_convergence` wall from §0.27, by roughly 2x.
+
+So the open question is no longer "is there an escape route" but "**is a wall
+raise to ~5 hours acceptable**". That is a policy change to `ProcessLimits`, it
+needs its own §6 review, and it is not made here. Both projections are
+two-point extrapolations of a fit whose time exponent is bracketed rather than
+pinned, and `v3k4` — one rung, ~2 hours, inside the current wall — would pin it
+before anything is spent on `v3k5`.
 
 ### 0.7 Next steps (replacing §5)
 
