@@ -128,10 +128,23 @@ FAILURE_RE = re.compile(
     r"(?:\bwarning\s*[!:]|\berror\s*[!:]|mfem abort|did not converge|"
     r"verification failed)", re.IGNORECASE)
 NORMAL_COMPLETION_MARKERS = ("Elapsed Time Report (s)", "Peak Memory")
-MESH_LIMITS = {"synthetic": {"nodes": 1_000_000, "tetrahedra": 5_000_000}, "pcb_diagnostic": {"nodes": 10_000_000, "tetrahedra": 50_000_000}}
+MESH_LIMITS = {"synthetic": {"nodes": 1_000_000, "tetrahedra": 5_000_000}, "pcb_diagnostic": {"nodes": 10_000_000, "tetrahedra": 50_000_000}, "pcb_convergence": {"nodes": 10_000_000, "tetrahedra": 50_000_000}}
 RESOURCE_LIMITS = {
     "synthetic": ProcessLimits(300.0, 8 * 1024**3, 1024**3, 2**63 - 1, 2**31 - 1),
     "pcb_diagnostic": ProcessLimits(30 * 60.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
+    # The finest rung of a convergence ladder is wall-bound, not memory-bound. The
+    # simple-hb canary's v3k5 mesh at order 2 (1.85M tetrahedra, 18 terminals) held
+    # a peak 22.23 GB against the 24 GiB ceiling and was killed at 1800 s having
+    # solved 5 of its 18 right-hand sides -- a healthy run stopped by the clock.
+    # Its own progress trace supplies the projection: 866.5 s to the first solved
+    # terminal (that interval is the factorisation) and 215 s per terminal after
+    # it, so 866.5 + 17 * 215 = 4522 s. Two hours is 1.59x that, clearing the 1.1
+    # minimum headroom ratio, and every other bound -- above all the memory
+    # ceiling, which is the one protecting the machine -- is left where it was.
+    # A class of its own rather than a wider pcb_diagnostic: the run manifest
+    # re-derives its resource_limits from this table, so widening the existing
+    # class would fail every accepted run already on disk.
+    "pcb_convergence": ProcessLimits(2 * 3600.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
 }
 
 

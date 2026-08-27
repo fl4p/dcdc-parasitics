@@ -1952,6 +1952,88 @@ direct factorisation run to completion), but its cost classification was wrong.
   to `lib/process_monitor.py`, shared with other campaigns, and is left to the
   owner rather than made here.
 
+### 0.27 The wall is raised, on evidence, and only the wall
+
+§0.25 left the fifth rung of the order-2 combined ladder (`v3k5`, 1.85M tets)
+blocked and called extending the budget an owner decision. The owner made it.
+This section records what was changed and why that particular number.
+
+**The rung was not expensive, it was slow.** `v3k5-p2` run-01 was killed at
+1801.9 s with `peak_rss_bytes` 22.23 GB against a 24 GiB ceiling and
+`limit_failures: ["wall time exceeded 1800s"]` — no memory failure, no solver
+failure, five of eighteen right-hand sides solved and every one of them at
+`explicit_relative_residual` ~1e-15 against a 1e-10 target. It is the only run in
+this campaign that was stopped by the clock while healthy.
+
+**The wall is a measurement.** Its own `palace_progress_events` give the
+projection directly:
+
+| interval | seconds |
+| --- | --- |
+| launch → `setup_end` | 30.8 |
+| → `field_solve_started` | 57.4 |
+| → terminal 1 solved (this interval *is* the factorisation) | 866.5 |
+| per terminal thereafter (2,3,4,5) | 215.5, 219.3, 219.6, 207.4 |
+
+The per-terminal cost is flat across four terminals, so the run was not
+degrading — 866.5 + 17 × 215 = **4522 s**. That is 2.5× the old wall and the
+reason nothing was going to finish inside it.
+
+**What landed** (`lib/palace.py`): a new resource class `pcb_convergence`, wall
+7200 s, **every other bound identical to `pcb_diagnostic`** — 24 GiB peak RSS,
+10 GiB output, same mesh envelope. 7200/4522 = 1.59, above the policy's
+`RESOURCE_MINIMUM_HEADROOM_RATIO` of 1.1. `probe.py` takes the class as its
+fifth argument and defaults to `pcb_diagnostic`.
+
+**Why a new class and not a wider old one.**
+`_validate_palace_run_manifest_unattested` re-derives `expected_resource_limits` from the live
+`RESOURCE_LIMITS[resource_class]` table and rejects any manifest that disagrees
+(`lib/palace.py:839`). Widening `pcb_diagnostic` would therefore have failed
+every accepted run already on disk — the whole ladder, retroactively. The table
+is part of each run's identity, and that is deliberate.
+
+**Guard review checklist** (global rule; a limit is a guard):
+
+1. *Unevaluable input.* Unchanged. A run that produces no manifest is still
+   rejected; the wall is a ceiling on an observed elapsed time, and elapsed time
+   is always observable.
+2. *Monotonicity.* A longer run is still worse: `elapsed_s > wall_time_s` fails,
+   and `bounded_values` in `validate_palace_run_manifest` independently refuses
+   any accepted manifest whose `elapsed_s` exceeds the class ceiling. There is no
+   input at which more wall time becomes a PASS.
+3. *Preconditions.* The class must exist in **both** `RESOURCE_LIMITS` and
+   `MESH_LIMITS`, or `_validate_palace_run_manifest_unattested` raises `KeyError`
+   rather than rejecting. Both were added.
+4. *Source of truth.* The limits are read from the module, not copied into the
+   manifest and trusted; the manifest's own copy is compared against the live
+   table on every validation.
+5. *Persistence.* Nothing is cached. run-01's rejection manifest stays on disk
+   next to run-02; `grade_p.py` reads the newest run and would refuse it if it
+   were rejected.
+6. *Provenance.* `resource_class` is recorded in every run manifest and in
+   `probe.py`'s output, so a rung run under the wider wall is identifiable as
+   such forever. No run is reclassified.
+7. *Known-bad calibration.* The known-bad case is run-01 itself: 1801.9 s under a
+   1800 s wall, rejected, and still rejected — it is not re-graded by this
+   change. `test_the_convergence_wall_covers_the_measured_projection` asserts the
+   old class does **not** cover the projection, which is the fact that made the
+   new one necessary.
+8. *Fix vs mute.* This is the distinction that matters here. Raising a wall on a
+   run that was still solving correctly changes the quantity (18 solved terminals
+   instead of 5). Raising the *memory* ceiling would have been the mute button —
+   the machine has already been lost once to swap, and §0.26 shows the RSS metric
+   collapses exactly when things get bad — so the memory ceiling did not move,
+   and a test pins it equal to `pcb_diagnostic`'s.
+
+*Runtime cost of the change itself:* none. It adds one entry to a dict read once
+per run.
+
+**One thing this does not fix.** The wall now permits a run that swaps for two
+hours. The RSS ceiling still cannot see that (§0.26), so the wall's new length is
+underwritten by the OOM guard's peak-swap heartbeat and by checking
+`kern.memorystatus_level` before launch — not by the resource policy. Launch
+conditions for run-02 were level 87, swap 3.4 GB of 5 GB, guard running.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the

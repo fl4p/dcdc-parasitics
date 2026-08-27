@@ -32,6 +32,7 @@ from palace import (  # noqa: E402
     write_palace_config,
 )
 from palace_resources import PalaceResourceProjection, ResourceBound  # noqa: E402
+from palace_workflow import RESOURCE_MINIMUM_HEADROOM_RATIO  # noqa: E402
 from lib.provenance import bytes_sha256, canonical_sha256, file_sha256  # noqa: E402
 
 
@@ -681,6 +682,40 @@ def test_ladder_resource_profiles_use_preregistered_limits():
     assert diagnostic.wall_time_s == 30 * 60.0
     assert diagnostic.peak_rss_bytes == 24 * 1024**3
     assert diagnostic.output_bytes == 10 * 1024**3
+
+
+def test_the_convergence_class_buys_wall_time_and_nothing_else():
+    """The finest ladder rung is wall-bound; it must not also get more memory.
+
+    v3k5 at order 2 was killed at 1800 s holding 22.23 GB against a 24 GiB
+    ceiling. A wider wall is the fix for that. A wider memory ceiling would be a
+    fix for nothing, on a machine that has already been lost to swap once, so
+    every bound except the clock is pinned equal to pcb_diagnostic here.
+    """
+    diagnostic = RESOURCE_LIMITS["pcb_diagnostic"]
+    convergence = RESOURCE_LIMITS["pcb_convergence"]
+    assert convergence.wall_time_s == 2 * 3600.0
+    assert convergence.wall_time_s > diagnostic.wall_time_s
+    assert convergence.peak_rss_bytes == diagnostic.peak_rss_bytes
+    assert convergence.output_bytes == diagnostic.output_bytes
+    assert convergence.refined_panels == diagnostic.refined_panels
+    assert (convergence.gmres_iterations_per_rhs
+            == diagnostic.gmres_iterations_per_rhs)
+    assert MESH_LIMITS["pcb_convergence"] == MESH_LIMITS["pcb_diagnostic"]
+
+
+def test_the_convergence_wall_covers_the_measured_projection():
+    """The wall is a measurement, not a round number that felt generous.
+
+    From v3k5-p2's own progress trace: 866.5 s to the first solved terminal (the
+    factorisation) and 215 s per terminal for the 17 that follow. The policy's
+    minimum headroom ratio is what makes 4522 s into a budget.
+    """
+    projected_s = 866.5 + 17 * 215.0
+    assert (RESOURCE_LIMITS["pcb_convergence"].wall_time_s
+            >= projected_s * RESOURCE_MINIMUM_HEADROOM_RATIO)
+    # and the class it was carved out of does not cover it -- which is why it exists
+    assert RESOURCE_LIMITS["pcb_diagnostic"].wall_time_s < projected_s
 
 
 def test_entrywise_ladder_gate_uses_fixed_two_percent_plus_femttofarad():
