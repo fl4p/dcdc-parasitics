@@ -33,6 +33,8 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | Every trace is a Ritz energy, so an upper bound (§0.20) | §0.18's order-1 Aitken limit of 90.14 pF, excluded by 4.9× |
 | The air box is the dominant axis, ~9:1 over lateral (§0.21) | §0.10, "which axis: measured, and it is the lateral one" |
 | Grading the vertical band takes observed order 0.72 → 1.83 (§0.24, §0.25) | the conclusion that no ladder could converge |
+| A peak-RSS ceiling cannot bound a swapping process (§0.26, §0.29) | every cost figure in §0.9–§0.25, which understates what its run took |
+| BoomerAMG at order 2 never stalled; §0.19 misread an iteration cap (§0.31) | §0.19 route 1 and §0.30's "measured closed" escape-route list |
 
 **Two library defects fixed, both fail-open:**
 `_tetrahedralize` chose prism diagonals from vertex indices (`5d533c8`), and
@@ -47,8 +49,13 @@ re-run. §2, §4 and §5 were already superseded by §0. The 2026-08-27 grid
 iterative-solver error.
 
 **Next steps** are listed at the end of §0.25. The blocking one is a fifth rung
-of the combined-grading ladder, which is stopped by the resource class's 1800 s
-wall — not by memory, which peaked at 22.2 GB of a 24 GiB ceiling.
+of the combined-grading ladder. What blocks it has changed twice: the 1800 s
+wall was raised on evidence and was never binding (§0.27, §0.28); memory then
+was, once the ceiling started measuring memory rather than RSS (§0.29), and it
+put the ladder's *existing* top rung over budget at 24.49 GB. That is the cost
+of the **direct factorisation**, not of the rung — §0.31 shows the iterative
+route it was believed to have closed is open, and was misdiagnosed from a single
+summary statistic.
 
 **Cost discipline.** These are full-system direct factorisations on a 36 GB
 machine and chaining them kernel-panicked it once (§0.22). Check free memory
@@ -1167,11 +1174,9 @@ conclusion. More tetrahedra is not the answer.
 
 **Three candidate routes, cheapest first.**
 
-1. **Raise the element order — but not with BoomerAMG.** At O(h²) the
-   contraction becomes ~0.25, so 19.47% → 4.9% → 1.2% closes in two rungs
-   rather than four. **Measured, and the arithmetic does not survive contact
-   with the solver.** Order 2 on `v3l0`, the *coarsest* rung at 383k tets and
-   39 s at order 1:
+1. **Raise the element order.** At O(h²) the contraction becomes ~0.25, so
+   19.47% → 4.9% → 1.2% closes in two rungs rather than four. Order 2 on
+   `v3l0`, the *coarsest* rung at 383k tets and 39 s at order 1:
 
    ```
    PCG did NOT converge in 500 iterations, avg. reduction factor 9.489e-01
@@ -1179,21 +1184,30 @@ conclusion. More tetrahedra is not the answer.
    0.26 GB per rank -- not memory-bound
    ```
 
-   A reduction factor of 0.949 means each iteration removes 5% of the residual;
-   the preconditioner is doing essentially nothing at order 2. This is not a
-   size problem and starting coarser will not fix it. It is also why the
-   existing p3 and p4 campaigns were built around SuperLU direct solves, which
-   in hindsight is the finding those scripts were already recording.
+   > **CORRECTION (§0.31, 2026-08-27).** Everything this subsection went on to
+   > conclude from that reduction factor was wrong, and the paragraph that
+   > stood here — "the preconditioner is doing essentially nothing at order 2,
+   > this is not a size problem and starting coarser will not fix it" — was a
+   > misreading of a single number. The solve did not stall. It reduced the
+   > residual by 9.4 orders of magnitude, monotonically, and Palace's own
+   > *explicit* residual `norm(Ax-b)/norm(b)` was **4.2e-12** on every solve,
+   > against the 1e-10 this workflow accepts. `9.489e-01` is not a diagnosis;
+   > it is `(r_500/r_0)^(1/500)` — an arithmetic identity that a perfectly
+   > healthy solve stopped at an iteration cap also satisfies. Read §0.31
+   > before using anything below about BoomerAMG, and do not repeat the
+   > inference: **a per-iteration reduction factor cannot distinguish a stalled
+   > solve from a converging one that was cut off. Only the residual history
+   > can.**
 
-   Route 1 therefore costs a **direct** solve — which is what `probe.py`
-   defaults to, and the reason its docstring gives is exactly this: a direct
-   solve means "the reported capacitance carries no iterative-solver error and
-   the only varying quantity across rungs is [the mesh]".
+   Route 1 also costs nothing extra as a **direct** solve — which is what
+   `probe.py` defaults to, and the reason its docstring gives is exactly this: a
+   direct solve means "the reported capacitance carries no iterative-solver
+   error and the only varying quantity across rungs is [the mesh]".
 
    **Measured, and it is cheap.** The same rung, order 2, SuperLU:
 
    ```
-   BoomerAMG   1831 s   rejected, PCG stalled at reduction factor 0.949
+   BoomerAMG   1831 s   rejected at the 500-iteration cap (NOT a stall -- §0.31)
    SuperLU       53 s   completed, no failures, 8.4 GB
    ```
 
@@ -2212,6 +2226,12 @@ than before rather than less, until the ceiling value is revisited.
 
 ### 0.30 Distance to the goal: one rung in convergence, one machine in memory
 
+> **PARTIALLY RETRACTED (§0.31, 2026-08-27).** The convergence half of this
+> section stands. The memory half — and the escape-route list it ends with —
+> rested on §0.19's reading of a reduction factor, which was wrong. "One machine
+> in memory" is the cost of a *direct* solve, and the direct solve is not the
+> only one available. Read §0.31 with this.
+
 Two separate distances, and they have different answers.
 
 **Convergence: one rung, and it is projectable.** Of the 171 entries in the
@@ -2239,23 +2259,34 @@ footprint against a 24 GiB ceiling. The fifth rung is 1.85x that mesh with
 superlinear factorisation growth. The 38.5 GB of swap it drove (§0.28) is the
 direct evidence of what it needs, and it is more than this machine has.
 
+Every number in that paragraph is a property of the **full-system direct
+factorisation**, not of the fifth rung. It is the factorisation's fill-in that
+grows superlinearly and that no longer fits; the discretisation itself is a few
+hundred MB. §0.31 measures what the same rung costs without one.
+
 **The escape routes, and which are already closed:**
 
-- *Iterative solve instead of a factorisation.* **Measured closed.** BoomerAMG at
-  order 2 stalls at a reduction factor of 0.949 — the preconditioner does
-  essentially nothing on the order-2 system (§0.19). It is not a size problem.
+- *Iterative solve instead of a factorisation.* ~~**Measured closed.**~~
+  **This entry was wrong on both counts and is retracted — see §0.31.** BoomerAMG
+  at order 2 does not stall, and the p-multigrid hierarchy this list called
+  untested was already running in the very measurement quoted against it. This
+  is the open route, not a closed one.
 - *A smaller refinement step for the fifth rung* (sqrt(2) rather than 2, ~1.3M
   tets). The gate's observed-order calculation uses the actual size ratio, so
   this is arithmetically legal — and it should be **refused**, because it shrinks
   the finest step without proving anything more about the solution. It is the
   gate-weakening §6 warns about, wearing a mesh parameter as a disguise.
-- *A machine with more memory.* Open, and the only route that is neither closed
-  by measurement nor a dodge.
-- *A solver that does not factorise the whole system at order 2.* Open and
-  untested — Palace's p-multigrid hierarchy was disabled for these runs
-  (`multigrid_max_levels=1`) because the direct solve was chosen deliberately.
-  Whether a proper p-multigrid hierarchy converges at order 2 where flat
-  BoomerAMG stalls has not been measured, and it is the cheapest experiment left.
+- *A machine with more memory.* Open, and — until §0.31 — believed to be the
+  only route that was neither closed by measurement nor a dodge. It is now the
+  fallback rather than the plan.
+- *A solver that does not factorise the whole system at order 2.* ~~Open and
+  untested~~ — **open and, as of §0.31, partially measured.** The claim here
+  that "Palace's p-multigrid hierarchy was disabled for these runs
+  (`multigrid_max_levels=1`)" is false for the BoomerAMG run it was reasoning
+  about: that config came from the older zladder writer, which emitted no `MG*`
+  keys at all, so Palace applied its own default and built the hierarchy
+  (`Level 0 (p = 1)`, `Level 1 (p = 2)`). `multigrid_max_levels=1` was pinned
+  only on the *SuperLU* runs, where it is what makes the solve direct.
 
 **Beyond the canary.** Fugu is 82 terminals against the canary's 18, on a larger
 board, and §1 puts it strictly downstream of an entrywise canary pass. The solve
@@ -2263,6 +2294,121 @@ cost is per right-hand side — 215 s each at v3k5 size — so the terminal coun
 alone is a 4.5x multiplier on top of a larger mesh. Nothing about the canary's
 resource picture makes Fugu look reachable on this host either. Treat the canary
 gate as the near goal and Fugu as a separate procurement question.
+
+### 0.31 BoomerAMG at order 2 never stalled — §0.19 misread an iteration cap
+
+§0.19 recorded one line of Palace output, `avg. reduction factor: 9.489e-01`,
+and concluded from it that "the preconditioner is doing essentially nothing at
+order 2". §0.30 inherited that as a **closed** escape route and built its
+"one machine in memory" verdict on top of it. Both are wrong. The run that
+produced the number is still on disk
+(`out/palace-qualification/simple-hb-zladder-v1/v3l0-boomeramg/run-02`), and it
+says something quite different.
+
+**First: the p-multigrid hierarchy was already running.** §0.30 listed "a proper
+p-multigrid hierarchy" as the cheapest untested experiment left, on the grounds
+that `multigrid_max_levels=1` had disabled it. That pin is applied only to
+SuperLU runs — it is what makes the solve direct. The BoomerAMG config in
+question was written by the older zladder writer, whose entire `Solver.Linear`
+block is five keys:
+
+```json
+{"KSPType": "CG", "MaxIts": 500, "Tol": 1e-12,
+ "Type": "BoomerAMG", "VerificationTol": 1e-10}
+```
+
+No `MG*` keys at all, so Palace applied its own defaults, and its own default
+builds the hierarchy. From the run's stdout:
+
+```
+Assembling multigrid hierarchy:
+ Level 0 (p = 1): 77794 unknowns
+ Level 1 (p = 2): 568114 unknowns
+```
+
+Two levels, p=1 coarsening under p=2, with AMG at the bottom. That *is* the
+experiment §0.30 proposed, and it had already been run — against itself.
+
+**Second: it did not stall.** The residual histories, three of the eleven
+solves, 500 iterations each:
+
+| solve | it 0 | it 500 | total reduction | rate over the last 50 its |
+| --- | --- | --- | --- | --- |
+| 1 | 2.9056e+01 | 6.6270e-10 | 2.28e-11 | 0.9409/it |
+| 2 | 9.2051e+01 | 1.0297e-09 | 1.12e-11 | 0.9265/it |
+| 3 | 9.8829e+00 | 5.4244e-10 | 5.49e-11 | 0.9553/it |
+
+That is 9.4 to 10.3 orders of magnitude of monotone reduction. A preconditioner
+"doing essentially nothing" leaves the residual near its initial value; this one
+converged, steadily, and was still converging when it hit the cap. Extrapolating
+each solve's own late-stage rate, `Tol = 1e-12` was **32 to 88 further
+iterations** away — a run that was between 6% and 18% short of its own stopping
+criterion, not one that had given up.
+
+**The decisive number was in the rejection record all along.** Palace checks the
+*explicit* residual separately from the Krylov one, and the workflow's
+acceptance threshold for it is `explicit_residual_tolerance = 1e-10`. Every one
+of the ten capped solves reported:
+
+```
+Linear solver did not converge, norm(Ax-b)/norm(b) = 4.168e-12  (norm(b) = 1.590e+02)
+                                                     6.693e-12
+                                                     5.291e-12   ... 3.810e-12 to 8.049e-12
+```
+
+Between 3.8e-12 and 8.0e-12 — **more than an order of magnitude inside the
+tolerance this pipeline demands**, on all ten. Those solutions were accurate.
+They were rejected because CG's stopping test, in the preconditioned B-norm at a
+stricter 1e-12, had not yet tripped.
+
+**So the failure was three settings, all of them ours:** `Tol = 1e-12` in a norm
+that is not the one we accept on; `MaxIts = 500`, a few dozen iterations short of
+meeting it; and the 1800 s wall, which took the run at 10 of 18 right-hand sides.
+Nothing about the physics, the order, or the preconditioner.
+
+**The lesson, stated so it is not repeated.** `avg. reduction factor` is
+`(r_N/r_0)^(1/N)`. It is an arithmetic identity over whatever interval the solve
+happened to run, and **a healthy solve stopped at an iteration cap produces
+exactly the same kind of number as a stalled one**. 0.949 per iteration sustained
+for 500 iterations *is* 9.4 orders — the figure looks damning only if you read it
+per-iteration and never multiply. A stall has to be diagnosed from the residual
+history: a stalled solve goes flat, and this one did not. This is the §6 trap in
+its general form — a summary statistic was promoted to a diagnosis without
+checking the series it summarises.
+
+**Cost, from the same run.** 1831.7 s covered 10 full 500-iteration solves plus
+39% of an eleventh, so roughly **176 s per 500-iteration solve** at 383k tets on
+8 ranks. Eighteen solves at the ~560 iterations they actually need projects to
+**~3550 s**, inside the 7200 s `pcb_convergence` wall from §0.27. Peak was
+5.96 GB under the old RSS metric, with Palace itself estimating 0.26 GB per rank
+— against 8.4 GB for the SuperLU factorisation of the same system.
+
+**Why this reopens the fifth rung.** §0.30's memory wall is a property of the
+factorisation's fill-in, which grows superlinearly and is what does not fit in
+24 GiB. A Krylov solve stores the operator and a handful of vectors; its memory
+grows roughly with the unknowns. `v3k5` is 1845846 tets against `v3k0`'s 266994
+— 6.9x — which a direct solve cannot hold and an AMG-preconditioned CG has no
+particular reason to care about. That is a projection, not a measurement, and it
+is stated here as one.
+
+**What is being measured now.** The claim that has to hold before any of this is
+usable is not "it converges" but "it converges to the same matrix". `v3k0-p2`
+has three independent SuperLU runs agreeing entrywise to 1.6e-24 F, so it is the
+reference. The validation run is:
+
+```
+probe.py v3k0 2 BoomerAMG 8 pcb_convergence 2000
+```
+
+`MaxIts` raised to 2000 and `Tol` left at 1e-12 — deliberately that way round.
+The tolerance was never the problem; the budget for reaching it was. Relaxing an
+acceptance criterion so that a run passes is precisely what §6 forbids, and it
+would be no less a mute button here than anywhere else. `probe.py` now takes
+`MAXITS` as a sixth argument and, unlike the resource class, puts it in the
+output directory name: a solve stopped at its cap and a solve stopped at its
+tolerance report different matrices, and the per-rung directories exist to keep
+exactly that kind of pair from being conflated by a grader reading the newest
+run under a tag.
 
 ### 0.7 Next steps (replacing §5)
 
@@ -2380,8 +2526,11 @@ history operation.
 - Correct framing, from the subagent: **the band stops waste, it does not add
   resolution.** A fine *in-band* step must also be requested.
 - Solver conditioning is solved and is **not** a constraint: BoomerAMG at order 1
-  matches a SuperLU direct solve to 3e-15 and is ~2× faster. The historical
-  stalls were an order≥2 Chebyshev-smoother problem.
+  matches a SuperLU direct solve to 3e-15 and is ~2× faster. ~~The historical
+  stalls were an order≥2 Chebyshev-smoother problem.~~ **Retracted (§0.31):**
+  there were no stalls to explain. The one order-2 run cited as evidence was
+  converging at 9.4 orders per 500 iterations when its iteration cap stopped it,
+  and it set no smoother options at all.
 - Fugu `Bat+`↔`Net-(D11-A)` = **+3.5793e-11 F** is caused by **18 coarse
   tetrahedra straddling both terminals**, contributing +3.5934e-11 F = **100.4%**
   of it. Terminals share no nodes/overlap/UUIDs; copper is 1.2 mm apart. An
