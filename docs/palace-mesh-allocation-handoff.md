@@ -2034,6 +2034,49 @@ underwritten by the OOM guard's peak-swap heartbeat and by checking
 `kern.memorystatus_level` before launch — not by the resource policy. Launch
 conditions for run-02 were level 87, swap 3.4 GB of 5 GB, guard running.
 
+### 0.28 The wall was never the binding constraint — memory was, and still is
+
+The rung was launched under the new class at 07:00 and stopped externally at
+07:29, 4 of 18 terminals in. Two facts come out of those 29 minutes, and the
+second one matters more than the first.
+
+**The wall projection was right.** Four terminals at 1636 s against run-01's
+1520.8 s for the same four — 7% slower, flat, no degradation trend. Extrapolated
+completion ~4800 s, comfortably inside 7200 s. If time had been the only cost,
+§0.27's budget would have delivered the rung.
+
+**The machine could not afford the duration.** The OOM guard's peak-swap
+heartbeat, the only instrument that can see this at all:
+
+```
+07:23:28  level=35  swap=34.5GB   peak swap 36.4GB
+07:27:29  level=35  swap=35.0GB   peak swap 37.3GB
+07:28:30  level=34  swap=35.2GB   peak swap 38.5GB   <- stopped here
+```
+
+**38.5 GB of swap on a 36 GB machine — above the 38.1 GB in §0.26 that preceded
+the kernel panic.** Peak RSS across the eight ranks read about 6 GB at the time,
+against a 24 GiB ceiling, because the rest was swapped out. The ceiling saw a run
+using a quarter of its budget while the machine was in the worst memory state it
+has ever been measured in.
+
+**What this changes about §0.27.** Nothing in it is wrong — the wall really was
+what stopped run-01, the projection really does check out, and a longer wall is
+the correct fix for a run that is merely slow. But it was the wrong *first* fix,
+because it lengthens exposure to a hazard the resource policy cannot measure.
+The order of operations should have been: bound `ri_phys_footprint` first, then
+extend the wall. A two-hour budget is only spendable once the thing spending it
+can be stopped for the right reason.
+
+**So the fifth rung is not blocked on wall time and never was.** It is blocked on
+`lib/process_monitor.py` bounding a metric that does not collapse under swap
+(§0.26), or on running this rung somewhere with more physical memory. The
+`pcb_convergence` class stands and is correct on its own terms; it is simply not
+sufficient, and nothing should be launched under it on this host until the
+memory metric is fixed.
+
+Empty run directory and its evidence: `v3k5-p2/run-02/WHY-THIS-RUN-IS-EMPTY.txt`.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
