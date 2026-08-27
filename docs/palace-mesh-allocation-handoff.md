@@ -1747,6 +1747,77 @@ already supports via `conductor_edge_band_m` / `conductor_edge_max_planar_area_m
 and which the `v3gl*` meshes already exercise — combined with the ±5 mm vertical
 band. That is the remaining axis, and it is the one the last 8 entries name.
 
+### 0.25 Both axes graded: the trace passes twice, and the entrywise gate does not
+
+§0.24 named graded lateral refinement as the remaining axis, because the last 8
+failing entries all sat on 0.6 mm SOIC pads. This is that ladder, and the state
+it leaves the canary in.
+
+**Graded in both axes** — 4 mm lateral base with a 0.2 mm conductor-edge band at
+3.2e-7, plus the ±5 mm vertical band, order 2:
+
+```
+rung          z step       tets   trace_pF    d_rel   pos_off   recip_F
+v3k0-p2       2.000 mm   266994    23.4470        -         0  3.80e-26
+v3k1-p2       1.000 mm   371790    20.3231  -15.37%        0  3.31e-26
+v3k3-p2       0.500 mm   581382    19.2266   -5.70%        0  1.56e-26
+v3k4-p2       0.250 mm  1002870    18.9184   -1.63%        0  9.49e-27
+
+trace:  CONVERGED — finest step 1.63%, contraction 0.351, 0.281
+        observed order 1.83      Aitken limit 18.7979 pF
+matrix: NOT_CONVERGED — 37 of 171 entries
+```
+
+Observed order 1.83, the best of any ladder here, against 0.72 for the same axis
+run uniformly. **Two ladders now pass the trace gate** — this one and §0.24's
+five-rung vertical ladder — where before §0.24 none ever had.
+
+**The fifth rung of this ladder does not fit, and it is time rather than
+memory.** `v3k5` at 1845846 tetrahedra was killed at the 1800 s wall with peak
+RSS 22.23 GB, comfortably inside the 24 GiB ceiling. The finer lateral mesh
+costs fill-in: `v3h5` at 1.21M tets solved in 344 s, `v3k5` at 1.85M did not
+finish in 1800 s. That fifth rung is what took the vertical ladder from 37
+failing entries to 8, so the combined ladder is one affordable rung short of its
+best result, and the binding limit is the resource class's wall clock.
+
+**Where the canary stands.**
+
+```
+                          rungs   finest step   observed order   failing entries
+uniform vertical, p2         4        9.61%             0.72        56 of 171
+vertical graded, p2          5        0.78%             1.30         8 of 171
+vertical graded, p3          3        2.22%             1.32        43 of 171
+both axes graded, p2         4        1.63%             1.83        37 of 171
+```
+
+Thirty accepted runs. The tightest upper bound on the trace is **18.3979 pF**
+(`v3g2` at order 3), and every extrapolation from every axis and order now lands
+between 17.8 and 20.1 pF. For comparison, §0.18's order-1 h-ladder was
+converging toward 90.14 pF, which §0.20 showed to be excluded by a factor of
+nearly five.
+
+**The gate is still not passed and the canary is still not qualified.** The
+entrywise rule is the one §1 states, the trace is only a summary, and no ladder
+has brought all 171 entries inside 2% + 1 fF. What has changed is that the
+failure is now specific and small rather than general: 8 entries, all on the
+board's smallest conductors, in a ladder whose other 163 entries converge.
+
+**Next, in order:**
+
+1. The fifth rung of the combined ladder. It is a 1800 s wall, not memory, and
+   the run was progressing steadily at 22.2 GB when it was cut. Deciding whether
+   to extend that budget is a resource-policy call and is left to the owner —
+   note the wall is what stopped a *healthy* run, unlike the 24 GiB ceiling,
+   which stopped `v3a2-p4` and `v3k5`'s memory never approached.
+2. Combined grading at order 3, which reached the tightest bound per rung of
+   anything measured (`v3g2-p3`, 378k tets, 18.3979 pF, 21.5 GB).
+3. `C[6][15]` remains unexplained: it moves 0.1% under 4× lateral refinement and
+   is not converging under vertical refinement either, so neither axis accounts
+   for it.
+
+**Do not** read the trace passing as the canary passing, and do not reorder the
+gate: Fugu stays downstream of an entrywise pass, per §1.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
