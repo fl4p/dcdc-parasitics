@@ -35,7 +35,8 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | Grading the vertical band takes observed order 0.72 → 1.83 (§0.24, §0.25) | the conclusion that no ladder could converge |
 | A peak-RSS ceiling cannot bound a swapping process (§0.26, §0.29) | every cost figure in §0.9–§0.25, which understates what its run took |
 | BoomerAMG at order 2 never stalled; §0.19 misread an iteration cap (§0.31) | §0.19 route 1 and §0.30's "measured closed" escape-route list |
-| AMG reproduces the direct solve to 1.8e-8 fF on two meshes (§0.33) | the last reason to treat the iterative rung as unvalidated |
+| AMG reproduces the direct solve to 3.1e-8 fF on three meshes (§0.33, §0.34) | the last reason to treat the iterative rung as unvalidated |
+| AMG cost is linear in unknowns; the model is `unknowns x iterations` (§0.34) | §0.33's power-law fit, one of whose points was 1222 s asleep |
 | Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
 | `time.monotonic` on Darwin stops during sleep, so every wall limit under-counted (§0.32) | every `elapsed_s` recorded before 2026-08-27 |
 
@@ -64,12 +65,13 @@ summary statistic.
 blocks the fifth rung has changed a third time — to the wall.** AMG at order 2
 reproduces the SuperLU matrix entrywise on two meshes (worst 1.8e-8 fF, 0 of 324
 entries outside the gate, against a direct-solve run-to-run spread of 1.5e-9 fF).
-Its memory grows nearly linearly, projecting ~19.1 GB at `v3k5` — inside the
-24 GiB ceiling that stops the factorisation. Its wall projects to ~13800 s,
-outside the 7200 s `pcb_convergence` limit by about 2x. **The next decision is
-whether that wall gets raised**, and the cheap way to inform it is `v3k4` under
-AMG: one rung, ~2 hours, inside the current limit, and it pins a time exponent
-now bracketed at 1.08–1.18 from two points.
+`v3k4` has since been run under AMG (§0.34) and it pins the cost model: time and
+memory are both **linear in unknowns**, at 3.8e-7 s per unknown-iteration and
+8.17 GB per million unknowns, reproducible to 4.7% and 0.1% across consecutive
+rungs. `v3k5` projects to **8200–8600 s and ~20.7 GB** — the memory fits at 80%
+of the 24 GiB ceiling, the wall exceeds the 7200 s `pcb_convergence` limit by
+~15–20%. **The next decision is whether that wall gets raised**, to 10800 s;
+that is a §6 `ProcessLimits` change and is not made here.
 
 Note also that every `elapsed_s` in this document recorded before 2026-08-27 is
 a **lower bound** — the monitor's clock stopped while the machine slept (§0.32).
@@ -2578,6 +2580,13 @@ exceeds the harness overhead, so it is a *lower* bound on the defect's reach —
 `v3k0`'s +145.8 s margin means that run passed, not that its clock was honest.
 Every `elapsed_s` recorded before 2026-08-27 is a lower bound on the truth.
 
+> **SUPERSEDED (§0.34, 2026-08-28).** The fit below is wrong: `v3k3` run-02
+> spent 1222 s of its wall asleep, so one of its two points is inflated, and the
+> cost is not a power law in the mesh in any case. The measured `v3k4` point is
+> 4936 s against the 7281 s projected here. §0.34 replaces this with
+> `rate x unknowns x iterations`, validated to 4.7% on two consecutive rungs.
+> The matrix results above are unaffected.
+
 **Scaling, refit on clean numbers.** Two AMG points, `v3k0` → `v3k3`, a 2.021x
 increase in nodes. §0.31's cost paragraph projected from the zladder run and a
 per-solve average; this is the first fit on two measured pladder rungs, and the
@@ -2610,6 +2619,87 @@ needs its own §6 review, and it is not made here. Both projections are
 two-point extrapolations of a fit whose time exponent is bracketed rather than
 pinned, and `v3k4` — one rung, ~2 hours, inside the current wall — would pin it
 before anything is spent on `v3k5`.
+
+### 0.34 `v3k4` under AMG: the cost model is `unknowns x iterations`, not a power law
+
+`v3k4` at order 2 under BoomerAMG completed in **4936.2 s at 11.35 GB**, with
+`failures: []` and a +1.2 s margin over Palace's own `Total`. §0.33 projected
+7281 s. The miss was 32%, and diagnosing it replaced the fit with something that
+actually predicts.
+
+**Third mesh, same answer on the matrix.** Against the direct solve of the same
+rung (`v3k4-p2/run-01`, the one that survived at 21.38 GB):
+
+| | worst abs diff | worst rel diff | outside 2% + 1 fF |
+| --- | --- | --- | --- |
+| `v3k4` AMG vs SuperLU | 3.09e-8 fF | 1.70e-8 | 0 of 324 |
+
+Traces agree to all six digits at 18.918420 pF. With §0.33 this is three meshes
+spanning 392652 to 1389546 unknowns, all agreeing with the factorisation about
+seven orders inside the gate. **The iterative rung is validated; treat it as the
+default solver at order 2, not as an escape route.**
+
+**Why §0.33's projection missed: one of its two points was asleep.** `v3k3`
+run-02 ran 18:45:52 to 19:55:34 on 2026-08-27, and `pmset` logs sleeps of 504 s
+and 718 s inside that window — **1222 s of its 4174.8 s wall was the machine
+asleep**. That is the §0.32 fix working exactly as intended: the wall clock now
+counts sleep, because a wall *limit* must. But it means a wall time is no longer
+a compute time, and a two-point scaling fit built on one is worthless. `v3k0` and
+`v3k4` have no sleep in their windows — `v3k4` because it ran under `caffeinate`,
+which is now the right way to launch anything whose cost is going to be modelled.
+
+**The corrected data, and a model that holds.** CG cost is
+`rate x unknowns x iterations`; the iteration count is the part AMG is supposed
+to keep nearly mesh-independent, and it does — it *falls* slowly, 573.8 to 518.1
+mean iterations per RHS across a 3.5x growth in unknowns.
+
+| rung | unknowns (p=2) | total its (18 RHS) | compute s | s per unknown-iteration | peak GB | GB per M unknowns |
+| --- | --- | --- | --- | --- | --- | --- |
+| `v3k0` | 392652 | 10328 | 1806.7 | 4.455e-7 | 3.43 | 8.74 |
+| `v3k3` | 819234 | 9812 | 2922.4 | 3.636e-7 | 6.69 | 8.16 |
+| `v3k4` | 1389546 | 9326 | 4935.0 | 3.808e-7 | 11.35 | 8.17 |
+
+The last two columns are the result. Normalised for iterations, `v3k3` and
+`v3k4` cost the same per unit work to **4.7%**, and the same per unknown in
+memory to **0.1%**. Time and memory are both **linear in unknowns** — measured
+exponents 0.992 and 1.002 between those rungs. `v3k0` is 17% dearer per unit
+work, which is ordinary small-problem overhead amortised over less of it.
+
+§0.33's exponents (1.08–1.18 time, 0.947 memory) are **superseded**. They were a
+power law through two points, one of them inflated by sleep, fitted to a cost
+that is not a power law in the mesh at all.
+
+**`v3k5`, projected from the model rather than from a curve.** Two independent
+size estimates agree to 0.3% — 2.53M unknowns, from the tets-to-unknowns ratio
+(declining 1.471 → 1.409 → 1.386) and from the nodes-to-unknowns ratio (rising
+7.39 → 7.63 → 7.73). Iterations extrapolate to ~495 per RHS on the falling
+trend.
+
+| | projection | limit | verdict |
+| --- | --- | --- | --- |
+| compute | **8200–8600 s** (2.3 h) | 7200 s wall | over by ~15–20% |
+| peak RSS | **~20.7 GB** | 24 GiB = 25.77 GB | fits, at 80% of ceiling |
+
+**This shrinks the ask.** §0.33 said `v3k5` needed roughly double the wall; it
+needs about **20% more**, and a raise to 10800 s (3 h) would cover it with margin
+for the iteration-count extrapolation being optimistic. That is still a
+`ProcessLimits` change under §6, but it is a much smaller one, and it is now
+supported by a cost model validated on two consecutive rungs rather than by an
+extrapolated exponent. Run it under `caffeinate`.
+
+The memory number is the one to watch. 80% of the ceiling is real headroom but
+not generous, and `v3k4`'s *direct* solve straddled the same ceiling across two
+runs of the same rung. The AMG memory series is far better behaved — 8.16 and
+8.17 GB per million unknowns on consecutive rungs — so the risk is in the
+unknowns estimate, not in the per-unknown rate.
+
+**A tooling note, same class as §6.** The monitor armed on this run carried a
+wall-proximity warning gated on `ps -o etimes=`, which is a procps extension that
+macOS `ps` rejects outright. The variable was empty, the `[ -n "$et" ]` guard
+skipped the comparison, and the warning was dead code that would have stayed
+silent through the exact condition it existed to catch. Unevaluable input read as
+"nothing to report" — checklist item 1, in a throwaway monitor rather than in the
+library, but the same failure.
 
 ### 0.7 Next steps (replacing §5)
 
