@@ -20,8 +20,8 @@ position; §0.20 onward are the sections that still stand.
 result is 8 of 171 entries outside 2% + 1 fF, all of them on the board's three
 0.6 mm SOIC pads.
 
-**Tightest upper bound on the trace: 18.3979 pF** (`v3g2` at order 3, an accepted
-run). Every accepted trace is a bound, because `C_ii` is the discrete Ritz energy
+**Tightest upper bound on the trace: 18.1573 pF** (`v3k1` at order 3, an accepted
+run; see §0.26 on why its cost figure understates what it took). Every accepted trace is a bound, because `C_ii` is the discrete Ritz energy
 — verified, not assumed (§0.20). Extrapolations from both axes at both orders
 land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 
@@ -1894,6 +1894,63 @@ it.
 
 **Do not** read the trace passing as the canary passing, and do not reorder the
 gate: Fugu stays downstream of an entrywise pass, per §1.
+
+### 0.26 The 24 GiB ceiling does not bound these runs, because RSS is the wrong metric
+
+Combined grading at order 3 is the tightest result per rung so far — `v3k1-p3`,
+371790 tets, **18.1573 pF**, now the tightest accepted upper bound on the canary
+trace, and the order gap is closing (p3-p2 is -4.37 pF at the 2 mm rung, -2.17 at
+1 mm). The third rung, `v3k3-p3` at 581382 tets, does not exist and should not be
+attempted again as configured.
+
+**What happened.** It ran about 25 minutes and was killed with no rejection
+manifest — neither Palace's resource monitor nor the system OOM guard stopped
+it. The reason is in the guard's own log, and is only visible there because the
+heartbeat was changed on 2026-08-27 to carry the interval's peak rather than an
+instantaneous reading:
+
+```
+02:46:42  level=35  swap=31.0GB   peak swap 31.0GB
+02:57:47  level=35  swap=36.9GB   peak swap 37.1GB
+03:01:48  level=34  swap=37.2GB   peak swap 37.8GB
+03:02:48  level=83  swap= 6.0GB   peak swap 38.1GB   <- run gone
+```
+
+**38.1 GB of swap on a 36 GB machine, held for 25 minutes.** More swap than
+physical memory, sustained. That is the condition the OOM guard exists to
+prevent, and by its own rules it was right not to fire: `memorystatus_level`
+never dropped below 32, and 38.1 GB is 0.9 GB short of the 39 GB absolute swap
+arm. It came within a gigabyte.
+
+**The ceiling that should have stopped it measures the wrong thing.**
+`RESOURCE_LIMITS["pcb_diagnostic"]` caps *peak RSS* at 24 GiB. A process being
+swapped keeps its resident set below that cap indefinitely while its actual
+memory demand goes into swap — the resident set is precisely the part that stays
+in RAM. So the cap is not merely late (§0.22: it samples, so it reports rather
+than prevents), it is measuring a quantity that **falls** as the situation gets
+worse. The system OOM guard's own docstring says this in as many words: "RSS of a
+swapped hog collapses; phys_footprint is the honest one." The Palace resource
+policy limits the one that collapses.
+
+Every peak-RSS figure in §0.23-§0.25 should be read with that in mind. They are
+real, and they are not a measure of how close a run came to the machine's limit.
+`v3k1-p3` is reported at 22.56 GB peak RSS and completed — but the swap window
+above opens at 02:38, which covers it, so it too was running against swap. Its
+*number* is unaffected (swapping costs time, not accuracy, and the solve was a
+direct factorisation run to completion), but its cost classification was wrong.
+
+**Consequences for anyone continuing this work:**
+
+- Do not treat "peak RSS under 24 GiB" as evidence a run was affordable. Check
+  `sysctl vm.swapusage` during the run, or read the guard's peak-swap heartbeat
+  afterwards.
+- Combined grading at order 3 is affordable to about 372k tetrahedra on this
+  host and not at 581k. The order-2 combined ladder reaches 1.00M (`v3k4`,
+  21.4 GB, no swap excursion) and its fifth rung at 1.85M is wall-limited.
+- The right fix for the resource policy is to bound `ri_phys_footprint` rather
+  than RSS, which is the metric jetsam and Activity Monitor use. That is a change
+  to `lib/process_monitor.py`, shared with other campaigns, and is left to the
+  owner rather than made here.
 
 ### 0.7 Next steps (replacing §5)
 
