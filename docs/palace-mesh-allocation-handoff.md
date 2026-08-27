@@ -9,6 +9,53 @@ Repo root for all paths and commands: `/Users/fab/dev/pv/ee/dcdc-tools/parasitic
 
 ---
 
+## STATE AS OF 2026-08-27 — read this before anything below
+
+The document grew by fifteen subsections on 2026-08-26/27 and several of its
+earlier conclusions were overturned by later ones. This block is the current
+position; §0.20 onward are the sections that still stand.
+
+**The canary is NOT qualified.** Two ladders now pass the *trace* gate (§0.24,
+§0.25); no ladder passes the *entrywise* gate that §1 actually states. The best
+result is 8 of 171 entries outside 2% + 1 fF, all of them on the board's three
+0.6 mm SOIC pads.
+
+**Tightest upper bound on the trace: 18.3979 pF** (`v3g2` at order 3, an accepted
+run). Every accepted trace is a bound, because `C_ii` is the discrete Ritz energy
+— verified, not assumed (§0.20). Extrapolations from both axes at both orders
+land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
+
+**Four things settled this session, each overturning something above:**
+
+| finding | overturns |
+|---|---|
+| The prism split must order by coordinate, not vertex index (§0.17) | a ~21% numbering dependence in every earlier answer-class mesh |
+| Every trace is a Ritz energy, so an upper bound (§0.20) | §0.18's order-1 Aitken limit of 90.14 pF, excluded by 4.9× |
+| The air box is the dominant axis, ~9:1 over lateral (§0.21) | §0.10, "which axis: measured, and it is the lateral one" |
+| Grading the vertical band takes observed order 0.72 → 1.83 (§0.24, §0.25) | the conclusion that no ladder could converge |
+
+**Two library defects fixed, both fail-open:**
+`_tetrahedralize` chose prism diagonals from vertex indices (`5d533c8`), and
+`_refine_levels` subdivided any base gap that *overlapped* the refinement band
+rather than clipping to it, so every band narrower than the 44 mm air gap
+silently did nothing (`cab1d39`).
+
+**Reading the numbers below.** Everything in §0.9–§0.19 that came from an
+index-ordered mesh carries the §0.17 numbering uncertainty and has not been
+re-run. §2, §4 and §5 were already superseded by §0. The 2026-08-27 grid
+(§0.23–§0.25) is all SuperLU direct solves at 8 ranks, so no rung of it carries
+iterative-solver error.
+
+**Next steps** are listed at the end of §0.25. The blocking one is a fifth rung
+of the combined-grading ladder, which is stopped by the resource class's 1800 s
+wall — not by memory, which peaked at 22.2 GB of a 24 GiB ceiling.
+
+**Cost discipline.** These are full-system direct factorisations on a 36 GB
+machine and chaining them kernel-panicked it once (§0.22). Check free memory
+before each run; do not chain them.
+
+---
+
 ## 0. Session 2 result: step 1 answered NO, and the re-diagnosis (2026-08-26)
 
 §5 step 1 said: read `b20u`; if a fine in-band z step does not flip the
