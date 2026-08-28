@@ -128,7 +128,7 @@ FAILURE_RE = re.compile(
     r"(?:\bwarning\s*[!:]|\berror\s*[!:]|mfem abort|did not converge|"
     r"verification failed)", re.IGNORECASE)
 NORMAL_COMPLETION_MARKERS = ("Elapsed Time Report (s)", "Peak Memory")
-MESH_LIMITS = {"synthetic": {"nodes": 1_000_000, "tetrahedra": 5_000_000}, "pcb_diagnostic": {"nodes": 10_000_000, "tetrahedra": 50_000_000}, "pcb_convergence": {"nodes": 10_000_000, "tetrahedra": 50_000_000}}
+MESH_LIMITS = {"synthetic": {"nodes": 1_000_000, "tetrahedra": 5_000_000}, "pcb_diagnostic": {"nodes": 10_000_000, "tetrahedra": 50_000_000}, "pcb_convergence": {"nodes": 10_000_000, "tetrahedra": 50_000_000}, "pcb_convergence_iterative": {"nodes": 10_000_000, "tetrahedra": 50_000_000}}
 RESOURCE_LIMITS = {
     "synthetic": ProcessLimits(300.0, 8 * 1024**3, 1024**3, 2**63 - 1, 2**31 - 1),
     "pcb_diagnostic": ProcessLimits(30 * 60.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
@@ -145,6 +145,27 @@ RESOURCE_LIMITS = {
     # re-derives its resource_limits from this table, so widening the existing
     # class would fail every accepted run already on disk.
     "pcb_convergence": ProcessLimits(2 * 3600.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
+    # BoomerAMG-preconditioned CG converts the finest rung from a memory-bound
+    # problem into a time-bound one, and this class buys the time. Measured cost
+    # model (docs handoff 0.34), validated on two consecutive rungs to 4.7%:
+    # time = 3.808e-7 s per unknown-iteration, memory 8.17 GB per million
+    # unknowns. v3k5 is 2530170 unknowns at ~495 iterations over 18 right-hand
+    # sides, so ~8611 s and ~20.7 GB. The wall here is 18000 s -- 2.09x that
+    # projection, well clear of the 1.1 headroom ratio, and deliberately roomier
+    # than the model demands because the iteration-count extrapolation is the
+    # soft part of it.
+    #
+    # A longer wall is safe in a way a larger ceiling would not be: the memory
+    # bound is the one protecting the machine (0.22 lost it to swap once), and it
+    # is pinned identical to pcb_convergence here. The worst a too-generous wall
+    # can cost is wasted time on a run that was never going to converge.
+    #
+    # A class of its own, for the same reason pcb_convergence was carved out of
+    # pcb_diagnostic rather than widening it: the run manifest re-derives its
+    # resource_limits from this table, so editing pcb_convergence in place would
+    # fail every accepted run already on disk -- including the v3k3 and v3k4 AMG
+    # runs that carry the entire matrix-agreement evidence for 0.33 and 0.34.
+    "pcb_convergence_iterative": ProcessLimits(5 * 3600.0, 24 * 1024**3, 10 * 1024**3, 2**63 - 1, 2**31 - 1),
 }
 
 

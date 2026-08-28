@@ -2777,6 +2777,84 @@ qualification on this host is not a scheduling problem to be solved with a longe
 wall; it needs a machine with roughly 128–256 GB, and that decision can be made
 now rather than after the canary gate closes.
 
+### 0.36 The wall raise: a new class, not a larger number
+
+`v3k5` under AMG needs ~8611 s (§0.34) against a 7200 s limit. The wall was
+raised to **18000 s**, as a new resource class `pcb_convergence_iterative`.
+
+**Why a new class.** `validate_palace_run_manifest` re-derives
+`expected_resource_limits` from the live table and compares it to what the run
+recorded. Editing `pcb_convergence` in place was tried and measured first: all
+four AMG runs on disk went from their current state to
+`Palace run resource limits mismatch`. That is the same failure mode the existing
+comment on `pcb_convergence` documents as the reason *it* was carved out of
+`pcb_diagnostic` rather than widening it.
+
+One clarification, because the first version of this argument was too strong.
+**Re-attestation of prior runs was already broken and by a different check.**
+`_implementation_identity()` fingerprints `lib/palace.py`, so *any* library edit
+— including §0.32's clock fix — makes every earlier run fail with
+`implementation identity mismatch`. Both approaches break that. What only the
+in-place edit breaks is the *truth of the record*: `v3k4`'s manifest says it was
+accepted under a 7200 s budget, which is a fact about that run, and a future run
+recording 18000 s under the same class name would make the two incomparable. A
+new class keeps every historical record accurate.
+
+**Guard review checklist.**
+
+1. **Unevaluable input.** Unchanged. A missing or unparseable class still fails
+   at `resource_class not in RESOURCE_LIMITS`; the new entry is present in both
+   `RESOURCE_LIMITS` and `MESH_LIMITS`, which are separately indexed and would
+   raise a `KeyError` on a half-added class. Verified by selecting the class.
+2. **Monotonicity.** The wall still fires, just later: a run is bounded at
+   18000 s rather than unbounded. As a run gets longer the verdict moves toward
+   kill and never back to pass. The far tail — a hung run — is still killed.
+3. **Preconditions.** The wall is enforced on the sleep-inclusive clock from
+   §0.32, so the extra time cannot be silently consumed by a sleeping machine.
+   The class is reachable from `probe.py`'s `CLASS` argument, verified by
+   launching with it.
+4. **Source of truth.** The value is derived, not chosen for feel: 3.808e-7 s
+   per unknown-iteration x 2530170 unknowns x 495 iterations x 18 RHS = 8611 s.
+   The unknown count is exact (`node_count + edge_count` from `v3k5`'s mesh
+   manifest), not modelled. `test_the_iterative_wall_covers_the_measured_cost_model`
+   pins the arithmetic and the headroom ratio.
+5. **Persistence.** Nothing cached. Limits are read from the table per run.
+6. **Provenance.** Each run records its own class and limits, so a
+   `pcb_convergence_iterative` run is distinguishable on disk from a
+   `pcb_convergence` one, forever. No historical record is rewritten.
+7. **Known-bad calibration.** The in-place edit was constructed and its damage
+   observed before choosing the alternative — all four runs flipping to
+   `resource limits mismatch` — and
+   `test_widening_an_existing_class_would_invalidate_accepted_runs` freezes that
+   result. The kill path itself is already calibrated by `v3k5-p2` run-01, which
+   this very wall exists because of: it was killed at 1800 s.
+8. **Fix vs mute.** This is the checklist item that has to be argued rather than
+   asserted, because a wall raise is a fail-open change and §6 forbids relaxing a
+   criterion to make a run pass. The distinction is that **the wall is a budget,
+   not an acceptance criterion**. Nothing about a matrix's correctness is judged
+   by it. The quantities that decide whether a run is accepted — the 2% + 1 fF
+   entrywise gate, `Tol`, `explicit_residual_tolerance`, the memory ceiling — are
+   all untouched. Relaxing `Tol` so a solve stops earlier would be the mute
+   button; giving a solve the time to reach an unchanged `Tol` is the opposite.
+   §0.31 is the precedent: the fix there was `MaxIts`, deliberately *not* the
+   tolerance.
+
+**The bound that actually protects the machine is unmoved.** `peak_rss_bytes`
+stays at 24 GiB, pinned equal to `pcb_convergence` and asserted in
+`test_the_iterative_convergence_class_moves_only_the_clock`. §0.22 lost this
+machine to swap once; a wider ceiling would risk that again, while a wider wall
+cannot. The worst a too-generous wall can cost is time on a run that was never
+going to converge.
+
+**On 18000 s specifically.** The model asks for 8611 s and 10800 s would clear
+the 1.1 headroom ratio. 18000 s is 2.09x the projection — roomier than the model
+demands, chosen deliberately: the iteration-count extrapolation is the soft part
+of the model, and the cost of an over-generous wall is bounded by the memory
+ceiling and the operator's attention, neither of which it touches.
+
+**Runtime cost.** None. The change adds a dictionary entry; no code path runs
+that did not run before. Suite: 1131 passed, 1 skipped.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the

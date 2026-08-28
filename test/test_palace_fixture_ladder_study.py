@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import copy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import os
 from pathlib import Path
@@ -24,6 +24,7 @@ from experiments.palace_fixture_ladder_study import (  # noqa: E402
     _p_shared_mesh_gate,
 )
 import palace as palace_module  # noqa: E402
+from provenance import canonical_equal  # noqa: E402
 from palace import (  # noqa: E402
     MESH_LIMITS,
     RESOURCE_LIMITS,
@@ -716,6 +717,58 @@ def test_the_convergence_wall_covers_the_measured_projection():
             >= projected_s * RESOURCE_MINIMUM_HEADROOM_RATIO)
     # and the class it was carved out of does not cover it -- which is why it exists
     assert RESOURCE_LIMITS["pcb_diagnostic"].wall_time_s < projected_s
+
+
+def test_the_iterative_convergence_class_moves_only_the_clock():
+    """AMG trades memory for time, so only the wall may move.
+
+    The memory ceiling is the bound that protects the machine (0.22 lost it to
+    swap once). A wall raise cannot hurt the host; a ceiling raise can. Every
+    bound except the clock is pinned equal to pcb_convergence.
+    """
+    convergence = RESOURCE_LIMITS["pcb_convergence"]
+    iterative = RESOURCE_LIMITS["pcb_convergence_iterative"]
+    assert iterative.wall_time_s == 5 * 3600.0
+    assert iterative.wall_time_s > convergence.wall_time_s
+    assert iterative.peak_rss_bytes == convergence.peak_rss_bytes
+    assert iterative.output_bytes == convergence.output_bytes
+    assert iterative.refined_panels == convergence.refined_panels
+    assert (iterative.gmres_iterations_per_rhs
+            == convergence.gmres_iterations_per_rhs)
+    assert (MESH_LIMITS["pcb_convergence_iterative"]
+            == MESH_LIMITS["pcb_convergence"])
+
+
+def test_the_iterative_wall_covers_the_measured_cost_model():
+    """The wall is a measurement, not a round number that felt generous.
+
+    Cost model from 0.34, validated on v3k3 -> v3k4 to 4.7%: 3.808e-7 s per
+    unknown-iteration. v3k5 is 2530170 unknowns (node_count + edge_count, read
+    from its mesh manifest) at ~495 iterations over 18 right-hand sides.
+    """
+    projected_s = 3.808e-7 * 2530170 * 495 * 18
+    assert 8000.0 < projected_s < 9000.0
+    assert (RESOURCE_LIMITS["pcb_convergence_iterative"].wall_time_s
+            >= projected_s * RESOURCE_MINIMUM_HEADROOM_RATIO)
+    # and the class it was carved out of does not cover it -- which is why it exists
+    assert RESOURCE_LIMITS["pcb_convergence"].wall_time_s < projected_s * 1.1
+
+
+def test_widening_an_existing_class_would_invalidate_accepted_runs():
+    """Why this is a new class rather than a larger number in the old one.
+
+    validate_palace_run_manifest re-derives expected_resource_limits from the
+    live table and compares it to what the run recorded. Editing a class in
+    place therefore rejects every run already accepted under it -- the failure
+    mode that made pcb_convergence a separate class in the first place.
+    """
+    recorded = {**asdict(RESOURCE_LIMITS["pcb_convergence"]),
+                **MESH_LIMITS["pcb_convergence"]}
+    widened = replace(RESOURCE_LIMITS["pcb_convergence"], wall_time_s=18000.0)
+    assert not canonical_equal(
+        recorded, {**asdict(widened), **MESH_LIMITS["pcb_convergence"]})
+    # adding a class leaves the old one, and so every run under it, untouched
+    assert RESOURCE_LIMITS["pcb_convergence"].wall_time_s == 2 * 3600.0
 
 
 def test_entrywise_ladder_gate_uses_fixed_two_percent_plus_femttofarad():
