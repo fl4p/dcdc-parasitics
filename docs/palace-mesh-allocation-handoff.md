@@ -37,6 +37,7 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | BoomerAMG at order 2 never stalled; §0.19 misread an iteration cap (§0.31) | §0.19 route 1 and §0.30's "measured closed" escape-route list |
 | AMG reproduces the direct solve to 3.1e-8 fF on three meshes (§0.33, §0.34) | the last reason to treat the iterative rung as unvalidated |
 | AMG cost is linear in unknowns; the model is `unknowns x iterations` (§0.34) | §0.33's power-law fit, one of whose points was 1222 s asleep |
+| Fugu's *unrefined* mesh is 3.65M unknowns = 116% of the memory ceiling (§0.35) | any plan that treats Fugu as reachable on this host |
 | Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
 | `time.monotonic` on Darwin stops during sleep, so every wall limit under-counted (§0.32) | every `elapsed_s` recorded before 2026-08-27 |
 
@@ -72,6 +73,12 @@ rungs. `v3k5` projects to **8200–8600 s and ~20.7 GB** — the memory fits at 
 of the 24 GiB ceiling, the wall exceeds the 7200 s `pcb_convergence` limit by
 ~15–20%. **The next decision is whether that wall gets raised**, to 10800 s;
 that is a §6 `ProcessLimits` change and is not made here.
+
+**Fugu, measured rather than assumed (§0.35).** Fugu2's *unrefined* mesh — no
+refinement targets at all — is already **3.65M unknowns, ~29.8 GB, 116% of the
+24 GiB ceiling**, and a convergence ladder starts there rather than ending
+there. Three rungs need ~100 GB. Fugu is **not reachable on this host**; it needs
+roughly 128–256 GB. That is independent of the canary path, which is unaffected.
 
 Note also that every `elapsed_s` in this document recorded before 2026-08-27 is
 a **lower bound** — the monitor's clock stopped while the machine slept (§0.32).
@@ -2700,6 +2707,75 @@ skipped the comparison, and the warning was dead code that would have stayed
 silent through the exact condition it existed to catch. Unevaluable input read as
 "nothing to report" — checklist item 1, in a throwaway monitor rather than in the
 library, but the same failure.
+
+### 0.35 Fugu is memory-blocked on this host, and the floor mesh already proves it
+
+§0.34's cost model makes Fugu's feasibility a cheap question: it needs an
+unknown count, not a solve. The answer is on disk already, and it is decisive.
+
+**The measurement.** `out/palace-qualification/fugu2-plc-source-bound-v14`
+carries a meshed Fugu2 with `max_planar_area_m2: null` and
+`max_vertical_step_m: null` — **no refinement targets at all**, the minimal
+constrained triangulation of the geometry. Unknowns at order 2 are
+`node_count + edge_count` exactly (verified against `v3k4`: 179749 + 1209797 =
+1389546, the number Palace prints).
+
+| mesh | nodes | edges | tets | unknowns (p=2) | projected peak |
+| --- | --- | --- | --- | --- | --- |
+| canary `v3k4`, refined | 179749 | 1209797 | 1002870 | 1389546 | 11.4 GB (measured 11.35) |
+| canary `v3k5`, refined | 324429 | 2205741 | 1845846 | 2530170 | 20.7 GB |
+| **Fugu2, UNREFINED** | 544623 | 3107158 | 2156478 | **3651781** | **29.8 GB** |
+
+**Fugu's coarsest possible mesh is larger than the canary's finest.** 3.65M
+unknowns against the 24 GiB ceiling's 3.15M is **116% of budget**, and 29.8 GB
+against this machine's 36 GB of physical RAM is 83% of a machine that also runs
+the user's IDEs and that §0.22 already kernel-panicked once.
+
+**And a floor is not a ladder.** §1 requires *converged* matrices, so that rung
+is the starting point, not the answer. Stepping at the measured `v3k4`→`v3k5`
+ratio of 1.82x in unknowns:
+
+| rung | unknowns | peak | 82 RHS | on this host |
+| --- | --- | --- | --- | --- |
+| 1 | 3.65M | 29.8 GB | 15.7 h | over the 24 GiB ceiling |
+| 2 | 6.65M | 54.3 GB | 28.5 h | exceeds 36 GB of RAM |
+| 3 | 12.10M | 98.8 GB | 51.9 h | exceeds 36 GB of RAM |
+
+**A three-rung Fugu ladder needs on the order of 100 GB and four needs 180 GB.**
+This is a procurement question and has been one all along; what is new is that it
+is now quantified rather than assumed, and quantified for the price of reading
+two manifests.
+
+**Why Fugu is so much worse than its area suggests.** The board is 50 x 88 mm
+against the canary's 45 x 40 — only **2.44x the area** — but the mesh floor is
+set by conductor boundary vertices, not by area. The census:
+
+| | tracks | vias | pads | zones |
+| --- | --- | --- | --- | --- |
+| canary | 34 | **0** | 30 | 3 |
+| Fugu2 | 964 | **172** | 399 | 12 |
+
+Roughly thirty times the copper features, and 172 vias against a canary that has
+**none**. Every via is a vertical structure the PLC must resolve exactly. The
+canary was chosen as a canary because it is simple; that simplicity is exactly
+what makes its resource picture a poor guide to Fugu's, and §0.30's remark that
+"nothing about the canary's resource picture makes Fugu look reachable" is now a
+measurement instead of an impression.
+
+**Confidence.** The unknown counts are exact, read from mesh manifests, not
+modelled. Only the GB-per-unknown rate is extrapolated, and it was measured at
+8.16 and 8.17 GB per million unknowns on two consecutive canary rungs — 0.1%
+apart. The one genuine caveat is that Fugu's mesh has a different character
+(0.2526 nodes per tet against the canary's 0.1792, reflecting all that copper
+surface), so its per-unknown rate could differ; but the verdict survives a large
+error in that rate, because the *floor* mesh is already over budget.
+
+**What this does and does not change.** It does not touch the canary path:
+§0.34's `v3k5` still fits at 20.7 GB and steps 1–3 of the plan proceed unchanged.
+What it changes is the framing of everything downstream of a canary pass. Fugu
+qualification on this host is not a scheduling problem to be solved with a longer
+wall; it needs a machine with roughly 128–256 GB, and that decision can be made
+now rather than after the canary gate closes.
 
 ### 0.7 Next steps (replacing §5)
 
