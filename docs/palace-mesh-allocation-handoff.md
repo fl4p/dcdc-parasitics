@@ -15,10 +15,13 @@ The document grew by fifteen subsections on 2026-08-26/27 and several of its
 earlier conclusions were overturned by later ones. This block is the current
 position; §0.20 onward are the sections that still stand.
 
-**The canary is NOT qualified.** Two ladders now pass the *trace* gate (§0.24,
-§0.25); no ladder passes the *entrywise* gate that §1 actually states. The best
-result is 8 of 171 entries outside 2% + 1 fF, all of them on the board's three
-0.6 mm SOIC pads.
+**The canary is NOT qualified — and is now 2 entries away (§0.37).** The v3k
+ladder's fifth rung took the entrywise gate from 37 of 171 failing to **2 of
+171**: `C[6][8]` and `C[6][9]`, both couplings of `Net-(U1-VCCI-Pad3)` to another
+U1 gate-driver SOIC pin, both at ~2.90% against a 2% band. The trace passes at
+0.62%. A sixth vertical rung is out of reach (~41 GB) and would be the wrong
+axis anyway: the v3k ladder holds `max_planar_area_m2` fixed on every rung, so
+the lateral ladder these pad entries actually name has never been run.
 
 **Tightest upper bound on the trace: 18.1573 pF** (`v3k1` at order 3, an accepted
 run; see §0.26 on why its cost figure understates what it took). Every accepted trace is a bound, because `C_ii` is the discrete Ritz energy
@@ -38,6 +41,8 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | AMG reproduces the direct solve to 3.1e-8 fF on three meshes (§0.33, §0.34) | the last reason to treat the iterative rung as unvalidated |
 | AMG cost is linear in unknowns; the model is `unknowns x iterations` (§0.34) | §0.33's power-law fit, one of whose points was 1222 s asleep |
 | Fugu's *unrefined* mesh is 3.65M unknowns = 116% of the memory ceiling (§0.35) | any plan that treats Fugu as reachable on this host |
+| The fifth rung takes the entrywise gate from 37 failing entries to 2 (§0.37) | §0.30's projection that one rung would close all of them |
+| The v3k ladder refines vertically only; `max_planar_area_m2` is held (§0.37) | the claim that it closes the pad entries by refining laterally |
 | Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
 | `time.monotonic` on Darwin stops during sleep, so every wall limit under-counted (§0.32) | every `elapsed_s` recorded before 2026-08-27 |
 
@@ -2854,6 +2859,103 @@ ceiling and the operator's attention, neither of which it touches.
 
 **Runtime cost.** None. The change adds a dictionary entry; no code path runs
 that did not run before. Suite: 1131 passed, 1 skipped.
+
+### 0.37 The fifth rung: 37 failing entries become 2, and the projection was wrong again
+
+`v3k5-p2` under BoomerAMG completed in **9539.1 s at 20.11 GB**, `failures: []`,
+all 18 solves converged (504–553 iterations, mean 514.8), +2.2 s margin over
+Palace's `Total`. It needed the §0.36 wall: 9539 s would have been killed by
+`pcb_convergence`'s 7200 s.
+
+Cost model check, from §0.34: **projected 8611 s and 20.7 GB, measured 9539 s
+and 20.11 GB** — time 10.8% high, memory 2.9% low. The model holds at a rung
+beyond the two it was fitted on.
+
+**The gate, calibrated first.** The four-rung ladder reproduces §0.25 exactly —
+37 of 171, finest step 1.63%, observed order 1.8310 — so the harness is the same
+one that produced the published number. Adding `v3k5`:
+
+```
+rung      z step      trace_pF    pos_off   recip_F
+v3k0-p2   2.000 mm     23.4470          0  4.10e-26
+v3k1-p2   1.000 mm     20.3231          0  3.31e-26
+v3k3-p2   0.500 mm     19.2266          0  1.62e-26
+v3k4-p2   0.250 mm     18.9184          0  9.49e-27
+v3k5-p2   0.125 mm     18.8023          0  2.49e-23   <- AMG
+
+trace:  CONVERGED — finest step 0.62%, observed order 1.41
+matrix: NOT_CONVERGED — 2 of 171 entries (was 37 at four rungs)
+```
+
+**The canary is still not qualified, and it is two entries away.**
+
+**Which two, and why they are the same two as always.**
+
+| entry | terminals | final step | band |
+| --- | --- | --- | --- |
+| C[6][8] | `Net-(U1-VCCI-Pad3)` ↔ `unconnected-(U1-DIS-Pad5)` | 1.54 fF | **2.90%** |
+| C[6][9] | `Net-(U1-VCCI-Pad3)` ↔ `unconnected-(U1-DT-Pad6)` | 1.55 fF | **2.89%** |
+
+All three terminals are U1 gate-driver SOIC pins — the 0.6 mm pads §0.24 named as
+the last obstacle. The failure has been the same feature scale for three
+sections.
+
+**§0.30's projection was wrong, and the reason is worth keeping.** It projected
+every failing entry inside the band, worst at 0.55x, by assuming each would keep
+its measured contraction ratio. The ratios did not hold — **they degraded on the
+last rung**:
+
+```
+C[6][8]  steps fF   21.202   9.157   3.189   1.542
+         ratios              0.432   0.348   0.483   <- projection assumed 0.348
+C[6][9]  steps fF   22.208   9.638   3.344   1.553
+         ratios              0.434   0.347   0.464
+C[6][15] steps fF   44.463  16.815   4.538   1.484
+         ratios              0.378   0.270   0.327   <- kept contracting, passed at 1.58%
+```
+
+A projection that extrapolates a contraction ratio cannot see the ratio change,
+and the trace's observed order fell from 1.83 to 1.41 in the same step, saying
+the same thing. This is the third projection in this document to be overturned
+by the measurement it predicted (§0.19→§0.31, §0.33→§0.34, and now §0.30→here).
+The pattern is consistent enough to state as a rule: **in this campaign, a
+projected margin under about 2x has not survived contact with the rung it
+projected.**
+
+**What is genuinely closed.** A sixth vertical rung is not the answer and is not
+available anyway: `v3k6` would be ~5.1M unknowns and ~41 GB, past the machine.
+Projecting these two at their *observed* 0.48 ratio gives ~1.42%, inside the
+band — but that is exactly the extrapolation that just failed, offered again one
+rung later, and it should not be believed without the rung.
+
+**The remaining axis is lateral, and this ladder never touched it.** Correcting
+something stated earlier in this campaign: the v3k ladder is *not* a both-axes
+*ladder*. `max_planar_area_m2` is **8e-06 on every one of its five rungs**, as
+are `conductor_edge_band_m` and `conductor_edge_max_planar_area_m2` — the gate's
+`held` check requires it. What v3k has over §0.24's v3h ladder is a *fixed*
+finer conductor-edge grading, not lateral refinement along the ladder. So the
+claim that this ladder would close the pad entries *because it refines laterally*
+was wrong; it refines vertically, and it closed 35 of 37 anyway.
+
+That leaves the real lateral ladder unrun, and it is now the named next step:
+hold `max_vertical_step_m` at 0.000125 and step
+`conductor_edge_max_planar_area_m2` down from 3.2e-07, which is the parameter
+that actually resolves a 0.6 mm pad edge.
+
+**Two caveats on the "2".**
+
+1. **No noise floor was applied**, matching §0.25 so the comparison is
+   like-for-like. Both survivors fail at ~2.9% against a 2% band — near enough
+   that a per-entry re-meshing floor could move them to *unevaluable* rather than
+   *failed*. §0.13's floor was measured by perturbing the base area and §0.15.2
+   already flagged it as not applying to a nested ladder. On a two-entry margin
+   this stops being an academic gap.
+2. **`v3k5`'s reciprocity is 2.49e-23 F against `v3k4`'s 9.49e-27** — about
+   2600x worse, and the one place the iterative solver is visibly worse than the
+   factorisation, since CG stops at `Tol` rather than solving exactly. It passes
+   the health gate with enormous margin (2.5e-8 fF against a 1 fF band) and does
+   not affect any verdict here, but it is the number to watch if AMG is used at
+   finer rungs.
 
 ### 0.7 Next steps (replacing §5)
 
