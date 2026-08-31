@@ -2957,6 +2957,124 @@ that actually resolves a 0.6 mm pad edge.
    not affect any verdict here, but it is the number to watch if AMG is used at
    finer rungs.
 
+### 0.38 The lateral axis: measured, and the mesher's own limit on it
+
+§0.37 named the lateral ladder as the next step and noted it had never been run.
+It has now been run, and the axis separation is measured from the meshes rather
+than inferred from the parameters. The mesh is a prism extrusion, so distinct
+planar `(x, y)` points and z levels are independent and countable:
+
+```
+v3k3/v3k4/v3k5   planar_xy 3617 3617 3617   z_levels 30 50 90   purely vertical
+v3w0/v3w1/v3k5   planar_xy 3202 3350 3617   z_levels 90 90 90   purely lateral
+```
+
+The first row is the §0.37 correction, confirmed from the meshes: the v3k ladder
+never moved a planar point. The second row is the new ladder.
+
+**The ladder is built coarsening, not refining.** v3k5 is already 20.11 GB
+against a 24 GiB ceiling, so every rung finer than it is unreachable. Holding
+`max_vertical_step_m` at 0.000125 and stepping `conductor_edge_max_planar_area_m2`
+*up* from 3.2e-07 makes v3k5 the finest rung — a rung already paid for — and
+every new rung cheaper than one already run.
+
+#### The cost model's third confirmation
+
+`v3w0` (edge area 5.12e-06, 2234335 unknowns): **7952.29 s, 17.783 GB,
+`failures: []`**, 18/18 solves converged in 9708 iterations (mean 539.3), Palace
+`Total` 7950.67 s for a +1.62 s margin. §0.34 projected 7882 s and 18.26 GB:
+**0.9% and 2.6% out**. The `unknowns x iterations` model has now held across
+three rungs and two axes.
+
+#### The entries that survive the vertical ladder are the most lateral-sensitive
+
+`v3w0` against `v3k5` — same z, 16x apart in conductor-edge area, 19 of 171
+entries outside the 2% + 1 fF band:
+
+```
+  C[ 6][ 9]   58.34 fF   delta 4.60 fF   7.88%   <- rank 1
+  C[ 6][10]   96.37 fF   delta 5.39 fF   5.59%
+  C[ 6][ 8]   56.12 fF   delta 2.94 fF   5.24%   <- rank 3
+```
+
+`C[6][8]` and `C[6][9]` are exactly the two entries that survive the v3k ladder
+(§0.37), and they rank 1st and 3rd in lateral sensitivity out of all 171. That
+is a coherent physical story rather than noise: these are U1 SOIC pad-to-pad
+couplings whose field is set by lateral geometry at the pad edge. It is not yet
+proof — a two-rung delta is refinement and re-triangulation combined, which is
+what the third rung separates.
+
+#### What the lateral parameter actually does, and where it stops
+
+`conductor_edge_max_planar_area_m2` is not only an area target. The mesher
+pre-splits conductor boundary segments at `sqrt(2 * edge_area)`
+(`lib/palace_plc_mesh.py:1414`, `_resplit_conductor_segments`), and
+`allow_boundary_steiner=False` (line 551) means Triangle may not add boundary
+points afterwards. So that expression *is* the discretisation length of a pad
+outline:
+
+```
+v3w0  5.12e-06 -> 3.200 mm      v3w1  1.28e-06 -> 1.600 mm
+v3k5  3.20e-07 -> 0.800 mm
+```
+
+**A 0.6 mm SOIC pad edge is therefore a single undivided segment on every rung
+this campaign has ever run, v3k5 included.** The ladder stops one rung short of
+resolving the geometry whose entries fail.
+
+The rung that would halve it, `edge_area = 8e-08` (0.400 mm), **does not exist**:
+
+```
+ValueError: Palace PLC mesh leaves 1.61% of its 5913 conductor edge band cells
+above the refinement area, so the recorded refinement was not applied
+```
+
+against `MAX_EDGE_AREA_VIOLATION_FRACTION = 0.01`. With boundary Steiner points
+disabled, Triangle cannot meet an area target at the scale of the segments it is
+not allowed to split. The guard is correct — it reports that the refinement it
+recorded did not happen — and it was **not** relaxed; the unvalidated mesh was
+deleted rather than left on disk, because `probe.py` hard-links a tag's `pcb.msh`
+from its manifest without re-validating.
+
+**But 0.4 mm was the wrong target.** `edge_area = 1.6e-07` gives **0.566 mm**,
+which is also below the 0.6 mm pad edge, and it validates. So a lateral rung that
+splits the pad edge is reachable; only the rung beyond it is not. At
+`max_vertical_step_m = 0.00025`, where there is memory headroom, that gives a
+uniform-`sqrt(2)` ladder whose middle rung is already solved:
+
+| rung | edge area | segment | planar_xy | z | unknowns |
+|---|---|---|---|---|---|
+| `v3x3` | 6.4e-07 | 1.131 mm | 3452 | 50 | 1,324,719 |
+| `v3k4` | 3.2e-07 | 0.800 mm | 3617 | 50 | 1,389,546 (**run**) |
+| `v3x1` | 1.6e-07 | **0.566 mm** | 3877 | 50 | 1,491,276 |
+
+#### Two things this retires
+
+**§0.13's per-entry noise floor does not transfer to this ladder**, for two
+independent reasons. It was measured on `v3n99`/`v3e05`/`v3n101`, which predate
+the §0.17 coordinate-ordering fix and so carry the prism-split dependence that
+was injecting 20-50% swings; and it was measured at a trace of ~99.6 pF where
+this ladder sits at 18.8 pF. `C[6][8]` has `|C|` = 330.87 fF there and 56.12 fF
+here. The floor reproduces exactly (45 of 171, traces 99.7826 / 99.5917 /
+99.5455 pF), so the harness is calibrated, but its absolute fF values describe a
+different regime. The post-§0.17 floor remains **unmeasured, not zero**.
+
+**§0.37's reciprocity caveat is resolved and is not an anomaly.** `v3w0`
+reciprocity is 2.63e-23 F against `v3k5`'s 2.49e-23 — two independent 90-level
+meshes agreeing to 6%, where `v3k4` at 50 levels sits at 9.49e-27. The elevated
+figure is systematic to AMG at 90 z-levels, not a property of `v3k5`. It still
+passes the 1 fF health band by seven orders.
+
+#### Reading this against the kb note on refinement allocation
+
+`~/dev/kb/simulation/uniform-refinement-hides-the-real-convergence-order.md` says
+to ask which sub-region a refinement actually landed in before concluding the
+problem is singular. Here the answer is that `conductor_edge_band_m` is a single
+global 0.2 mm collar around *every* conductor, so lateral refinement is spread
+uniformly over all 34 tracks, 30 pads and 3 zones, while the residual lives at
+two pins of one SOIC. The mesher exposes no per-conductor band, so the targeted
+refinement that note recommends is not currently expressible.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
@@ -3162,7 +3280,10 @@ Other traps:
   accordingly; this killed two runs.
 
 **Scripts** (args are positional):
-- `out/palace-qualification/simple-hb-refined-mesh-v1/regenerate.py MAX_AREA MAX_VSTEP TAG [BAND_LO BAND_HI]` — `1e30` disables lateral
+- `out/palace-qualification/simple-hb-refined-mesh-v1/regenerate.py MAX_AREA MAX_VSTEP TAG [BAND_LO BAND_HI] [EDGE_BAND EDGE_AREA]` — `1e30` disables lateral. The last two grade the triangulation toward
+  conductor edges and are what every v3k/v3w/v3x rung uses; `EDGE_AREA`
+  also sets the conductor-segment split length to `sqrt(2*EDGE_AREA)`
+  (§0.38), so it, not `MAX_AREA`, is the lateral knob for pad edges.
 - `out/palace-qualification/simple-hb-refined-mesh-v1/meshsplit.py` — per-volume tet split
 - `out/palace-qualification/simple-hb-zladder-v1/probe.py TAG [ORDER] [SOLVER] [RANKS]`
 - `out/palace-qualification/simple-hb-zladder-v1/grade.py`
