@@ -15,13 +15,23 @@ The document grew by fifteen subsections on 2026-08-26/27 and several of its
 earlier conclusions were overturned by later ones. This block is the current
 position; §0.20 onward are the sections that still stand.
 
-**The canary is NOT qualified — and is now 2 entries away (§0.37).** The v3k
-ladder's fifth rung took the entrywise gate from 37 of 171 failing to **2 of
-171**: `C[6][8]` and `C[6][9]`, both couplings of `Net-(U1-VCCI-Pad3)` to another
-U1 gate-driver SOIC pin, both at ~2.90% against a 2% band. The trace passes at
-0.62%. A sixth vertical rung is out of reach (~41 GB) and would be the wrong
-axis anyway: the v3k ladder holds `max_planar_area_m2` fixed on every rung, so
-the lateral ladder these pad entries actually name has never been run.
+**The canary is NOT qualified — and is 2 entries away, on the vertical axis
+(§0.37, §0.39).** The v3k ladder's fifth rung took the entrywise gate from 37 of
+171 failing to **2 of 171**: `C[6][8]` and `C[6][9]`, both couplings of
+`Net-(U1-VCCI-Pad3)` to another U1 gate-driver SOIC pin, both at ~2.90% against
+a 2% band. The trace passes at 0.62%.
+
+**The lateral axis has since been run and it converges (§0.39).** A three-rung
+lateral ladder at held z (`v3w0`/`v3w1`/`v3k5`, conductor-segment length
+3.2 -> 1.6 -> 0.8 mm) passes the entrywise gate on **all 171 entries**, and on
+the two that matter it contracts at ~0.17 against the vertical axis's ~0.47.
+So the residual is vertical, and refining laterally cannot reach it.
+
+**A sixth vertical rung is out of reach at the held ±5 mm band**: ~4.8 M
+unknowns, ~39 GB — over the 24 GiB ceiling *and* over the 36 GiB of physical
+RAM, so unlike §0.36's wall it cannot be reached by raising a limit. The one
+affordable route identified is to narrow the vertical band to ±2.5 mm, which
+fits z = 62.5 µm in ~20 GB but converges a slightly different model (§0.39).
 
 **Tightest upper bound on the trace: 18.1573 pF** (`v3k1` at order 3, an accepted
 run; see §0.26 on why its cost figure understates what it took). Every accepted trace is a bound, because `C_ii` is the discrete Ritz energy
@@ -42,6 +52,8 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | AMG cost is linear in unknowns; the model is `unknowns x iterations` (§0.34) | §0.33's power-law fit, one of whose points was 1222 s asleep |
 | Fugu's *unrefined* mesh is 3.65M unknowns = 116% of the memory ceiling (§0.35) | any plan that treats Fugu as reachable on this host |
 | The fifth rung takes the entrywise gate from 37 failing entries to 2 (§0.37) | §0.30's projection that one rung would close all of them |
+| The lateral ladder converges on all 171 entries; the residual is vertical (§0.39) | §0.38's reading of the two-rung delta as implicating the pad edge |
+| A 0.6 mm pad edge is one undivided mesh segment on every rung ever run (§0.38) | the assumption that `conductor_edge_max_planar_area_m2` resolves pad edges |
 | The v3k ladder refines vertically only; `max_planar_area_m2` is held (§0.37) | the claim that it closes the pad entries by refining laterally |
 | Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
 | `time.monotonic` on Darwin stops during sleep, so every wall limit under-counted (§0.32) | every `elapsed_s` recorded before 2026-08-27 |
@@ -3074,6 +3086,76 @@ global 0.2 mm collar around *every* conductor, so lateral refinement is spread
 uniformly over all 34 tracks, 30 pads and 3 zones, while the residual lives at
 two pins of one SOIC. The mesher exposes no per-conductor band, so the targeted
 refinement that note recommends is not currently expressible.
+
+### 0.39 The lateral axis is converged; the residual is vertical
+
+`v3w1` (edge area 1.28e-06, 2339790 unknowns): **7717.99 s, 18.588 GB,
+`failures: []`**, 18/18 solves converged in 9434 iterations (mean 524.1), Palace
+`Total` 7716.58 s for a +1.41 s margin. That completes the three-rung lateral
+ladder at `max_vertical_step_m` = 0.000125, and it **converges**:
+
+```
+v3w0   seg 3.200 mm   trace 18.9534 pF   pos_off 0   recip 2.63e-23
+v3w1   seg 1.600 mm   trace 18.8496 pF   pos_off 0   recip 1.98e-23
+v3k5   seg 0.800 mm   trace 18.8023 pF   pos_off 0   recip 2.49e-23
+trace : CONVERGED   finest_rel -0.25%   observed order 1.1348
+matrix: CONVERGED   all 171 entries
+        worst finest step 0.35 fF (10.38%) at C[9][13], inside the 1 fF floor
+```
+
+**This overturns the inference drawn in §0.38 from the two-rung delta.** That
+delta was real — `C[6][9]` and `C[6][8]` are the 1st and 3rd most
+lateral-sensitive entries of all 171 — but nearly all of it lives in the coarse
+3.2 mm -> 1.6 mm step. Run as a ladder rather than a difference, the two axes
+separate cleanly on exactly the entries that matter:
+
+| entry | axis | corrections | contraction | finest step |
+|---|---|---|---|---|
+| `C[6][8]` | lateral (z held 125 um) | +2.500 -> +0.442 fF | **0.177** | 0.83% |
+| `C[6][8]` | vertical (lat held 0.8 mm) | +3.189 -> +1.542 fF | 0.483 | **2.90%** |
+| `C[6][9]` | lateral | +3.927 -> +0.672 fF | **0.171** | 1.25% |
+| `C[6][9]` | vertical | +3.344 -> +1.553 fF | 0.464 | **2.89%** |
+
+The lateral axis contracts at ~0.17 and is finished at 0.8 mm. The vertical axis
+contracts at ~0.47 and is not finished at 125 um. So the 0.6 mm pad edge being a
+single undivided segment (§0.38) is **not** what holds these entries back: the
+lateral discretisation error at v3k5 is already well inside the band. §0.38's
+mesher-floor finding stands as a fact about the mesher; its suggested
+implication for these two entries does not.
+
+This is the fourth projection overturned in this document by the rung that
+tested it (§0.19->§0.31, §0.33->§0.34, §0.30->§0.37, §0.38->§0.39), and the
+pattern is now specific enough to state as a rule: **a two-point difference on
+this model does not predict a ladder.** Both prior failures and this one came
+from reading a single delta as a trend.
+
+#### What closing the vertical axis would cost
+
+One more vertical rung is what the residual asks for, and at the held +/-5 mm
+band it is out of reach. `v3k6` at z = 62.5 um needs ~170 z levels against
+`v3k5`'s 90, at the same 3617 planar points:
+
+```
+nodes   ~3617 x 170  = 614,890        (v3k5: 324,429)
+unknowns ~4.8M       at 6.80 edges/node
+memory  ~39 GB       at 8.17 GB/Munk  (ceiling 24 GiB, physical 36 GiB)
+```
+
+That is over the ceiling *and* over physical RAM, so it cannot be reached by
+raising a limit the way §0.36 raised the wall. Coarsening the lateral axis does
+not rescue it either: z levels dominate, and even at `v3w0`'s 3202 planar points
+the rung lands at ~34 GB.
+
+**The one affordable route is to narrow the vertical refinement band.** At
++/-2.5 mm, z = 62.5 um gives ~90 levels — the same element budget as `v3k5`,
+~20 GB. A ladder at 250/125/62.5 um within +/-2.5 mm is three solves and ~4.8 h.
+The cost is that it converges a *different model*: §0.24's band scan found +/-5 mm
+optimal at fixed cost (+/-20 mm 25.32 pF, +/-5 mm 20.62 pF, +/-2 mm 21.18 pF), so
++/-2.5 mm sits on the near side of that optimum and will converge to a slightly
+looser bound. The band is a held parameter of the model, not a gate threshold,
+so narrowing it is a disclosed modelling change rather than a weakened gate —
+but it must be disclosed, and the resulting trace is not comparable to the
++/-5 mm numbers quoted elsewhere in this document.
 
 ### 0.7 Next steps (replacing §5)
 
