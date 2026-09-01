@@ -3482,6 +3482,119 @@ caches, the source commit and patch, and the `mpirun` launcher, but **not** the
 dynamic libraries the binary loads. `BUILD_SHARED_LIBS=OFF` makes most
 dependencies static, but MPI is not. Treat the Linux manifest as weaker than
 the macOS one by exactly that gap.
+
+### 0.44 The Linux monitor aborted every completed multi-rank run, and the cross-host gate passes
+
+Three blockers stood between the qualified Linux build (§0.43) and a solve.
+Two were transport; the third was a real fail-closed bug.
+
+**Transport.** `implementation_identity` (`lib/palace_workflow.py:169`) pins
+`extract_palace_mesh.py` from the repo *root*, not `lib/`, so shipping `lib/`
+alone raises "Palace qualification implementation is incomplete". `meshpy` was
+also missing; it installs at 2026.1, matching macOS exactly.
+
+**The mesh manifest cannot be validated off its generating host, by design.**
+`validate_palace_plc_mesh_manifest` hashes `mesher["native_extension"]`
+(`lib/palace_plc_mesh.py:1827`), which is
+`_internals.cpython-314-darwin.so`. Staging a Darwin object on a Linux box to
+make that hash pass would make the check structurally incapable of failing;
+it would report a verification that did not run. The mesh manifests are
+therefore **not transportable**, and the ladder is regenerated natively
+instead — sidestepping the check rather than defeating it.
+
+**The Linux mesher reproduces the macOS mesh to round-off but not to the
+byte.** All four rungs match exactly on nodes, tets and edges
+(`v3k3` 107409/581382/711825 … `v3k6` 610172/3510378/4172500). On `v3k3`,
+worst node-coordinate delta is **9.7e-17 m** — a few ULP on coordinates of
+order 0.1 m — and 174 of 627476 element records differ, of which 58 are pure
+vertex-order permutations and the rest a local re-tetrahedralisation of one
+seven-node cluster where a tie broke the other way. So the Linux ladder is a
+*different* discretisation by a hair, which is why all four rungs are
+regenerated on Linux and gated against each other rather than mixed with the
+macOS rungs.
+
+**The bug: a task with no address space was read as unreadable.**
+`_linux_footprint` (`lib/process_monitor.py:85`) returned `None` when
+`/proc/<pid>/status` carried no `VmRSS:`, and `_tree_memory` raises
+`MemoryMetricUnavailable` on `None` rather than skipping the member — correct
+in general, wrong here. The kernel emits the `Vm*` fields only for a task that
+*has* an mm, so their absence is positive evidence of zero resident memory.
+Observed directly, by wrapping the reader without changing it:
+
+```
+UNREADABLE pid=1688909 cmdline=b''
+   +  0 ms  State=R (running)    VmRSS=<absent>     Threads=1
+   + 40 ms  State=R (running)    VmRSS=<absent>     Threads=1
+   + 60 ms  <unreadable FileNotFoundError>
+```
+
+The task never acquires memory and vanishes: it is *exiting*, having released
+its address space in `exit_mm()` while still shown as `R`. A relaxed
+diagnostic run then named all eight of them at once —
+`pid 1699527 … 1699534`, then the same pids as `Z (zombie)` — and **completed**:
+110.4 s, 19.28 GB, against macOS `v3k3`'s 116.2 s / 18.90 GB. So this is
+every MPI rank at *normal teardown*, and the guard was aborting successful
+runs. No multi-rank Palace run could ever finish under the monitor on Linux.
+macOS never saw it because `_darwin_footprint` answers from `proc_pid_rusage`,
+which returns 0 for a departed process instead of omitting a field.
+
+**Guard review (required before landing).** The fix returns 0 when a
+*well-formed* status carries no `VmRSS:`, using `State:` as the witness that a
+status was actually read.
+
+1. **Unevaluable input.** Unchanged and still closed: `OSError`, `ValueError`,
+   `IndexError` return `None`. A read that yields no `State:` also returns
+   `None`, so a truncated or garbage read cannot pass as an empty process.
+2. **Monotonicity.** Measured across the degradation ladder — normal task
+   2621440; no-mm 0; zombie 0; empty file `None`; truncated `None`; garbage
+   `None`; corrupt `VmRSS` `None`; missing file 0. The verdict never improves
+   as input degrades.
+3. **Preconditions.** The caller is `_tree_memory`, which sums over live tree
+   members; 0 is the arithmetically correct contribution for a task holding no
+   pages.
+4. **Source of truth.** `VmRSS + VmSwap` from the kernel, unchanged. No proxy.
+5. **Persistence.** Nothing is cached; each poll re-reads `/proc`.
+6. **Provenance.** The run record still reports the real peak; the fix removes
+   a false abort, it does not synthesise a number.
+7. **Known-bad calibration.** Kernel thread pid 2 — a real task that
+   permanently has no address space — reads `None` before the fix and `0`
+   after. That is the target failure, constructed and observed.
+8. **Fix vs mute.** Not a mute: the quantity being measured is resident
+   memory, and a task with no mm has none. The 24 GiB ceiling still kills —
+   §0.41's `v3k6` rejection stands.
+
+**Cost.** 44.8 µs per call against 47.6 µs before, over 2000 calls — one
+string compare per line already being read, unmeasurable against a 5 s poll.
+
+**Where it lives.** On the **server copy of `lib/` only**, for the reason in
+§0.43: `_validate_palace_run_manifest_unattested` re-derives
+`implementation_identity` from the current files (`lib/palace.py:921`), so
+editing `process_monitor.py` in the repo moves the hash for every stored run.
+`lib/process_monitor.py.orig` on the server preserves the shipped version.
+
+**Measured while cleaning up, and it changes what that costs: only 16 of 245
+stored run records still re-validate against the current `lib/`.** 229 are
+already stale — `palace.py` drifted for all 229 and `process_monitor.py` for
+227 — and validation aborts at the implementation check *before* it examines
+the execution snapshot. So for those 229 the snapshot is unreachable by any
+validation on this tree.
+
+**The cross-host gate passes.** Linux `v3k3lx` p2 SuperLU, 113.3 s, 20.07 GB,
+`numerically_converged_diagnostic`, against macOS `v3k3-p2/run-02`:
+
+```
+entries      : 18x18 = 324
+worst abs    : 0.002684 fF at (1, 1)
+worst rel    : 0.0005261% at (15, 2)
+outside gate : 0 of 324
+VERDICT      : MATCH
+```
+
+Different compiler, OS, BLAS and MPI, plus the 174-element tie-break above,
+move no entry by more than **2.7 attofarads** — about 4000x inside the 1 fF
+floor. That bounds the combined build-and-mesh difference, which is a stronger
+statement than the build-only comparison originally planned, and it qualifies
+the Linux host to carry the ±5 mm ladder.
 ---
 
 ## 1. Goal
