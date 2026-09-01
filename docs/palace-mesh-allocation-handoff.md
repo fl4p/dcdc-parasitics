@@ -15,23 +15,24 @@ The document grew by fifteen subsections on 2026-08-26/27 and several of its
 earlier conclusions were overturned by later ones. This block is the current
 position; §0.20 onward are the sections that still stand.
 
-**The canary is NOT qualified — and is 2 entries away, on the vertical axis
-(§0.37, §0.39).** The v3k ladder's fifth rung took the entrywise gate from 37 of
-171 failing to **2 of 171**: `C[6][8]` and `C[6][9]`, both couplings of
-`Net-(U1-VCCI-Pad3)` to another U1 gate-driver SOIC pin, both at ~2.90% against
-a 2% band. The trace passes at 0.62%.
+**The canary CONVERGES at a ±2.5 mm vertical band (§0.40).** A four-rung
+vertical ladder (500 → 250 → 125 → 62.5 µm) passes the entrywise gate on **all
+171 entries**, worst finest step 0.13 fF (1.78%) at `C[14][17]`, with zero
+positive off-diagonals and reciprocity ~4e-23 F throughout. `C[6][8]` and
+`C[6][9]` — the two that failed every prior gate — close at 1.29% and 1.22%,
+with contraction *improving* (0.483 → 0.434, 0.464 → 0.410). The lateral axis
+converges independently on two ladders at different held z (§0.39), one of them
+reaching 0.566 mm, past the 0.6 mm pad edge.
 
-**The lateral axis has since been run and it converges (§0.39).** A three-rung
-lateral ladder at held z (`v3w0`/`v3w1`/`v3k5`, conductor-segment length
-3.2 -> 1.6 -> 0.8 mm) passes the entrywise gate on **all 171 entries**, and on
-the two that matter it contracts at ~0.17 against the vertical axis's ~0.47.
-So the residual is vertical, and refining laterally cannot reach it.
+**The ±5 mm model is inferred, not demonstrated — do not quote it as converged.**
+Its 62.5 µm rung is ~4.8 M unknowns and ~39 GB, over the 24 GiB ceiling *and*
+over the host's 36 GiB of physical RAM. The inference rests on measured
+agreement: across two consecutive halvings the two bands' z-corrections match to
+0.2% and their contraction ratios to three decimals (§0.40). Strong, but still
+an extrapolation of the kind this document has had overturned four times.
 
-**A sixth vertical rung is out of reach at the held ±5 mm band**: ~4.8 M
-unknowns, ~39 GB — over the 24 GiB ceiling *and* over the 36 GiB of physical
-RAM, so unlike §0.36's wall it cannot be reached by raising a limit. The one
-affordable route identified is to narrow the vertical band to ±2.5 mm, which
-fits z = 62.5 µm in ~20 GB but converges a slightly different model (§0.39).
+The ±2.5 mm trace (19.2519 pF) is a looser bound than the ±5 mm one, as §0.24's
+band scan predicts. Tightest upper bound is unchanged at **18.1573 pF**.
 
 **Tightest upper bound on the trace: 18.1573 pF** (`v3k1` at order 3, an accepted
 run; see §0.26 on why its cost figure understates what it took). Every accepted trace is a bound, because `C_ii` is the discrete Ritz energy
@@ -53,6 +54,7 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | Fugu's *unrefined* mesh is 3.65M unknowns = 116% of the memory ceiling (§0.35) | any plan that treats Fugu as reachable on this host |
 | The fifth rung takes the entrywise gate from 37 failing entries to 2 (§0.37) | §0.30's projection that one rung would close all of them |
 | The lateral ladder converges on all 171 entries; the residual is vertical (§0.39) | §0.38's reading of the two-rung delta as implicating the pad edge |
+| Both axes close: the canary converges entrywise at a ±2.5 mm band (§0.40) | the position that the canary is unqualifiable on this host |
 | A 0.6 mm pad edge is one undivided mesh segment on every rung ever run (§0.38) | the assumption that `conductor_edge_max_planar_area_m2` resolves pad edges |
 | The v3k ladder refines vertically only; `max_planar_area_m2` is held (§0.37) | the claim that it closes the pad entries by refining laterally |
 | Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
@@ -3156,6 +3158,90 @@ looser bound. The band is a held parameter of the model, not a gate threshold,
 so narrowing it is a disclosed modelling change rather than a weakened gate —
 but it must be disclosed, and the resulting trace is not comparable to the
 +/-5 mm numbers quoted elsewhere in this document.
+
+### 0.40 The canary converges — on the ±2.5 mm model, and the ±5 mm one is inferred
+
+`v3y5` (z = 62.5 um, ±2.5 mm band, 2482992 unknowns): **8275.5 s, peak RSS
+19.65 GB, `failures: []`**, 18/18 solves converged in 9495 iterations, Palace
+`Total` 8274.36 s for a +1.14 s margin. Memory landed 3.2% under the 20.3 GB
+projection, which is the sixth consecutive rung where the §0.34 model predicted
+memory to within a few percent.
+
+**The four-rung narrow-band vertical ladder passes the entrywise gate.**
+
+```
+v3y3    z 500.0 um   trace 19.7189 pF   pos_off 0   recip 4.33e-23
+v3y4    z 250.0 um   trace 19.4092 pF   pos_off 0   recip 1.41e-23
+v3y125  z 125.0 um   trace 19.2923 pF   pos_off 0   recip 3.42e-23
+v3y5    z  62.5 um   trace 19.2519 pF   pos_off 0   recip 4.19e-23
+trace : CONVERGED   finest_rel -0.21%   observed order 1.5310
+matrix: CONVERGED   all 171 entries
+        worst finest step 0.13 fF (1.78%) at C[14][17]
+```
+
+Truncated at three rungs it reproduces the §0.37 verdict almost exactly — 2 of
+171, `C[6][8]` at 2.94% and `C[6][9]` at 2.93%, against the ±5 mm ladder's 2.90%
+and 2.89%. That is the calibration that makes the fourth rung readable. The two
+entries that had failed every prior gate:
+
+```
+C[6][8]  -57.026 -> -53.845 -> -52.308 -> -51.641 fF
+         corrections +3.182 -> +1.537 -> +0.667   contraction 0.483, 0.434
+         finest step 0.667 fF = 1.29%
+C[6][9]  -57.751 -> -54.415 -> -52.867 -> -52.232 fF
+         corrections +3.336 -> +1.548 -> +0.635   contraction 0.464, 0.410
+         finest step 0.635 fF = 1.22%
+```
+
+Unlike §0.37, where contraction *degraded* on the final rung and broke §0.30's
+projection, here it improves (0.483 -> 0.434 and 0.464 -> 0.410).
+
+#### What is demonstrated, and what is inferred
+
+**Demonstrated.** At a ±2.5 mm vertical refinement band, the canary's 18x18
+capacitance matrix converges entrywise at 2% + 1 fF across a four-rung vertical
+ladder terminating at 62.5 um, with zero positive off-diagonals and reciprocity
+~4e-23 F on every rung. Independently, the lateral axis converges on **two**
+ladders at different held z (§0.39 at 125 um, §0.39/§0.40 at 250 um), the latter
+reaching 0.566 mm — past the 0.6 mm pad edge that §0.38 identified as
+unresolved. Both axes are therefore closed at this band.
+
+**Inferred, not demonstrated.** The ±5 mm model — the one every trace quoted
+elsewhere in this document uses — is *not* shown converged. Its 62.5 um rung is
+~4.8 M unknowns and ~39 GB, over both the 24 GiB ceiling and the host's 36 GiB
+of physical RAM (§0.39). The inference rests on the band behaving as a
+near-additive offset on exactly these entries, which is measured rather than
+assumed:
+
+```
+z 500 -> 250 um   ±5.0 mm +3.189 / +3.344 fF     ±2.5 mm +3.182 / +3.336 fF
+z 250 -> 125 um   ±5.0 mm +1.542 / +1.553 fF     ±2.5 mm +1.537 / +1.548 fF
+contraction       ±5.0 mm 0.483 / 0.464          ±2.5 mm 0.483 / 0.464
+```
+
+The corrections agree to 0.2% and the contraction ratios to three decimals over
+two consecutive halvings. That is strong evidence the ±5 mm ladder would also
+close at 62.5 um, and it is still an extrapolation — the same species of
+reasoning this document has had overturned four times. **Do not quote the canary
+as converged at ±5 mm.** Quote it as converged at ±2.5 mm, with the ±5 mm result
+pending a host that can hold ~39 GB.
+
+Note also that the ±2.5 mm trace (19.2519 pF) is a *looser* bound than the
+±5 mm one (18.8023 pF), consistent with §0.24's band scan finding ±5 mm optimal.
+The tightest upper bound in this document is unchanged at **18.1573 pF**.
+
+#### Two caveats carried forward
+
+1. **No per-entry re-meshing noise floor was applied**, matching §0.25 and §0.37
+   so the comparison is like-for-like. §0.39 now provides the first post-§0.17
+   estimate of that floor — three distinct planar triangulations at fixed z move
+   these entries by 0.15-0.6 fF — which sits below the gate's 1 fF absolute
+   floor and below the 0.635-0.667 fF finest steps, but a floor measured on the
+   *vertical* axis is still unmeasured.
+2. **§1's gate ordering.** The canary demonstrating convergence is the
+   precondition for requalifying Fugu, and it is now met at ±2.5 mm. It does not
+   make Fugu reachable: §0.35 stands unchanged — Fugu's *unrefined* mesh is
+   3.65 M unknowns and ~29.8 GB, 116% of the ceiling, before any refinement.
 
 ### 0.7 Next steps (replacing §5)
 
