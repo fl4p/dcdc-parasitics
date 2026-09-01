@@ -3579,6 +3579,26 @@ already stale — `palace.py` drifted for all 229 and `process_monitor.py` for
 the execution snapshot. So for those 229 the snapshot is unreachable by any
 validation on this tree.
 
+**Disk, and one correction.** `out/palace-qualification` went 50 GB -> 22 GB:
+snapshots for runs with no completed record (3.31 GB), mesh payloads no run
+directory links -- `b20u` alone was 4.5 GB, and §5 already said to delete it --
+with every manifest kept (6.03 GB), byte-identical snapshot files collapsed to
+shared inodes rather than deleted (5.61 GB), and snapshots for the 226 run
+directories whose records can no longer validate (17.69 GB). The freed blocks
+are still held by a Time Machine local snapshot, so `df` has not moved yet.
+
+The correction: `v3k6-p2-boomeramg-i2000/run-01` is a **rejected** run whose
+record still matches the current `lib/`, and its snapshot went in the first
+pass on the reasoning that a rejection record needs no snapshot. That was
+wrong -- validation reaches the snapshot check before it reaches the lifecycle
+check. Restored from the sources the record itself commits to, with every
+restored byte verified against the record's own `snapshot_sha256`; the
+restoration refuses rather than writes if any source has drifted. It now fails
+only on `Palace run lifecycle is not accepted`, which is the correct verdict
+for a rejected run. §0.41's evidence was never at risk -- it lives in the
+manifest (`peak memory footprint exceeded 25769803776 bytes`, `exit code -9`,
+73.72 s), not the snapshot.
+
 **The cross-host gate passes.** Linux `v3k3lx` p2 SuperLU, 113.3 s, 20.07 GB,
 `numerically_converged_diagnostic`, against macOS `v3k3-p2/run-02`:
 
