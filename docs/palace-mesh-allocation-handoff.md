@@ -3662,16 +3662,56 @@ forces a new class at all (§0.41). Time is mildly superlinear: fitting macOS
     pcb_convergence_large = ProcessLimits(16 * 3600.0, 64 * 1024**3,
                                           10 * 1024**3, 2**63 - 1, 2**31 - 1)
 
-One class serves both remaining rungs: the 16 h wall is **1.85×** the `v3k6lx`
-projection and 3.72× the `v3k5lx` one, and the 64 GiB ceiling is **1.69×** the
-`v3k6lx` memory projection while remaining **34% of the host's 188 GiB** — so
-the ceiling that protects the machine is never near physical RAM (§0.41). The
+One class serves both remaining rungs. On the numbers available when it was
+sized, the 16 h wall was 1.85× the `v3k6lx` projection; `v3k4lx` has since landed
+and revised that to **1.40×** (below). The 64 GiB ceiling is **1.69×** the
+`v3k6lx` memory projection — unchanged, because memory is the well-behaved
+quantity here — while remaining **34% of the host's 188 GiB**, so the ceiling
+that protects the machine is never near physical RAM (§0.41). The
 wall is deliberately roomier than the model demands, for the reason the
 `pcb_convergence_iterative` comment already gives: a too-generous wall costs
 only wasted time on a run that was never going to converge, whereas a too-generous
 ceiling is what lost §0.22 to swap. `MESH_LIMITS` gets the same 10M nodes /
 50M tetrahedra as every PCB class; `v3k6lx` is 610172 nodes and 3510378
 tetrahedra, far inside it.
+
+**`v3k4lx` landed and the host ratio turned out not to be a constant — the
+intervention was necessary, not merely cautious.** `v3k4lx` completed at
+**10541.1 s / 11.692 GB**. Against macOS `v3k4` (4936.2 s) that is a **2.136×**
+wall ratio, against **1.622×** at `v3k3`. A single-rung host ratio is therefore
+not a safe multiplier, and the earlier `v3k5lx` projection built on one was
+optimistic.
+
+The scaling is not a clean power law in this range. Measured exponents: macOS
+`v3k3`→`v3k4` is 0.317 (sublinear), Linux `v3k3lx`→`v3k4lx` is 0.838 (sublinear),
+but macOS `v3k4`→`v3k5` is 1.099 (superlinear). `v3k3` carries disproportionate
+fixed overhead on both hosts, so the `v3k3`-anchored ratio flatters the
+extrapolation. The defensible projection anchors on the **Linux** `v3k4lx`
+measurement and applies only the `v3k4`→`v3k5` exponent, which is the interval
+adjacent to the region being extrapolated into:
+
+    v3k5lx  20370 s = 5.66 h
+    v3k6lx  41018 s = 11.39 h
+
+**`v3k5lx` would have breached the 18000 s wall it was launched under.** Stopping
+the loop is now vindicated by measurement rather than by caution: under
+`pcb_convergence_iterative` that rung would have been killed at 5 h having
+produced no matrix. Under the 16 h class the headroom is 2.83× for `v3k5lx` and
+**1.40×** for `v3k6lx` — down from 1.85×, still clear of the 1.1 minimum, and the
+reason the wall was set deliberately roomier than the model demanded.
+
+Memory continues to behave: 8.524 and 8.414 GB per million unknowns at `v3k3lx`
+and `v3k4lx`, putting `v3k6lx` at 40.8 GB against the 64 GiB ceiling, 1.69×.
+
+One caveat on `v3k4lx`'s wall: the guard calibration above and two mesh-reading
+validations ran on the same host during its solve. Both are small against 10541 s
+on a 16-core box — tens of seconds of allocation and a few minutes of
+single-threaded gmsh — and cannot account for a 32% ratio shift, but the rung was
+not run on an idle machine and the number is quoted with that known.
+
+`v3k5lx` started at 01:20:59 under `pcb_convergence_large` via `lib-large`, which
+also discharges precondition 3 below empirically: the class resolves, the run
+directory is created, and 8 ranks plus `mpirun` are up.
 
 **Guard review (required before landing a limit).** Calibrated against the
 *patched* Linux monitor, because on this host the kill path runs through the
