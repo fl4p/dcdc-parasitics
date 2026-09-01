@@ -55,6 +55,7 @@ land between 17.8 and 20.1 pF. **Quote the bound, not the extrapolations.**
 | The fifth rung takes the entrywise gate from 37 failing entries to 2 (§0.37) | §0.30's projection that one rung would close all of them |
 | The lateral ladder converges on all 171 entries; the residual is vertical (§0.39) | §0.38's reading of the two-rung delta as implicating the pad edge |
 | Both axes close: the canary converges entrywise at a ±2.5 mm band (§0.40) | the position that the canary is unqualifiable on this host |
+| Band-invariance holds ≥±2.5 mm and breaks at ±1.25 mm; the test discriminates (§0.42) | the objection that §0.40's band agreement was an insensitive comparison |
 | A 0.6 mm pad edge is one undivided mesh segment on every rung ever run (§0.38) | the assumption that `conductor_edge_max_planar_area_m2` resolves pad edges |
 | The v3k ladder refines vertically only; `max_planar_area_m2` is held (§0.37) | the claim that it closes the pad entries by refining laterally |
 | Memory binds the direct solve; the *wall* binds AMG (§0.33) | §0.30's "one machine in memory" framing of what stops v3k5 |
@@ -3284,6 +3285,78 @@ not buy the rung; it removes the only thing standing between an over-budget
 solve and a thrashing machine, and §0.29 already established that a peak-RSS
 ceiling cannot bound a swapping process. The guard behaved correctly and should
 be left alone.
+
+### 0.42 A third band: invariance has a threshold, and band sensitivity shrinks with refinement
+
+`v3z5` (z = 62.5 um, ±1.25 mm band): **4746.2 s, 11.086 GB, `failures: []`**.
+It closes a four-rung ladder at a third band, and **that ladder also converges**:
+
+```
+v3z3   z 500.0 um   trace 22.6975 pF      v3z45  z 125.0 um   trace 22.2807 pF
+v3z4   z 250.0 um   trace 22.4189 pF      v3z5   z  62.5 um   trace 22.2381 pF
+trace : CONVERGED   finest_rel -0.19%   observed order 1.6989
+matrix: CONVERGED   all 171 entries; worst 0.14 fF (1.95%) at C[14][17]
+```
+
+**Prediction overturned, a fifth time.** From the ±1.25 mm contraction of 0.6232
+this section predicted a finest step near 2.25% — a *failing* rung. The measured
+step is 1.43%, because contraction improved to 0.393 on the last halving. Same
+mechanism as §0.19→§0.31, §0.33→§0.34, §0.30→§0.37 and §0.38→§0.39: a contraction
+ratio read as if it were constant. §0.39 states the rule; this section is one
+more instance of it, and the rule should now be treated as load-bearing rather
+than observational.
+
+#### Band-invariance is real but bounded
+
+Corrections at the two steps every band can reach:
+
+```
+                 C[6][8]                        C[6][9]
+band       corr1    corr2   contraction    corr1    corr2   contraction
+±1.25 mm  +2.981   +1.858     0.6232      +3.153   +1.890     0.5994
+±2.50 mm  +3.182   +1.537     0.4831      +3.336   +1.548     0.4642
+±5.00 mm  +3.189   +1.542     0.4835      +3.344   +1.553     0.4645
+```
+
+±2.5 and ±5.0 mm agree **to four decimals** in contraction and to 0.2% in the
+corrections. ±1.25 mm does not — it is off by 29%, and its trace jumps to
+22.70 pF against 19.72 and 19.23. That is the transition-starving the kb note
+`uniform-refinement-hides-the-real-convergence-order` reports for ±2 mm, and it
+places ±1.25 mm outside the invariant regime.
+
+**This is what makes the ±2.5/±5.0 agreement meaningful.** The obvious objection
+to §0.40's inference was that the comparison might be insensitive — that any two
+bands would match, so matching proves nothing. ±1.25 mm refutes that: the test
+had a real opportunity to detect a difference and took it. A four-decimal
+agreement from a demonstrably discriminating test is evidence, not a null result.
+
+#### Band sensitivity diminishes as the mesh refines
+
+At the finest step both testable bands reach:
+
+```
+C[6][8]   ±1.25 mm +0.731 fF (1.43%)     ±2.50 mm +0.667 fF (1.29%)
+C[6][9]   ±1.25 mm +0.699 fF (1.35%)     ±2.50 mm +0.635 fF (1.22%)
+```
+
+Bands that differed by 29% in contraction at the coarse steps differ by only
+~10% in the correction at the finest one. The band effect is shrinking with
+refinement — which is the direction that matters, because the ±5 mm inference is
+about the *finest* step, and ±5 mm is far closer to ±2.5 mm than ±1.25 mm is.
+
+#### Standing of the ±5 mm claim, restated
+
+Three bands have now been laddered; the two that fit at 62.5 um both converge on
+all 171 entries. The ±5 mm 62.5 um rung is measured-blocked (§0.41). Its
+inference now rests on three measured legs rather than one:
+
+1. ±2.5 and ±5.0 agree to four decimals in contraction at both reachable steps;
+2. the comparison is discriminating, shown by ±1.25 mm failing it;
+3. band sensitivity *shrinks* with refinement, so the untested step is the one
+   where the bands should agree most closely.
+
+It is still an inference. **Continue to quote the canary as converged at ±2.5 mm**
+and record ±5 mm as pending a host that can hold ~39 GB.
 
 ### 0.7 Next steps (replacing §5)
 
