@@ -3243,6 +3243,48 @@ The tightest upper bound in this document is unchanged at **18.1573 pF**.
    make Fugu reachable: §0.35 stands unchanged — Fugu's *unrefined* mesh is
    3.65 M unknowns and ~29.8 GB, 116% of the ceiling, before any refinement.
 
+### 0.41 `v3k6` attempted: the ±5 mm rung is measured-blocked, and the guard kills
+
+§0.40 left the ±5 mm model inferred rather than demonstrated, on a *projection*
+that its 62.5 um rung needs ~39 GB. It has now been attempted, and the block is
+measured:
+
+```
+v3k6   nodes 610172   edges 4172500   unknowns 4782672   tets 3510378
+"outcome": "rejected"
+"failures": [
+  "peak memory footprint exceeded 25769803776 bytes",   <- 24 GiB
+  "process_exit: exit code -9",                          <- SIGKILL from the guard
+  "normal_completion: missing 'Elapsed Time Report (s)'",
+  ... cascading: no postpro, no terminal-Craw.csv
+]
+"elapsed_s": 73.72
+```
+
+**The resource guard is an active killer, not a reporter.** `probe.py`'s
+docstring claims the class "reports the overshoot after the fact rather than
+preventing it". That is wrong, and this run disproves it:
+`lib/process_monitor.py:696-739` evaluates the limit set on every poll and calls
+`_kill_tree` the moment one trips. Here it fired **73.7 s** in, during AMG setup,
+before the first terminal solve — exit code -9 is the guard's own SIGKILL. Peak
+never approached the host's 36 GiB, so there was no swapping and no repeat of the
+2026-08-26 hard crash. Attempting an over-budget rung on this host is **safe**;
+it is simply futile.
+
+**What this establishes, precisely.** It proves `v3k6` needs **more than 24 GiB**
+— not that it needs 39.1 GB. That remains the §0.34 model's projection, though
+one that has predicted memory to within a few percent on six consecutive rungs.
+Either way the rung is unreachable: 39.1 GB is also over the 36.0 GiB of
+physical RAM, so no wall raise, resource class, or scheduling change reaches it
+the way §0.36's raise reached the wall. It needs a larger host — the same
+procurement item §0.35 raises for Fugu.
+
+**Do not "fix" this by raising `peak_rss_bytes` above physical RAM.** That does
+not buy the rung; it removes the only thing standing between an over-budget
+solve and a thrashing machine, and §0.29 already established that a peak-RSS
+ceiling cannot bound a swapping process. The guard behaved correctly and should
+be left alone.
+
 ### 0.7 Next steps (replacing §5)
 
 1. Fix `kicad_palace_dump.py:314` to `GetBoardPolygonOutlines`, and tighten the
