@@ -3385,6 +3385,103 @@ probes: `dielectric_fill_probe.py`, `scan_hollow_outlines.py`,
 must run under KiCad's own interpreter
 (`/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3`).
 
+
+### 0.43 The Linux host is provisioned, and cross-host attestation does not span the two machines
+
+`v3k6` is memory-blocked on this Mac (§0.41), so the ±5 mm rung moves to
+`mem.fabi.me`: 188 GiB RAM, 16 cores, Open MPI 4.1.6. Six facts were settled
+while provisioning it, and three of them bound what the port can claim.
+
+**The attested build is a Make build, not a Ninja build.** Two configure
+attempts failed inside external projects — first `gslib`, then `libxsmm` —
+both with `ninja: error: loading 'build.ninja': No such file or directory`.
+The cause is not the option set: Palace's superbuild forwards
+`${CMAKE_MAKE_PROGRAM}` as the *build command* of Make-based external
+projects, so under `-G Ninja` it runs `/usr/bin/ninja` in a directory that
+only ever contains a `Makefile`. The attested cache settles it:
+
+```
+$ grep -E "^CMAKE_GENERATOR:|^CMAKE_MAKE_PROGRAM:" \
+    /Users/fab/dev/vendor/palace-build-qualification-direct-make/CMakeCache.txt
+CMAKE_MAKE_PROGRAM:FILEPATH=/usr/bin/make
+CMAKE_GENERATOR:INTERNAL=Unix Makefiles
+```
+
+The `-make` in the install-prefix name has been recording the generator all
+along. Reproduce with `-G "Unix Makefiles"` and the full 20-option set; a
+subset lets `PALACE_WITH_GSLIB` and `PALACE_WITH_SUNDIALS` take Palace
+defaults, which both diverges from the attested build and fails.
+
+**The four `v3k` meshes are byte-identical across the two hosts.** Verified
+after transfer, `md5` on macOS against `md5sum` on Linux:
+
+```
+v3k3 4f2588b7706f4e6313ad1db4a889028f   v3k5 f6f09fc016029bac9cc03312fc279310
+v3k4 f88867ea1c8b0b9c4041389f98d3fecb   v3k6 e2b9465948eecf908792191971465032
+```
+
+This is what makes a cross-build matrix comparison meaningful: the
+discretisation is identical, so any matrix difference is solver or build, not
+mesh. `gmsh` is also version-matched, 4.15.2 on both.
+
+**Run-record attestation cannot cross the host boundary, and this is
+structural, not a configuration mistake.** `trusted_resource_policy`
+(`lib/palace_workflow.py:569`) derives `cpu_time_s` as
+`wall_time_s * os.cpu_count()`, and `validate_palace_resource_decision`
+(`lib/palace_resources.py:361`) rebuilds the whole decision from the *current*
+table and demands `canonical_equal` with the stored record. Measured:
+
+```
+macOS cpu_count 11        linux cpu_count 16
+```
+
+so `policy_sha256` differs by host on an unmodified tree. No macOS run
+manifest can be re-validated on Linux, and no Linux manifest on macOS. What
+binds the two hosts is therefore **not** manifest re-validation but three
+weaker, still checkable things: the byte-identical meshes above, the same
+Palace source commit `0ca2de94`, and the `v3k3` matrix-agreement test in §5.
+Do not describe the Linux result as carrying macOS-validated provenance.
+
+**Adding a resource profile invalidates every stored run decision — the
+comment at `lib/palace.py:162` is wrong on this point.** That comment carves
+`pcb_convergence_iterative` out as its own class rather than widening
+`pcb_convergence`, on the stated grounds that editing a class in place would
+fail every accepted run already on disk. True, but insufficient:
+`build_palace_resource_decision` puts the *entire* profile list into
+`profile_registry`, so merely appending a class moves both hashes. Measured:
+
+```
+baseline policy_sha256  : 7f2b623eb6ae519f   profiles: synthetic,
+with-added policy_sha256: cb325f37ef0e4010     pcb_diagnostic, pcb_convergence,
+policy hash changes     : True                 pcb_convergence_iterative
+registry hash changes   : True
+```
+
+Consequence for the ±5 mm rung: `v3k6` needs more than the 24 GiB that
+`pcb_convergence_iterative` allows (§0.41), so it needs a new profile — but
+`v3k3`, the cross-validation rung, does **not**. So run `v3k3` on Linux under
+the *unmodified* table, which keeps the cross-host comparison free of a policy
+confound, and introduce the larger profile only for `v3k6`, on the server copy
+of `lib/` alone, and disclose it. Do not add the profile to the repo tree: it
+would retroactively break re-validation of the `v3k3` and `v3k4` AMG runs that
+carry the §0.33 and §0.34 evidence.
+
+**`libGLU` needs no `sudo`.** `gmsh`'s Python SDK dlopens the GL stack, which a
+headless server lacks. `apt-get download` + `dpkg -x` into `~/syslibs/root`
+works as an ordinary user; it takes five packages, not one — `libglu1-mesa`,
+`libopengl0`, `libglvnd0`, `libglx0`, `libgl1` — discovered one dlopen failure
+at a time. Then `LD_LIBRARY_PATH=$HOME/syslibs/root/usr/lib/x86_64-linux-gnu`
+and `import gmsh` succeeds.
+
+**Also measured, and negative: `write_palace_build_manifest` does not pin the
+shared-library closure on Linux.** `_linked_library_identity`
+(`lib/palace_build.py:34`) returns `{"reported": [], "resolved": {}}` for any
+non-Darwin platform — it is an `otool` implementation with no `ldd`
+counterpart. The Linux attestation therefore covers the binary, the CMake
+caches, the source commit and patch, and the `mpirun` launcher, but **not** the
+dynamic libraries the binary loads. `BUILD_SHARED_LIBS=OFF` makes most
+dependencies static, but MPI is not. Treat the Linux manifest as weaker than
+the macOS one by exactly that gap.
 ---
 
 ## 1. Goal
