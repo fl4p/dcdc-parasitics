@@ -3617,6 +3617,140 @@ statement than the build-only comparison originally planned, and it qualifies
 the Linux host to carry the ±5 mm ladder.
 ---
 
+### 0.45 A resource class for the ±5 mm rung, sized on a measured Linux cost model
+
+`v3k3lx` completed on the Linux host in **6769.5 s at 6.983 GB**, against the
+matching macOS run (`v3k3-p2-boomeramg-i2000/run-02`, BoomerAMG, i2000,
+8 ranks) at **4174.8 s / 6.686 GB**. So the host ratio is **1.622× wall** and
+**1.044× memory** — memory tracks the §0.34 model to 4%, and the wall sits
+inside the ~2× host variance §0.34 already declares. Both hosts run byte-identical
+meshes (§0.43): 819234 order-2 unknowns here, and `v3k5lx`'s 2530170 reproduces
+the figure already quoted in the `pcb_convergence_iterative` comment exactly.
+
+There are **two** macOS AMG runs at `v3k3` and only one is a reference. `run-01`
+failed at 3834.7 s on `completion_metadata: Palace execution elapsed time
+contradicts runtime metadata` — returncode 0, `limit_failures` empty, so a
+wall-clock/self-report disagreement, not a solver or size-driven failure.
+`run-02` at 4174.8 s is the accepted run and the only admissible denominator.
+Comparing against the failed run understates the host ratio to 1.765 and would
+have made the wall arithmetic below look worse than it is.
+
+**The ladder was stopped mid-flight, deliberately.** The three lower rungs were
+launched under `pcb_convergence_iterative` (5 h). With the ratio now measured,
+`v3k5lx` projects to 9539.1 × 1.622 = **15468 s against an 18000 s wall — 1.16×
+headroom**. That technically clears the 1.1 minimum, but it rests on a two-point
+exponent extrapolation, and the failure mode is losing 4.3 h of solve to a kill
+that produces no matrix. So the loop shell (pid 1734657) was sent SIGTERM while
+`v3k4lx` was running: the shell dies, its `python`/`grep` children are orphaned
+to init and keep their inherited pipe, `v3k4lx` runs to completion untouched,
+and `v3k5lx` never launches under the tight class. Verified immediately after:
+loop shell gone, python 1934633 and grep 1934634 alive with ppid 1, 8 ranks plus
+`mpirun` still up.
+
+(`pgrep -c palace` reports **0** on this host and means nothing: the pattern
+exceeds the 15-character comm limit. `pgrep -fc palace-x86_64.bin` is the honest
+form. A zero here reads exactly like "the run died".)
+
+**Sizing.** Memory is linear and well behaved — 8.161 / 8.168 / 7.947 GB per
+million unknowns on macOS `v3k3`/`v3k4`/`v3k5`, and 8.524 on Linux `v3k3lx`.
+At the Linux figure, `v3k5lx` needs 21.6 GB and `v3k6lx` (4782672 unknowns)
+needs **40.8 GB** — above the 24 GiB every existing class allows, which is what
+forces a new class at all (§0.41). Time is mildly superlinear: fitting macOS
+`v3k4`→`v3k5` gives t ∝ u^1.099, so `v3k6` projects to 19208 s on macOS and
+**31146 s ≈ 8.65 h** on Linux.
+
+    pcb_convergence_large = ProcessLimits(16 * 3600.0, 64 * 1024**3,
+                                          10 * 1024**3, 2**63 - 1, 2**31 - 1)
+
+One class serves both remaining rungs: the 16 h wall is **1.85×** the `v3k6lx`
+projection and 3.72× the `v3k5lx` one, and the 64 GiB ceiling is **1.69×** the
+`v3k6lx` memory projection while remaining **34% of the host's 188 GiB** — so
+the ceiling that protects the machine is never near physical RAM (§0.41). The
+wall is deliberately roomier than the model demands, for the reason the
+`pcb_convergence_iterative` comment already gives: a too-generous wall costs
+only wasted time on a run that was never going to converge, whereas a too-generous
+ceiling is what lost §0.22 to swap. `MESH_LIMITS` gets the same 10M nodes /
+50M tetrahedra as every PCB class; `v3k6lx` is 610172 nodes and 3510378
+tetrahedra, far inside it.
+
+**Guard review (required before landing a limit).** Calibrated against the
+*patched* Linux monitor, because on this host the kill path runs through the
+§0.44 patch. Small footprints on purpose — a 256 MiB ceiling exercises the same
+code path as a 64 GiB one, and staying small kept the calibration from
+perturbing the bandwidth-bound `v3k4lx` solve on the same machine.
+
+1. **Unevaluable input.** `_process_footprint` is tri-state by contract on both
+   platforms: bytes, `0` if gone, `None` if unreadable. `_tree_memory` raises
+   `MemoryMetricUnavailable` on `None` rather than skipping the member — verified
+   still present and unconditional. A tree of short-lived children churning
+   through fork/exit for 6 s completed cleanly at 29.4 MiB, which is the §0.44
+   case that previously aborted every completed run.
+2. **Monotonicity.** Fixed 256 MiB ceiling, demand escalating 32 → 64 → 192 →
+   512 → 2048 MiB per process across 3 processes: 32 MiB passes at 238.3 MiB
+   peak (genuinely under the ceiling), and **every** larger demand kills with
+   `peak memory footprint exceeded 268435456 bytes`, rc −9. The far tail (8×
+   the ceiling) does not flip back to PASS.
+3. **Preconditions.** The class is reached through the same `RESOURCE_LIMITS` /
+   `MESH_LIMITS` lookups as every other (`lib/palace.py:875`, `:1217`); a class
+   present in one table and missing from the other raises `KeyError` at lookup,
+   so both entries are added together.
+4. **Source of truth.** The run manifest re-derives `resource_limits` from the
+   table at validation, and `trusted_resource_policy` fingerprints the validator
+   source as well as the values.
+5. **Persistence.** No caching is introduced. A killed run persists a rejection
+   record carrying its `limit_failures`; it is never recorded as clean.
+6. **Provenance.** The new class is disclosed here and in the manifest's
+   `resource_class` field; nothing claims a verification that did not run.
+7. **Known-bad calibration.** Constructed the target failure — a 4-process tree
+   demanding 192 MiB each against a 256 MiB ceiling — and observed the guard
+   fire: peak 260.5 MiB, rc −9, `failures=['peak memory footprint exceeded
+   268435456 bytes']`, killed in 0.5 s.
+8. **Fix vs mute.** The §0.44 patch reports `0` only for a *witnessed* read, with
+   `State:` as the witness. Eight cases against the patched parser, 8/8 as
+   specified: live task → its VmRSS+VmSwap; `State:` present but no `VmRSS:`
+   (exiting rank, kernel thread) → `0`; truncated status, empty read, unparsable
+   `VmRSS:` value, EIO, EACCES → **`None`**; ENOENT → `0`. A malformed read
+   cannot pass as an empty process, so the patch narrows the failure without
+   muting it.
+
+Runtime cost of the guard is unchanged — the patch adds one string comparison
+per status line (§0.44 measured 44.8 µs vs 47.6 µs per poll).
+
+**The retroactive break is worse than §0.43 predicted, and it is not the policy
+hash.** §0.43 identified `policy_sha256` and `profile_registry_sha256` as what a
+new profile moves. Measured here: adding the class to `lib/palace.py` made the
+completed `v3k3lx` run fail re-validation with **`Palace run implementation
+identity mismatch`** — a check that fires *before* the policy comparison.
+`_implementation_identity` pins the sha256 of 31 files including `palace.py`
+itself, so **any** edit to that file, of any kind, retroactively invalidates
+every run previously recorded on that host. Restoring the pristine file returned
+`v3k3lx` to PASS, confirming the mechanism.
+
+That rules out editing `lib/` in place, because the two needs are permanently in
+conflict: `v3k3lx`/`v3k4lx` (the cross-host evidence) validate only against the
+pristine lib, and `v3k5lx`/`v3k6lx` can only run against the patched one.
+Restoring files before each validation would work and would rot silently. So the
+patched copy lives in a **parallel `lib-large/`** on the server, driven by
+`probe_large.py`, which differs from `probe.py` in one line
+(`sys.path.insert(0, "lib-large")`). Identity is scoped to the directory holding
+`palace.py` — verified: the pristine lib pins 31 files under `lib/`, `lib-large`
+pins 31 under `lib-large/` — so each rung validates permanently in its own lib,
+against one shared `out/`, with no state to restore.
+
+`lib/` on the server is byte-identical to the repo
+(`f78b9a4c142f1d9b5726c36555f141eddd819aecf0978be3a0c6d425451df520`), and
+**neither `lib-large/` nor the class may be committed to the repo tree.** The
+cross-host rung `v3k3lx` was deliberately run under the *unmodified* table so the
+§0.44 comparison carries no policy confound.
+
+One hazard worth recording: identity is captured at run *start*
+(`_execution_workload_inputs`, `lib/palace.py:1160`), not at manifest-write time,
+and the limits written to the manifest come from the in-memory table. So editing
+`palace.py` while a solve is in flight does **not** corrupt that run — `v3k4lx`
+was 55 minutes into its solve when the file was patched and recorded the pristine
+identity regardless. The file was restored immediately anyway, before confirming
+this.
+
 ## 1. Goal
 
 Produce **converged, passive, reciprocal** capacitance matrices for Fugu2
