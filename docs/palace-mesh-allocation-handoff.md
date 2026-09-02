@@ -3916,6 +3916,90 @@ been laddered. The §0.45 warning also stands: `pcb_convergence_large` and
 `palace.py`'s own hash means any edit retroactively invalidates every macOS run
 carrying the §0.33/§0.34 evidence.
 
+### 0.48 Sizing the Fugu ladder: it does not fit, and this is an estimate
+
+§0.47 satisfied §1's precondition, so the Fugu question is now live. Before
+committing compute to it I sized it against the four-point Linux cost model.
+**This section is an extrapolation, not a measurement** — the distinction §0.46
+and §0.47 spent four rungs establishing. It is recorded because the conclusion is
+strong enough to change the plan, not because the numbers are trustworthy to
+two digits.
+
+**The cost model is now well-conditioned.** Across the three finest rungs the
+per-unknown cost is flat to 0.2%:
+
+    rung      zstep    Munk        s      GB   GB/Munk   s/Munk
+    v3k3lx    500.0   0.819   6769.5   6.983     8.524   8263.2
+    v3k4lx    250.0   1.390  10541.1  11.692     8.414   7586.0
+    v3k5lx    125.0   2.530  19217.7  21.102     8.340   7595.4
+    v3k6lx     62.5   4.783  36242.9  38.795     8.112   7578.0
+
+`v3k3lx` is the outlier at 8263 s/Munk, carrying the fixed overhead that §0.46
+already warned flatters extrapolation from the coarse end.
+
+**Where the time actually goes.** Palace's elapsed-time report for `v3k6lx`:
+
+    Linear Solve                  3876.8
+      Preconditioner             31654.8
+      Coarse Solve                 343.1
+    Total                        36242.2
+
+The BoomerAMG **preconditioner is 87.3% of the run**. That matters for Fugu
+because preconditioner application is per-iteration *per right-hand side*, and
+an electrostatic extraction solves one RHS per terminal. simple-hb has 18
+terminals; Fugu2 has **82**. The 171-entry gate is 18·19/2; Fugu's is 3403.
+
+**Two independent multipliers, neither optional.** The planar domain is
+177.7 mm square against simple-hb's 90 mm, so at the same `max_planar_area_m2`
+the element budget scales by **3.90×**; and the RHS count scales by **4.56×**.
+Memory takes only the first (RHS are solved in sequence), time takes both:
+
+    rung        zstep      Munk       GB    hours    days
+    fugu-r1     500.0     3.195     25.9     33.4     1.39
+    fugu-r2     250.0     5.419     44.0     56.7     2.36
+    fugu-r3     125.0     9.868     80.0    103.2     4.30
+    fugu-r4      62.5    18.652    151.3    195.0     8.13
+    TOTAL                                   388.3    16.18
+
+**The ladder does not fit.** Rung 3 at ~80 GB is already above the 68.7 GB
+(64 GiB) ceiling of `pcb_convergence_large`, and rung 4 at ~151 GB is above the
+**~107 GB actually available**: `mem.fabi.me` is shared, and an unrelated
+`hl-node` process is resident at 72 GB of the 188 GB. Raising the class ceiling
+is not the answer — §0.41's rule stands, `peak_rss_bytes` must never exceed
+physical RAM, and here it must not exceed what is *free*. Sixteen days of
+occupancy on a shared box is its own objection.
+
+**Why the estimate is optimistic, not conservative.** Three reasons, all
+pointing the same way:
+
+1. Area scaling assumes the planar element budget follows domain area. But the
+   ladder also carries `conductor_edge_band_m = 0.2 mm` at
+   `conductor_edge_max_planar_area_m2 = 3.2e-7`, which scales with *conductor
+   perimeter*. simple-hb has 18 terminals; Fugu's geometry carries **381
+   conductors**. That term is unmodelled and can only add.
+2. Iteration counts are assumed unchanged. Fugu's condition number on a denser,
+   higher-contrast board is unlikely to be better.
+3. GB/Munk is taken at the most favourable measured value (8.111, the finest
+   rung), and s/Munk from the finest rung rather than the 8263 of the coarsest.
+
+**No usable Fugu timing anchor exists.** All 27 archived Fugu runs with a
+recorded elapsed time are `rejected_diagnostic` — truncated at the 1800 s wall,
+with 25.8 GB being the *limit* rather than a measurement. So there is nothing in
+the tree to calibrate against, which is precisely why the numbers above should
+be treated as a decision input and not a result.
+
+**What would turn this into a measurement, and the obstacle.** Generate one
+banded Fugu mesh at 500 µm and run `fugu-r1`; that single point calibrates both
+multipliers at once. The obstacle is provenance, not compute:
+`_validate_source_identity` requires `kind == "kicad_volume_dump"` with
+`file_sha256` matching at the **recorded absolute paths** —
+`/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/.../pcb-volumes.json` (2.3 MB)
+and `/Users/fab/dev/ee/hw/Fugu2/Fugu2.kicad_pcb` (1.7 MB). Reproducing a
+`/Users/fab/...` tree on the Linux box needs root on a machine with another
+tenant on it. The alternatives — mesh on the Mac and ship only the `.msh`, or
+re-dump the geometry natively on Linux under new paths — each change what the
+provenance chain attests. **That is a design decision, not an agent's call.**
+
 ## 1. Goal
 
 Produce **converged, passive, reciprocal** capacitance matrices for Fugu2
