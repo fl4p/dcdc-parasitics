@@ -4016,6 +4016,58 @@ validates. Every other 82-terminal geometry fails — most with
 mismatch`. v14 is the geometry of record; substituting another without
 re-checking would silently ladder a different board.
 
+### 0.49 The Fugu ladder is dropped: the gate is tighter than its own inputs
+
+**Stop here. Do not build the Fugu ladder §0.48 sized.** It was cancelled on
+2026-09-02 by Fab, after the sizing in §0.48 prompted the right question: is a
+2% + 1 fF converged 82-terminal capacitance matrix necessary for the actual
+objective, which is a **pre-EMC simulation** of Fugu2?
+
+It is not, and the reason generalises well beyond this board.
+
+**The numerical gate is tighter than the physical uncertainty of its own
+inputs.** FR4 permittivity is batch- and frequency-dependent, roughly 4.2–4.6
+(±5–10%); copper roughness, solder-mask coverage and stackup tolerances add
+more. Converging the *numerics* to 2% on top of a ±10% material input spends
+compute below the model's own noise floor. EMC results are also read on a log
+scale: a 2% capacitance error is ~0.17 dB and a 20% error ~1.6 dB, against
+pre-compliance margins normally judged at 3–6 dB. The two are indistinguishable
+in the verdict.
+
+**And capacitance is not the dominant term.** For a hard-switching converter the
+emissions are driven by commutation-loop inductance, dV/dt and dI/dt, Coss/Qrr,
+and a *small number* of common-mode capacitances — switch node to chassis or
+earth above all. Roughly 5–20 couplings matter, not 3403. The 82-terminal full
+matrix was a completeness exercise, not an EMC requirement.
+
+**What was worth keeping.** The canary result (§0.47) stands on its own: the
+±5 mm model converges at 62.5 µm, 0 of 171 entries outside the band. The Linux
+cost model is calibrated and reusable (s/Munk flat to 0.2% across the three
+finest rungs), so any future sizing is arithmetic rather than guesswork. And
+§0.48's provenance blocker was corrected — porting geometry to `mem.fabi.me` is
+two file copies, not a root-level obstacle.
+
+**One loose end deliberately left tied.** §0.47's verdict was computed by
+`lxgate.py` without `entry_noise_floors`, which `check_matrix_convergence_ladder`
+documents as "not optional in spirit" — on the canary, 45 of 171 entries move
+more than the whole band across nominally identical meshes, the worst by 63.8%.
+That would normally undermine the result. It does not here, because the rungs
+are **planar-nested**: only `max_vertical_step_m` varies, and Δnodes/Δlevel is
+exactly 3617.0 across the first two intervals (the third differs by precisely
+one level's worth, a level-count boundary detail). All four rungs share one
+planar point set, so differencing them measures vertical refinement rather than
+re-triangulation scatter. §0.47 stands as written.
+
+**Where the work goes instead.** Toward pre-EMC on the bench. The applicable
+standard is IEC 62920:2017+A1:2021, which invokes CISPR 11 (Class B for
+residential) and CISPR 32 for signal/control ports. Fugu2 carries four cable
+ports — Solar+, Bat+, USB-C and CAN — and, verified from the board, exactly one
+inductor (`L2`, the buck coil) among 130 footprints, no common-mode choke, and
+no PE/chassis/shield net anywhere in the 82 extracted nets, hence no
+Y-capacitors. For a *non-isolated* converter that leaves the common-mode return
+path undefined. Whether the board complies is not determinable by simulation;
+see `EMI.md`, which reaches the same conclusion independently.
+
 ## 1. Goal
 
 Produce **converged, passive, reciprocal** capacitance matrices for Fugu2
