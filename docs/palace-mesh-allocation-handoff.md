@@ -3988,17 +3988,33 @@ with 25.8 GB being the *limit* rather than a measurement. So there is nothing in
 the tree to calibrate against, which is precisely why the numbers above should
 be treated as a decision input and not a result.
 
-**What would turn this into a measurement, and the obstacle.** Generate one
-banded Fugu mesh at 500 µm and run `fugu-r1`; that single point calibrates both
-multipliers at once. The obstacle is provenance, not compute:
-`_validate_source_identity` requires `kind == "kicad_volume_dump"` with
-`file_sha256` matching at the **recorded absolute paths** —
-`/Users/fab/dev/pv/ee/dcdc-tools/parasitics/out/.../pcb-volumes.json` (2.3 MB)
-and `/Users/fab/dev/ee/hw/Fugu2/Fugu2.kicad_pcb` (1.7 MB). Reproducing a
-`/Users/fab/...` tree on the Linux box needs root on a machine with another
-tenant on it. The alternatives — mesh on the Mac and ship only the `.msh`, or
-re-dump the geometry natively on Linux under new paths — each change what the
-provenance chain attests. **That is a design decision, not an agent's call.**
+**What would turn this into a measurement.** Generate one banded Fugu mesh and
+solve it; a single rung calibrates both multipliers at once.
+
+> **Correction.** This section first recorded the blocker as provenance:
+> `_validate_source_identity` requires `kind == "kicad_volume_dump"` with
+> `file_sha256` matching at the **recorded absolute paths**, and reproducing a
+> `/Users/fab/...` tree on Linux was said to need root on a shared machine.
+> **That was wrong, and it was wrong because it was assumed rather than
+> checked.** `/Users` already exists on `mem.fabi.me` — created 2026-09-01
+> during the simple-hb port — with `/Users/fab` owned by `fab` and writable.
+> The simple-hb ladder meshes carry `kicad_volume_dump` identity resolving to
+> `/Users/fab/...` paths that exist there, which is how they validated all
+> along. There is no root requirement and no design decision to make.
+
+Porting the Fugu geometry is therefore two file copies to their recorded
+absolute paths — `pcb-volumes.json` (2.3 MB) and `Fugu2.kicad_pcb` (1.7 MB) —
+after which `_validate_source_identity` passes natively on Linux (381
+conductors, 3 dielectrics). Mesh generation and the solve then happen on the
+same host, so nothing about the provenance chain has to be relaxed.
+
+**One caveat on which Fugu geometry.** Of the 24 archived `fugu2-*` manifests
+carrying a source identity, only **`fugu2-plc-source-bound-v14`** still
+validates. Every other 82-terminal geometry fails — most with
+`Palace PLC source reconstruction failed: KiCad board outline`, and
+`fugu2-plc-source-bound-direct` with `Palace PLC source dump semantics
+mismatch`. v14 is the geometry of record; substituting another without
+re-checking would silently ladder a different board.
 
 ## 1. Goal
 
