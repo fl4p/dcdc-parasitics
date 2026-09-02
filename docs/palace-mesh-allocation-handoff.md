@@ -3842,6 +3842,80 @@ PASS under the pristine `lib/`, `v3k5lx` PASSes under `lib-large/` and is
 **rejected** under `lib/` with `Palace run resource class is invalid`. A run made
 under the larger class cannot be silently validated by the stock table.
 
+### 0.47 The ±5 mm ladder converges at four rungs: the canary qualifies
+
+`v3k6lx` completed at **36242.9 s / 38.795 GB** — 0.4% under the low end of the
+36400–38700 s projection and 3.0% under the ~40 GB one. The Linux cost model of
+§0.45 now has four points and has not needed a correction since §0.46 rebuilt it
+on native measurements.
+
+The near-linear scaling held a third time. `v3k5lx`→`v3k6lx` is 1.881× in
+unknowns (324429 → 610172 nodes; 4.78 M unknowns at p = 2) against 1.886× in
+time, an exponent of **1.004** — indistinguishable from the 1.002 measured for
+`v3k4lx`→`v3k5lx`. Memory is mildly sublinear at 1.838×, continuing the gentle
+downward drift in GB per million unknowns: 8.524 → 8.414 → 8.340 → **8.111**, as
+fixed overhead amortises.
+
+**Four-rung verdict, `v3k3lx` → `v3k4lx` → `v3k5lx` → `v3k6lx`:**
+
+    v3k3lx  zstep 500.0 µm  trace 19.2266 pF  pos_off 0  recip 2.27e-23
+    v3k4lx  zstep 250.0 µm  trace 18.9184 pF  pos_off 0  recip 4.51e-23
+    v3k5lx  zstep 125.0 µm  trace 18.8023 pF  pos_off 0  recip 2.43e-23
+    v3k6lx  zstep  62.5 µm  trace 18.7622 pF  pos_off 0  recip 2.25e-23
+    trace : CONVERGED  finest_rel -0.214%  observed order 1.533
+    matrix: CONVERGED  0 of 171 entries outside the band
+
+**The ±5 mm model qualifies on the simple-hb canary at 62.5 µm.** §0.40 and
+§0.42 inferred a ±5 mm verdict; that inference is now retired and replaced by a
+measured one. Reciprocity stays at the floor (2.3e-23 F) and the positive
+off-diagonal count is zero at every rung, so passivity and reciprocity were never
+the binding constraint — convergence was, and it is now satisfied.
+
+**The §0.46 prediction was tested and held.** §0.46 extrapolated the two failing
+entries from their halving ratios *before* `v3k6lx` existed. The fourth rung:
+
+    entry      predicted          measured           ratio d45→d56
+    C[6][8]    0.745 fF (1.40%)   0.670 fF (1.28%)   0.434
+    C[6][9]    0.721 fF (1.34%)   0.637 fF (1.20%)   0.410
+
+Both landed ~11% *better* than predicted. The reason is visible in the ratios:
+the true step ratios are 0.434 and 0.410, below the 0.5 that exact first-order
+convergence would give, so extrapolating at 0.5 was mildly conservative. The
+three-rung failure was therefore a rung-count artifact, as §0.46 argued — but it
+is worth being precise that this was *confirmed*, not assumed: the gate is
+evaluated on the finest step, and only `v3k6lx` supplied it.
+
+**Two caveats that belong on the record.**
+
+1. Neither `C[6][8]` nor `C[6][9]` is the binding entry any more. The worst
+   finest step is now **0.129 fF (1.73%) at `C[14][17]`** —
+   `unconnected-(U1-NC-Pad13)` ↔ `unconnected-(U1-VDDB-Pad11)`. That entry is
+   **not cleanly first-order**: its successive step ratios are 1.087 then 0.678,
+   so it wanders rather than halving. It passes on absolute magnitude
+   (0.129 fF ≪ 1 fF), not on demonstrated asymptotic behaviour, and on the
+   relative criterion alone its margin to 2% is thin. It is a small
+   unconnected-to-unconnected coupling, so a percentage on a near-zero quantity
+   is exactly the case the 1 fF floor exists to absorb — but do not cite this
+   ladder as evidence that *every* entry is first-order convergent. It is not.
+2. The gate ran against the **pristine repo** `palace_convergence`, never the
+   patched `lib-large`. Nothing about the enlarged resource class touched the
+   verdict; `lib-large` decides only whether a run is *allowed to start*, not
+   whether its matrix converged.
+
+`v3k6lx` re-validates and the split still fails closed: **PASS** under
+`lib-large/`, and **rejected** under the pristine `lib/` with `Palace run
+resource class is invalid`. All four Linux rungs are now attested, the lower two
+under `lib/` and the upper two under `lib-large/`.
+
+**What this does and does not license.** It qualifies the *canary* — §1's gate
+ordering is unchanged and must stay unchanged: simple-hb had to demonstrate
+convergence before Fugu is requalified, and it now has. It says nothing yet
+about Fugu's 82 terminals, whose mesh is far larger and whose ±5 mm band has not
+been laddered. The §0.45 warning also stands: `pcb_convergence_large` and
+`lib-large/` must **never** be committed to the repo tree, because pinning
+`palace.py`'s own hash means any edit retroactively invalidates every macOS run
+carrying the §0.33/§0.34 evidence.
+
 ## 1. Goal
 
 Produce **converged, passive, reciprocal** capacitance matrices for Fugu2
