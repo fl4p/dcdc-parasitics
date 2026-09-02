@@ -3791,6 +3791,57 @@ was 55 minutes into its solve when the file was patched and recorded the pristin
 identity regardless. The file was restored immediately anyway, before confirming
 this.
 
+### 0.46 The ±5 mm ladder is measured at three rungs: 2 of 171 entries outside the band
+
+`v3k5lx` completed at **19217.7 s / 21.102 GB** under `pcb_convergence_large`,
+5.7% under the 20370 s projection. **It confirms the intervention by
+measurement:** 19217.7 s is above the 18000 s wall of
+`pcb_convergence_iterative`, so that rung would have been killed at 5 h with no
+matrix had the loop not been stopped (§0.45).
+
+These tags *are* the ±5 mm model — `vertical_refinement_band_m` is
+`[-0.005, 0.005]` on all four, and only `max_vertical_step_m` varies
+(500 → 250 → 125 → 62.5 µm). So §0.40's inference about ±5 mm is now being
+replaced by measurement rather than argued about.
+
+**Three-rung verdict, `v3k3lx` → `v3k4lx` → `v3k5lx`:**
+
+    trace : CONVERGED      finest_rel -0.617%   observed order 1.409
+    matrix: NOT_CONVERGED  2 of 171 entries
+      C[6][8]  Net-(U1-VCCI-Pad3) <-> unconnected-(U1-DIS-Pad5)   1.54 fF (2.90%)
+      C[6][9]  Net-(U1-VCCI-Pad3) <-> unconnected-(U1-DT-Pad6)    1.55 fF (2.89%)
+
+Reciprocity is at the floor throughout (2.3e-23 … 4.5e-23 F) and there are no
+positive off-diagonals at any rung, so the failure is convergence alone, not
+passivity or reciprocity. Both failing entries breach on **both** criteria —
+above 2% *and* above 1 fF — so neither is a near-miss rescued by the absolute
+floor, and neither is a candidate for any softening of the gate (§6).
+
+**A falsifiable prediction, to be settled by `v3k6lx`.** Both entries are
+halving cleanly:
+
+    C[6][8]  -57.9065 → -54.7176 → -53.1757 fF   steps +3.189, +1.542   ratio 0.483
+    C[6][9]  -58.6395 → -55.2959 → -53.7428 fF   steps +3.344, +1.553   ratio 0.464
+
+Step ratios near 0.5 are what first-order convergence in step size predicts, and
+one further halving extrapolates to **+0.745 fF (1.40%)** and **+0.721 fF
+(1.34%)** — inside the band on the relative *and* the absolute criterion
+independently. So the three-rung failure looks like a rung-count artifact rather
+than genuine non-convergence. That is a prediction, not a result: the gate is
+evaluated on the finest step, which only `v3k6lx` supplies. If the fourth rung
+lands outside the band the ladder fails, and the ±5 mm model does not qualify.
+
+`v3k6lx` started 06:43:11. With three native Linux points the exponent for
+`v3k4lx`→`v3k5lx` is 1.002 — essentially linear, against 1.099 for the same
+interval on macOS — putting `v3k6lx` at 36400–38700 s (10.1–10.8 h) and ~40 GB.
+That is 1.49× inside the 16 h wall and 1.69× inside the 64 GiB ceiling.
+
+Both completed rungs re-validate, each in its own lib, and the split is
+confirmed to fail closed in the direction that matters: `v3k3lx` and `v3k4lx`
+PASS under the pristine `lib/`, `v3k5lx` PASSes under `lib-large/` and is
+**rejected** under `lib/` with `Palace run resource class is invalid`. A run made
+under the larger class cannot be silently validated by the stock table.
+
 ## 1. Goal
 
 Produce **converged, passive, reciprocal** capacitance matrices for Fugu2
