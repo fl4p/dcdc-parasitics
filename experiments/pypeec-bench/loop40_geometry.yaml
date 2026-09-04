@@ -1,0 +1,77 @@
+"mesh_type": "shape"
+"data_voxelize":
+    "param":
+        "dx": 250.0e-6
+        "dy": 250.0e-6
+        "dz": 80.0e-6
+        "cz": 0.0
+        "simplify": 1.0e-7
+        "construct": null
+        "xy_min": null
+        "xy_max": null
+    "layer_stack":
+        - {"n_layer": 1,  "tag_layer": "bot"}
+        - {"n_layer": 20, "tag_layer": "gap"}
+        - {"n_layer": 1,  "tag_layer": "top"}
+    "geometry_shape":
+        "trace_top":
+            - "shape_layer": ["top"]
+              "shape_operation": "add"
+              "shape_type": "polygon"
+              "shape_data":
+                  "buffer": 0.0
+                  "coord_shell": [[0.0, 0.0], [0.0400, 0.0], [0.0400, 0.002], [0.0, 0.002]]
+                  "coord_holes": []
+        "trace_bot":
+            - "shape_layer": ["bot"]
+              "shape_operation": "add"
+              "shape_type": "polygon"
+              "shape_data":
+                  "buffer": 0.0
+                  "coord_shell": [[0.0, 0.0], [0.0400, 0.0], [0.0400, 0.002], [0.0, 0.002]]
+                  "coord_holes": []
+        "link":
+            - "shape_layer": ["bot", "gap", "top"]
+              "shape_operation": "add"
+              "shape_type": "polygon"
+              "shape_data":
+                  "buffer": 0.0
+                  "coord_shell": [[0.0395, 0.0], [0.0400, 0.0], [0.0400, 0.002], [0.0395, 0.002]]
+                  "coord_holes": []
+        "src":
+            - "shape_layer": ["top"]
+              "shape_operation": "add"
+              "shape_type": "polygon"
+              "shape_data":
+                  "buffer": 0.0
+                  "coord_shell": [[0.0, 0.0], [0.00025, 0.0], [0.00025, 0.002], [0.0, 0.002]]
+                  "coord_holes": []
+        "sink":
+            - "shape_layer": ["bot"]
+              "shape_operation": "add"
+              "shape_type": "polygon"
+              "shape_data":
+                  "buffer": 0.0
+                  "coord_shell": [[0.0, 0.0], [0.00025, 0.0], [0.00025, 0.002], [0.0, 0.002]]
+                  "coord_holes": []
+"data_point":
+    "check_cloud": true
+    "filter_cloud": true
+    "pts_cloud": []
+"data_resampling":
+    "use_reduce": true
+    "use_resample": false
+    "resampling_factor": [1, 1, 1]
+"data_conflict":
+    "resolve_rules": true
+    "resolve_random": false
+    "conflict_rules":
+        - {"domain_resolve": ["trace_top"], "domain_keep": ["src"]}
+        - {"domain_resolve": ["trace_bot"], "domain_keep": ["sink"]}
+        - {"domain_resolve": ["trace_top", "trace_bot"], "domain_keep": ["link"]}
+"data_integrity":
+    "check_integrity": true
+    "domain_connected":
+        "conductor": {"domain_group": [["src"], ["sink"], ["trace_top"], ["trace_bot"], ["link"]], "connected": true}
+    "domain_adjacent":
+        "terminal": {"domain_group": [["src"], ["sink"]], "connected": false}
