@@ -1,0 +1,17 @@
+* trace-over-return loop: 40 mm long, 2 mm wide, 80 um Cu,
+* 1.68 mm centre-to-centre separation, shorted at the far end.
+.units mm
+.default sigma=58000 nwinc=8 nhinc=3
+
+N1 x=0     y=1 z=1.72
+N2 x=39.75 y=1 z=1.72
+N3 x=39.75 y=1 z=0.04
+N4 x=0     y=1 z=0.04
+
+E1 N1 N2 w=2 h=0.08
+E2 N2 N3 w=2 h=0.5 wx=0 wy=1 wz=0 nwinc=8 nhinc=3
+E3 N3 N4 w=2 h=0.08
+
+.external N1 N4
+.freq fmin=1e6 fmax=1e6 ndec=1
+.end
