@@ -80,6 +80,21 @@ def subckt(p):
     # false diagnosis pointing the reader at a board problem that does not exist.
     # The UNAVAILABLE verdict and the 0-PLACEHOLDER warning both stay -- what
     # changes is only the stated CAUSE.
+    _mod = p.get("module") or {}
+    if _mod:
+        # The .lib is what the LOSS consumer reads. An unflagged module L_loop would
+        # flow into a budget as if it were the full physical commutation loop, which
+        # it is not — same reasoning as the DCDC_ONLY_FB banner above.
+        warn.append(
+            f"INTEGRATED-MODULE extraction ({_mod.get('ref')}, internal_closure "
+            f"{_mod.get('internal_closure')}): L_loop is BOARD COPPER ONLY and is a "
+            f"LOWER BOUND — the module's pad-to-die path is not public and is NOT "
+            f"included. Lscs_*/Lg* below are 0 PLACEHOLDERS (gates are in the package)"
+            + ("" if _mod.get("L_loop_with_internal") is None else
+               f"; a declared internal {_mod['internal_L']*1e9:.2f} nH "
+               f"({_mod.get('internal_source')}) is reported separately as "
+               f"L_loop_with_internal = {_mod['L_loop_with_internal']*1e9:.2f} nH and "
+               f"is NOT in L_loop here"))
     _is_module = ((p.get("topo") or {}).get("kind") == "module")
     _cause = ("gates are INSIDE the module package — there is no board gate copper "
               "and no common-source inductance to extract"
@@ -110,8 +125,12 @@ def subckt(p):
         "* Power-stage parasitics extracted by dcdc-tools/parasitics",
         f"* board  : {os.path.basename(t.get('pcb',''))}",
         f"* nets   : Vin={t.get('vin')}  SW={t.get('sw')}  GND={t.get('gnd')}",
-        f"* HS={','.join(t['hs']['refs'])} ({'Kelvin' if t['hs']['kelvin'] else 'non-Kelvin'})"
-        f"  LS={','.join(t['ls']['refs'])} ({'Kelvin' if t['ls']['kelvin'] else 'non-Kelvin'})",
+        # Kelvin-sense is a gate-return property of a DISCRETE package; for a module
+        # there is no board gate return to describe, so the line names the package.
+        (f"* stage  : {_mod.get('ref')} INTEGRATED MODULE (HS+LS+drivers in one package)"
+         if _mod else
+         f"* HS={','.join(t['hs']['refs'])} ({'Kelvin' if t['hs']['kelvin'] else 'non-Kelvin'})"
+         f"  LS={','.join(t['ls']['refs'])} ({'Kelvin' if t['ls']['kelvin'] else 'non-Kelvin'})"),
         f"* freq   : {p['freq_Hz']:g} Hz plateau   mesh pitch {p['meta'].get('pitch')} mm"
         + (f"   Cu {p['meta'].get('cu_temp'):g} C" if p['meta'].get('cu_temp') not in (None, 20.0) else ""),
         "* R values are isothermal copper (no self-heating); L is temperature-independent.",
@@ -261,6 +280,72 @@ def _only_fb_banner(p):
     ]
 
 
+def _module_banner(p):
+    """Banner for an INTEGRATED-MODULE extraction (lib/module_stage.py).
+
+    The number in the table below is BOARD COPPER ONLY: the package pads are tied
+    by one ideal `.equiv` and the module's pad-to-die path contributes exactly
+    zero. Nothing about a bare "3.63 nH" says that, and a reader who takes it for
+    the physical commutation loop is understating it by the whole internal path --
+    which is the single way this feature could mislead. So it goes at the TOP of
+    the page, not into `meta` where it can be missed.
+
+    Returns [] for a discrete run, so every existing report is unchanged line for
+    line."""
+    mod = p.get("module") or {}
+    if not mod:
+        return []
+    out = [
+        f"> **INTEGRATED-MODULE extraction — {mod.get('ref')}.** Both switches are "
+        f"inside the package. The input commutation loop is closed at the PACKAGE "
+        f"PADS (`internal_closure: {mod.get('internal_closure')}`), so **L_loop "
+        f"below is BOARD COPPER ONLY** and is a LOWER BOUND on the physical loop: "
+        f"the module's pad-to-die path is not public geometry and is never "
+        f"invented. Gate loops, CSI and the per-switch conduction split do not "
+        f"exist on the board and are reported as unavailable, never as zero.",
+    ]
+    if mod.get("L_loop_with_internal") is not None:
+        out.append(
+            f">\n> A declared internal inductance of "
+            f"**{mod['internal_L']*1e9:.2f} nH** (source: {mod.get('internal_source')}) "
+            f"is reported SEPARATELY: board {mod['L_loop_board']*1e9:.2f} nH + "
+            f"internal {mod['internal_L']*1e9:.2f} nH = "
+            f"**{mod['L_loop_with_internal']*1e9:.2f} nH** total. The field solve is "
+            f"identical either way -- FastHenry has no lumped element -- so the "
+            f"total is a SUM, not an extraction.")
+    out.append("")
+    return out
+
+
+def _csi_diagram():
+    """The discrete common-source-inductance schematic block for report.md.
+
+    Factored out of `markdown()` unchanged so the module path can omit it without
+    the discrete path's bytes moving."""
+    return [
+        "## Where the common-source inductance sits",
+        "",
+        "```",
+        "  Vin \u2500Lloop_hs\u2500\u2510                         gate driver (HS)",
+        "                nHS \u2500\u2500Lghs\u2500\u2500 HSG           \u2502",
+        "        (HS die) \u2502                          \u2502 drive between",
+        "            Lscs_hs  \u25c0\u2500\u2500 SHARED = CSI_hs     \u2502 HSG and SW  (non-Kelvin)",
+        "                \u2502                          or HSG and HSKEL (Kelvin)",
+        "  SW \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
+        "                Lloop_ls",
+        "                nLS \u2500\u2500Lgls\u2500\u2500 LSG",
+        "            Lscs_ls  \u25c0\u2500\u2500 SHARED = CSI_ls",
+        "  GND \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+        "```",
+        "",
+        "The HS source lead `Lscs_hs` carries **both** the commutation current and "
+        "the HS gate-return current, so power di/dt develops a voltage across it that "
+        "opposes the gate drive \u2014 the common-source feedback that slows switching and "
+        "aggravates shoot-through. Use `parasitics.lib` in a gate-drive/DPT sim; use "
+        "`L_loop` with device Coss for switch-node peak-voltage / ringing.",
+    ]
+
+
 def _extra_nets_banner(p):
     """Banner for a run that meshed nets beyond the derived half-bridge set.
 
@@ -319,10 +404,17 @@ def markdown(p):
     L = lambda v: f"{v*nH:.2f} nH"  # noqa: E731
     # None => gate port unavailable (routing dropped, --allow-missing-gate-ports);
     # label it, never render a fabricated 0.00 nH that looks like a measurement.
-    LA = lambda v: L(v) if v is not None else "n/a — gate routing unavailable"  # noqa: E731
+    _is_module = bool(p.get("module"))
+    # A module's gates are inside the package. "gate routing unavailable" would
+    # send the reader looking for a board defect that does not exist; the verdict
+    # (no value, never a 0) is identical.
+    _na = ("n/a — gates are inside the module package" if _is_module
+           else "n/a — gate routing unavailable")
+    LA = lambda v: L(v) if v is not None else _na  # noqa: E731
     lines = [
         f"# Power-stage parasitics — {os.path.basename(t.get('pcb',''))}",
         "",
+        *_module_banner(p),
         *_only_fb_banner(p),
         *_altium_banner(p),
         *_extra_nets_banner(p),
@@ -330,16 +422,22 @@ def markdown(p):
         f"(mesh pitch {p['meta'].get('pitch')} mm, FET lead {p['meta'].get('lead_mm')} mm).",
         "",
         f"- **Vin** `{t.get('vin')}`  **SW** `{t.get('sw')}`  **GND** `{t.get('gnd')}`",
-        f"- **HS** {', '.join(t['hs']['refs'])} — gate `{t['hs']['gate']}` — "
-        f"{'Kelvin sense (CSI excluded)' if t['hs']['kelvin'] else 'non-Kelvin (CSI in gate loop)'}",
-        f"- **LS** {', '.join(t['ls']['refs'])} — gate `{t['ls']['gate']}` — "
-        f"{'Kelvin sense (CSI excluded)' if t['ls']['kelvin'] else 'non-Kelvin (CSI in gate loop)'}",
+        *([f"- **Power stage** {(p.get('module') or {}).get('ref')} — integrated "
+           f"module (HS + LS + gate drivers inside one package)"]
+          if _is_module else [
+            f"- **HS** {', '.join(t['hs']['refs'])} — gate `{t['hs']['gate']}` — "
+            f"{'Kelvin sense (CSI excluded)' if t['hs']['kelvin'] else 'non-Kelvin (CSI in gate loop)'}",
+            f"- **LS** {', '.join(t['ls']['refs'])} — gate `{t['ls']['gate']}` — "
+            f"{'Kelvin sense (CSI excluded)' if t['ls']['kelvin'] else 'non-Kelvin (CSI in gate loop)'}"]),
         f"- **Cin ported** (in order, nearest→): {', '.join(t.get('cin_used', [])) or '(single nearest)'}"
         + (f" — {p['n_cin']} caps in parallel" if p.get('n_cin', 1) > 1 else ""),
         "",
         "| Parasitic | Value |",
         "|---|---|",
-        f"| Commutation loop L (Cin→HS→SW→LS→GND){' — %d caps ‖' % p['n_cin'] if p.get('n_cin', 1) > 1 else ''} | **{L(p['L_loop'])}** |",
+        (f"| Commutation loop L (Cin→VIN pad→[module]→GND pad→Cin) — **board "
+         f"copper only**{' — %d caps ‖' % p['n_cin'] if p.get('n_cin', 1) > 1 else ''} "
+         f"| **{L(p['L_loop'])}** |" if _is_module else
+         f"| Commutation loop L (Cin→HS→SW→LS→GND){' — %d caps ‖' % p['n_cin'] if p.get('n_cin', 1) > 1 else ''} | **{L(p['L_loop'])}** |"),
     ]
     if p.get("n_cin", 1) > 1:
         # SW-peak L is bracketed: single-cap (upper) ≥ truth ≥ ideal-cap copper-only (lower)
@@ -392,27 +490,31 @@ def markdown(p):
         f"| LS gate-loop L | {LA(p['L_gate_ls'])} |",
         f"| gate–gate mutual | {LA(p.get('m_gate'))} |",
         "",
-        "## Where the common-source inductance sits",
-        "",
-        "```",
-        "  Vin ─Lloop_hs─┐                         gate driver (HS)",
-        "                nHS ──Lghs── HSG           │",
-        "        (HS die) │                          │ drive between",
-        "            Lscs_hs  ◀── SHARED = CSI_hs     │ HSG and SW  (non-Kelvin)",
-        "                │                          or HSG and HSKEL (Kelvin)",
-        "  SW ───────────┤",
-        "                Lloop_ls",
-        "                nLS ──Lgls── LSG",
-        "            Lscs_ls  ◀── SHARED = CSI_ls",
-        "  GND ──────────┘",
-        "```",
-        "",
-        "The HS source lead `Lscs_hs` carries **both** the commutation current and "
-        "the HS gate-return current, so power di/dt develops a voltage across it that "
-        "opposes the gate drive — the common-source feedback that slows switching and "
-        "aggravates shoot-through. Use `parasitics.lib` in a gate-drive/DPT sim; use "
-        "`L_loop` with device Coss for switch-node peak-voltage / ringing.",
+        # The CSI schematic describes a DISCRETE half bridge. For a module none of
+        # its nodes exist on the board, so printing it would illustrate a circuit
+        # the extraction did not measure.
+        *([] if _is_module else _csi_diagram()),
     ]
+    if _is_module:
+        lines += [
+            "## What this extraction does and does not contain",
+            "",
+            "The solved loop is `Cin -> VIN pad -> [ideal pad-plane closure] -> GND "
+            "pad -> Cin`. Everything in it is copper you can point at on the board. "
+            "The module's internal path from those pads to its dies is **not** in "
+            "the number and is not estimated: its geometry is not published, so an "
+            "invented value would be unfalsifiable and invisible inside a quantity "
+            "every other config means as board copper. Add it, if you ever have a "
+            "defensible figure, with `internal_closure: declared_internal` + "
+            "`internal_nh` + `internal_source` — which reports it as a separate, "
+            "named, sourced term and still leaves `L_loop` as board copper.",
+            "",
+            "There is no gate-drive `.SUBCKT` worth using here: `Lscs`/`Lg` in "
+            "`parasitics.lib` are 0 PLACEHOLDERS, because the gate loops are inside "
+            "the package. Use `L_loop` with the module's own Coss/switching data for "
+            "switch-node ringing, and the `cin_branches` decomposition for the input "
+            "bank.",
+        ]
 
     if p.get("r_hs") is not None:
         lines += [

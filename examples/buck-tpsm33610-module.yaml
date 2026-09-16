@@ -54,9 +54,22 @@ module:
 cin_loop_refs: [C2, C1]
 cin_parallel: 2
 emit_cin_network: true
-pitch: [0.25]                 # 0.25 mm: the module's VIN pad is 1.2 x 0.35 mm, and
-                              # the pad-plane closure REFUSES a proximity bond -- a
-                              # mesh node has to fall inside the land.
+# 0.25 mm. The module's VIN pad is a 0.35 x 1.2 mm rotated land, and the pad-plane
+# closure refuses a fabricated proximity bond -- a real mesh node (or, on /VIN which
+# has no pour here, a real track node) has to fall inside the land.
+#
+# PITCH IS NOT FREELY CHOOSABLE ON THIS BOARD. Measured 2026-09-16:
+#   0.50  L_loop 3.620 nH   (trunk 2.854, C2 0.904, C1 4.994)
+#   0.25  L_loop 3.627 nH   (trunk 2.903, C2 0.842, C1 5.158)   <- this config
+#   0.20  L_loop 3.561 nH   (trunk 2.851, C2 0.823, C1 5.165)
+# i.e. +-1% over a 2.5x pitch range: L is converged. But 0.35 mm FAILS, hard, with
+#   "the P_pwr terminals are NOT connected in the modeled copper"
+# because at that pitch the GND pour mesh under U1.10 forms a 22-node island that
+# never reaches the rest of the plane. That is the guard doing its job, not a
+# spurious refusal: the deck built with the guard bypassed DOES get through
+# FastHenry (two conductors bridged only by the two source branches) and reduces to
+# L = 4.3e16 nH. Without the guard that garbage is what a caller would receive.
+pitch: [0.25]
 lead_mm: 0                    # required for a module; see above
 lf_freq: 39000
 weld_tol: 0.6

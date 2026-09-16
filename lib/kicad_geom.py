@@ -1883,13 +1883,15 @@ def validate_module_ports(model, topo):
     1. P_pwr present. Without it there is no commutation port and nothing to
        reduce. (Same bar as the discrete path's `validate_required_ports`.)
 
-    2. P_pwr does not span an IDEAL-LINK-ONLY path. If the Cin pads end up joined
+    2. P_pwr's terminals are actually CONNECTED -- i.e. a loop exists at all.
+
+    3. P_pwr does not span an IDEAL-LINK-ONLY path. If the Cin pads end up joined
        to each other through the closure `.equiv` and nothing else, FastHenry
        happily returns L ~ 0 / R ~ 0 -- a number, in the right units, that measured
        no copper. `Model.ideal_link_component` is the existing test for exactly
        this and is reused rather than re-derived.
 
-    3. The loop passes THROUGH the module. With the closure removed, the Cin port's
+    4. The loop passes THROUGH the module. With the closure removed, the Cin port's
        Vin terminal must still reach the module's VIN pad node, and its GND
        terminal must still reach the module's GND pad node. If either fails, the
        closure is not on the Cin loop: the extraction would be some other loop (or
@@ -1904,6 +1906,22 @@ def validate_module_ports(model, topo):
             "port there is nothing to measure. Check the input caps, cin_loop_refs, "
             "and the vin/gnd net names.")
     a, b = ports["P_pwr"]
+    # 2. There IS a loop. Without the pad-plane closure the Vin copper and the GND
+    #    copper are two galvanically separate conductors, and FastHenry answers a
+    #    port that spans them with "Number of meshes: 0 / Couldn't create sparse
+    #    matrix, err 5" and exit 1 (reproduced 2026-09-16). That is an obscure
+    #    solver message for a topology error, and a closure wired to the WRONG
+    #    terminal (SW instead of GND, say) produces exactly the same thing. Say so
+    #    here instead, on the deck that is about to be written.
+    if b not in model.component([a]):
+        raise ValueError(
+            f"invalid module extraction: the P_pwr terminals are NOT connected in "
+            f"the modeled copper, so there is no commutation loop to solve -- "
+            f"FastHenry would report 'Number of meshes: 0' and fail. The "
+            f"{spec.get('ref')} pad-plane closure "
+            f"({spec.get('_vin_node')} <-> {spec.get('_gnd_node')}) is either "
+            f"missing or joins the wrong terminals, or the Cin pads never bonded "
+            f"into the meshed copper at this pitch/margin.")
     if b in model.ideal_link_component(a):
         raise ValueError(
             f"invalid module extraction: the P_pwr terminals are joined through "
