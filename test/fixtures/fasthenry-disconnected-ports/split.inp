@@ -1,0 +1,13 @@
+* two galvanically separate conductors (VIN copper, GND copper) with a port spanning them
+* -- exactly what a probe_ports-only "module" deck would be without a closure
+.units mm
+.default sigma=5.8e4 h=0.035
+Na x=0 y=0 z=0
+Nb x=5 y=0 z=0
+Nc x=0 y=2 z=0
+Nd x=5 y=2 z=0
+Ea Na Nb w=1
+Eb Nc Nd w=1
+.external Na Nc
+.freq fmin=1e6 fmax=1e6 ndec=1
+.end

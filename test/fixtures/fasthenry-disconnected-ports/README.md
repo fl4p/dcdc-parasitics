@@ -3,6 +3,11 @@
 Reproduction decks for `~/dev/kb/tooling/fasthenry-ports-across-disconnected-conductors.md`.
 Run with FastHenry 3.0.1 (28May12, FastFieldSolvers), 2026-09-16.
 
+The `.inp` and `.mat` files here are `git add -f`-ed past `.gitignore` (which
+excludes `*.inp` and `*.mat` as run output). They are not run output: they are the
+evidence for a verified kb claim, and without them the note's `repo:` locator
+points at a directory with the conclusions and none of the data.
+
 ## `split.inp` — ONE port across two separate wires → hard error
 
 Two parallel 5 mm wires, nothing joining them, one `.external` from one to the
