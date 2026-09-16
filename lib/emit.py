@@ -75,12 +75,23 @@ def subckt(p):
         warn.append("CSI_hs exceeds HS gate-loop L (clamped) — check gate-return/Kelvin detection")
     if ls_gate_available and lg_ls - csi_ls < 0:
         warn.append("CSI_ls exceeds LS gate-loop L (clamped)")
+    # On an INTEGRATED MODULE the gates are inside the package: there is no gate
+    # copper on the board, so "routing missing from the extraction" would be a
+    # false diagnosis pointing the reader at a board problem that does not exist.
+    # The UNAVAILABLE verdict and the 0-PLACEHOLDER warning both stay -- what
+    # changes is only the stated CAUSE.
+    _is_module = ((p.get("topo") or {}).get("kind") == "module")
+    _cause = ("gates are INSIDE the module package — there is no board gate copper "
+              "and no common-source inductance to extract"
+              if _is_module else "{} gate routing missing from the extraction")
     if not hs_gate_available:
-        warn.append("HS CSI / gate-loop UNAVAILABLE (HS gate routing missing from the "
-                    "extraction) — Lscs_hs/Lghs below are 0 PLACEHOLDERS, not measured zeros")
+        warn.append("HS CSI / gate-loop UNAVAILABLE ("
+                    + (_cause if _is_module else _cause.format("HS"))
+                    + ") — Lscs_hs/Lghs below are 0 PLACEHOLDERS, not measured zeros")
     if not ls_gate_available:
-        warn.append("LS CSI / gate-loop UNAVAILABLE (LS gate routing missing from the "
-                    "extraction) — Lscs_ls/Lgls below are 0 PLACEHOLDERS, not measured zeros")
+        warn.append("LS CSI / gate-loop UNAVAILABLE ("
+                    + (_cause if _is_module else _cause.format("LS"))
+                    + ") — Lscs_ls/Lgls below are 0 PLACEHOLDERS, not measured zeros")
 
     # per-side loop R: total is the HF ring R_loop (plateau, damping), split by the
     # real LF conduction proportion (r_hs:r_ls) when available, else 50/50.

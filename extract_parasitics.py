@@ -40,6 +40,7 @@ import numpy as np  # noqa: E402  (for the LinAlgError type on a degenerate port
 import emit  # noqa: E402
 import pcb_source  # noqa: E402
 import extra_nets as extra_nets_lib  # noqa: E402
+import module_stage as module_stage_lib  # noqa: E402
 import probe_ports as probe_ports_lib  # noqa: E402
 import solve_reduce  # noqa: E402
 
@@ -155,6 +156,10 @@ DEFAULTS = {
     "gate_net_override": None,
     "probe_ports": None,
     "probe_allow_proximity_bond": False,
+    # Integrated-module power stage (both FETs inside one package). See
+    # lib/module_stage.py: `internal_closure` inside this block has NO default,
+    # so declaring the block is an explicit statement of what the loop contains.
+    "module": None,
     "extra_nets": None,
     "hs_package": None,
     "ls_package": None,
@@ -313,6 +318,11 @@ def run_geom(args, pitch, outdir, tag=None):
         cmd += ["--gate-net-override", override_str]
     if getattr(args, "probe_allow_proximity_bond", False):
         cmd.append("--probe-allow-proximity-bond")
+    if getattr(args, "module", None):
+        # to_arg() re-validates, so a malformed module block fails HERE, in the
+        # parent, rather than inside the pcbnew subprocess where the message has to
+        # be recovered from a captured stream.
+        cmd += ["--module-spec", module_stage_lib.to_arg(args.module)]
     if getattr(args, "probe_ports", None):
         # Same dict->wire-string crossing gate_net_override uses. to_arg() re-parses,
         # so a spec that is malformed here fails BEFORE the subprocess is launched
@@ -882,6 +892,12 @@ def require_gate_ports(side, pitch, allow_missing_gate_ports=False):
     that gate. Refuse to emit a bogus 0.00 nH CSI rather than warn and continue."""
     ports = set(side.get("ports") or [])
     topo = side.get("topo") or {}
+    if topo.get("kind") == "module" or side.get("kind") == "module":
+        # An integrated module's gates are INSIDE the package: there is no gate
+        # copper on the board and no CSI to report. This is not the
+        # "gate routing went missing" case the check guards against -- the module
+        # path reports gate/CSI quantities as unavailable (null), never as 0.
+        return
     if topo.get("cin_extraction_basis") in ("cap_only", "switch_residual"):
         return
     dropped = set((side.get("topo") or {}).get("cin_dropped_ports") or [])
@@ -928,6 +944,16 @@ def build_parser():
                     help="force LS FET refdes")
     ap.add_argument("--hs-gate", default=argparse.SUPPRESS, help="force HS gate net")
     ap.add_argument("--ls-gate", default=argparse.SUPPRESS, help="force LS gate net")
+    ap.add_argument("--module", default=argparse.SUPPRESS,
+                    help="INTEGRATED-MODULE power stage (both FETs inside one "
+                         "package) as a JSON object, e.g. '{\"ref\": \"U1\", "
+                         "\"vin_pads\": [\"3\"], \"gnd_pads\": [\"10\"], "
+                         "\"internal_closure\": \"ideal_pad_plane\"}'. In YAML "
+                         "use the `module:` mapping. `internal_closure` has NO "
+                         "default and must be declared: the pad-to-die path inside "
+                         "a module is not public geometry and is never invented "
+                         "(see lib/module_stage.py). Excludes --hs-ref/--ls-ref, "
+                         "the gate options and lead_mm.")
     ap.add_argument("--hs-package", default=argparse.SUPPRESS,
                     help="HS FET package, emitted as topo.hs.package so the loss deck can "
                          "complete die-only source/gate leads on a copper-only extraction. "
@@ -1187,6 +1213,22 @@ def _validate_config(config, path):
                     out[key] = {str(k): str(v) for k, v in value.items()}
                 else:
                     raise TypeError("expected mapping of ref -> net name")
+            elif key == "module":
+                # Shape AND full semantics both validated by module_stage.parse_spec;
+                # unlike probe_ports there is no separate CLI spelling to reconcile,
+                # so one place is enough. A ModuleError here is a SystemExit with the
+                # module's own message, which names the missing/illegal declaration.
+                if value is None:
+                    out[key] = None
+                elif isinstance(value, dict):
+                    try:
+                        out[key] = module_stage_lib.parse_spec(value)
+                    except module_stage_lib.ModuleError as e:
+                        raise SystemExit(f"{path}: {e}")
+                else:
+                    raise TypeError(
+                        "expected a mapping (ref, internal_closure, ...); see "
+                        "lib/module_stage.py")
             elif key == "probe_ports":
                 # LIST_TYPES only models homogeneous scalar lists, so this
                 # structured key gets the same hardcoded branch gate_net_override
@@ -1285,6 +1327,44 @@ def parse_args(argv=None):
     # string, so the ONLY place both paths meet is here. Parse (not just
     # shape-check) so a bad REF.PAD, a self-pair, a duplicate name or an
     # unusable label is rejected before a multi-minute extraction starts.
+    # module: the YAML path already parsed it in _validate_config; the CLI path
+    # hands over a JSON string. parse_spec is idempotent on an already-normalized
+    # dict, so running it here covers BOTH without double-reporting.
+    if merged.get("module"):
+        try:
+            merged["module"] = module_stage_lib.parse_spec(merged["module"])
+        except module_stage_lib.ModuleError as e:
+            ap.error(str(e))
+        conflicts = [n for n, v in (("hs_ref", merged.get("hs_ref")),
+                                    ("ls_ref", merged.get("ls_ref")),
+                                    ("hs_gate", merged.get("hs_gate")),
+                                    ("ls_gate", merged.get("ls_gate")),
+                                    ("hs_kelvin", merged.get("hs_kelvin")),
+                                    ("ls_kelvin", merged.get("ls_kelvin")),
+                                    ("hs_package", merged.get("hs_package")),
+                                    ("ls_package", merged.get("ls_package")),
+                                    ("gate_net_override", merged.get("gate_net_override")),
+                                    ("allow_missing_gate_ports",
+                                     merged.get("allow_missing_gate_ports"))) if v]
+        if conflicts:
+            ap.error(
+                f"module: the half-bridge option(s) {', '.join(conflicts)} describe "
+                f"discrete FETs and have no meaning for an integrated module. They "
+                f"are refused rather than ignored, because a silently-dropped "
+                f"declaration is how a run ends up measuring something other than "
+                f"what its config says.")
+        if merged.get("lead_mm"):
+            ap.error(
+                f"module: lead_mm ({merged['lead_mm']}) is a DISCRETE die-plane "
+                f"riser length. A module has no declarable die plane; set lead_mm: 0 "
+                f"and declare module.internal_closure instead (lib/module_stage.py).")
+        if merged.get("cin_extraction_basis") != "full_loop":
+            ap.error(
+                "module: cin_extraction_basis must be full_loop; cap_only and "
+                "switch_residual are plane-P gauges defined by the discrete HS/LS "
+                "demarcation, which does not exist inside a package.")
+        if merged.get("parallel_fets") != "lumped":
+            ap.error("module: parallel_fets has no meaning for a single package")
     if merged.get("probe_ports"):
         try:
             probes = probe_ports_lib.parse_spec(merged["probe_ports"])

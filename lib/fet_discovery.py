@@ -24,6 +24,8 @@ import os
 
 import pcbnew
 
+import module_stage
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -243,6 +245,139 @@ def discover(board, sw, gnd, vin=None, hs_ref=None, ls_ref=None,
         cin=cin,
     )
     return topo
+
+
+def _module_pads(fp, want_net, declared, role, ref):
+    """Resolve the module's pads on `want_net` -> [(pad_number, (x_mm,y_mm), layer)].
+
+    `declared` is the user's pad-number list, or None to auto-discover every pad of
+    this footprint that sits on the net.
+
+    FAIL CLOSED. A declared pad that does not exist on the footprint, or that
+    exists but sits on a DIFFERENT net, is a hard error naming what is actually
+    there -- never a silent drop. Silently dropping one of two declared VIN pads
+    would halve the pad group, move the closure, and return a plausible smaller
+    number; that is exactly the class of failure this tool must not produce.
+    """
+    by_num = {}
+    for pad in fp.Pads():
+        num = str(pad.GetNumber())
+        if not num:                 # unnumbered mechanical/NC lands: not terminals
+            continue
+        by_num.setdefault(num, []).append(pad)
+    if declared is None:
+        found = [(num, pads) for num, pads in by_num.items()
+                 if any(p.GetNetname() == want_net for p in pads)]
+        if not found:
+            have = ", ".join(sorted({p.GetNetname() for pads in by_num.values()
+                                     for p in pads if p.GetNetname()})) or "(none)"
+            raise ValueError(
+                f"module {ref}: no pad on the {role} net {want_net!r}. The input "
+                f"commutation loop cannot be closed at a package terminal that is "
+                f"not there. Nets on {ref}: {have}. Declare module.{role}_pads if "
+                f"the net name is right but the pads are numbered oddly.")
+        declared = sorted(num for num, _ in found)
+        auto = True
+    else:
+        auto = False
+    out = []
+    for num in declared:
+        pads = by_num.get(num)
+        if not pads:
+            have = ", ".join(sorted(by_num)) or "(none)"
+            raise ValueError(
+                f"module {ref}: {role}_pads names pad {num!r}, which {ref} does not "
+                f"have. Pads on {ref}: {have}.")
+        wrong = [p for p in pads if p.GetNetname() != want_net]
+        if wrong:
+            nets = ", ".join(sorted({p.GetNetname() or "(no net)" for p in pads}))
+            raise ValueError(
+                f"module {ref}: {role}_pads names pad {num!r}, but that pad is on "
+                f"{nets} -- not the declared {role} net {want_net!r}. Closing the "
+                f"commutation loop on the wrong terminal would produce a number "
+                f"that is not the input loop.")
+        for pad in pads:
+            pos = pad.GetPosition()
+            out.append((num, (_nm_to_mm(pos.x), _nm_to_mm(pos.y)), pad.GetLayer()))
+    return out, sorted(set(declared)), auto
+
+
+def discover_module(board, sw, gnd, vin, spec):
+    """Topology dict for an INTEGRATED-MODULE power stage (see lib/module_stage.py).
+
+    Not a half bridge: both switches are inside `spec['ref']`, so there is nothing
+    to classify and nothing to infer. Every net here is DECLARED -- notably `vin`,
+    which the discrete path infers from the HS drain and which has no equivalent
+    here (a module's VIN pad is just another pad on a net). The returned dict keeps
+    `hs`/`ls` entries pointing at the module refdes so the ROI, the Cin nearest-cap
+    selection and the conduction anchor keep working unchanged; they carry
+    gate=None and devices=[] so nothing downstream can mistake them for switches.
+    """
+    padcount = _pad_count_by_net(board)
+    if vin is None:
+        raise ValueError(
+            "module extraction requires an explicit `vin` net: there is no "
+            "high-side drain to infer it from inside the package")
+    for label, net in (("sw", sw), ("gnd", gnd), ("vin", vin)):
+        if net is None:
+            continue
+        if net not in padcount:
+            raise ValueError(f"{label} net {net!r} not found on any pad")
+    if vin == gnd:
+        raise ValueError(f"module extraction: vin and gnd are the same net ({vin!r})")
+
+    ref = spec["ref"]
+    fp = next((f for f in board.GetFootprints() if f.GetReference() == ref), None)
+    if fp is None:
+        raise ValueError(
+            f"module: refdes {ref!r} is not on this board. A module declaration "
+            f"names a real footprint; it is never skipped silently.")
+
+    vin_pads, vin_nums, vin_auto = _module_pads(fp, vin, spec["vin_pads"], "vin", ref)
+    gnd_pads, gnd_nums, gnd_auto = _module_pads(fp, gnd, spec["gnd_pads"], "gnd", ref)
+    sw_pads = sw_nums = None
+    sw_auto = False
+    if spec["sw_pads"] is not None:
+        sw_pads, sw_nums, sw_auto = _module_pads(fp, sw, spec["sw_pads"], "sw", ref)
+
+    # Cin: identical rule to the discrete path -- caps with one pad on Vin and one
+    # on GND. This is what P_pwr is built on, so it must not diverge.
+    cin = []
+    for f in board.GetFootprints():
+        if not f.GetReference().upper().startswith("C"):
+            continue
+        nets = {p.GetNetname() for p in f.Pads()}
+        if vin in nets and gnd in nets:
+            cin.append(f.GetReference())
+    if not cin:
+        raise ValueError(
+            f"module {ref}: no input capacitor bridging {vin!r} and {gnd!r}. The "
+            f"input commutation loop is Cin -> VIN pad -> (module) -> GND pad -> "
+            f"Cin; with no Cin there is no loop and nothing to extract.")
+
+    side = lambda: dict(refs=[ref], gate=None, drain=None, source=None,
+                        kelvin=False, gate_return=None,
+                        gate_drive=dict(r=None, d=None, driver_net=None),
+                        devices=[], pads={})
+    return dict(
+        pcb=board.GetFileName(),
+        copper_layers=board.GetCopperLayerCount(),
+        kind="module",
+        sw=sw, gnd=gnd, vin=vin,
+        hs=side(), ls=side(),
+        module=dict(
+            ref=ref,
+            internal_closure=spec["internal_closure"],
+            internal_nh=spec["internal_nh"],
+            internal_source=spec["internal_source"],
+            allow_proximity_bond=bool(spec.get("allow_proximity_bond")),
+            vin_pad_numbers=vin_nums, vin_pads_auto=vin_auto,
+            gnd_pad_numbers=gnd_nums, gnd_pads_auto=gnd_auto,
+            sw_pad_numbers=sw_nums, sw_pads_auto=sw_auto,
+            _vin_pads=vin_pads, _gnd_pads=gnd_pads, _sw_pads=sw_pads,
+        ),
+        cin=cin,
+    )
 
 
 def _report(topo):

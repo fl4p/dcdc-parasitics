@@ -1587,6 +1587,38 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     )
     if is_per_device:
         p["parallel_devices"] = dict(hs=hs_devices, ls=ls_devices)
+    # ---- integrated-module provenance (see lib/module_stage.py) ----
+    # Present ONLY for a module extraction, so a discrete payload is byte-identical
+    # to one produced before this feature existed.
+    #
+    # `L_loop` above is NOT touched. On BOTH module closures it is the board-copper
+    # loop that FastHenry actually solved, because FastHenry has no lumped-element
+    # primitive and a declared internal inductance therefore cannot enter the field
+    # solve. Carrying it as a separate named term is not a limitation worked around
+    # -- it is the point: a consumer reading `L_loop` gets copper it can trace on the
+    # board, and has to opt in, by name, to a number that contains a declaration.
+    mod = (topo or {}).get("module") if isinstance(topo, dict) else None
+    if isinstance(topo, dict) and topo.get("kind") == "module" and mod:
+        internal = float(mod.get("internal_L_H") or 0.0)
+        p["module"] = dict(
+            ref=mod.get("ref"),
+            internal_closure=mod.get("internal_closure"),
+            internal_source=mod.get("internal_source"),
+            board_copper_only=True,
+            # Same number as L_loop, under a name that says what it contains. A
+            # report that prints L_loop_board can never be mistaken for the total.
+            L_loop_board=L_loop,
+            R_loop_board=R_loop,
+            internal_L=internal,
+            # None (not L_loop) on the ideal closure: "no internal term was
+            # declared" must not render as a total that happens to equal the board
+            # number, which would read as a full-loop measurement.
+            L_loop_with_internal=(L_loop + internal if internal > 0 else None),
+            note=mod.get("note"),
+        )
+        p["reduce_info_base"].append(
+            mod.get("note") or f"module {mod.get('ref')}: board copper only")
+        classify_cin_warnings(p)
     # Single-basis verdict. A caller that later replaces cin_model (the cap_only/
     # switch_residual combine) must call classify_cin_warnings(p) again — it is idempotent.
     classify_cin_warnings(p)

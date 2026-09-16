@@ -48,6 +48,7 @@ import pcbnew
 import extra_nets as extra_nets_lib
 import fet_discovery
 import gate_net_override
+import module_stage as module_stage_lib
 import probe_ports as probe_ports_lib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1615,6 +1616,324 @@ def _probe_pad_node_stack(model, zmap, cu, fp, pad, probe_name, endpoint,
                           proximity_inherited=bool(inherited_proximity))
 
 
+MODULE_CLOSURE_PORT = "MODULE_PAD_PLANE"   # provenance tag, not a FastHenry port
+
+
+def _pad_land_nonzone_contacts(model, net, lid, contains, exclude=()):
+    """Same-net, same-layer NON-pour nodes that lie strictly inside the pad land.
+
+    On a rail routed with TRACKS and no copper pour -- which is the ordinary case
+    for the VIN feed of a small module board; buck-tpsm33610 has GND zones on both
+    layers and /VIN as ten F.Cu tracks -- `_pad_region_contacts` finds nothing,
+    because it only ever looks at pour-mesh nodes. That is not evidence that the
+    pad is unreachable: the track LITERALLY ENDS INSIDE THE PAD (measured
+    2026-09-16: U1.3's land spans x 101.360..101.710, y 96.787..97.987 mm and the
+    /VIN track terminates at 101.665, 97.850). Bonding to those nodes is exact
+    copper contact, not the fabricated-spoke approximation `proximity` denotes.
+
+    Deliberately NOT folded into `_pad_land_terminal`: that function is on the
+    discrete path, where changing the contact set would move every historical
+    L_loop. This is read-only and additive.
+    """
+    skip = set(exclude)
+    zone = model.zone_nodes
+    out = []
+    for n, meta in model.meta.items():
+        if n in zone or n in skip or meta != (net, lid):
+            continue
+        x, y, _ = model._pos[n]
+        if contains(x, y):
+            out.append((x, y, n))
+    out.sort(key=lambda t: (t[0], t[1], t[2]))
+    return [n for _, _, n in out]
+
+
+def _module_pad_node_stack(board, model, zmap, fp, pad, ref, role, allow_proximity):
+    """Terminal stack for ONE module pad, with an EXPLICIT, RECORDED bond class.
+
+    This pad is one end of the commutation loop's only closure, so how it attaches
+    to the board decides the answer. Three bonds are accepted and each is named in
+    the manifest; everything else is a hard error.
+
+      overlap        pour-mesh nodes lie inside the pad land (the validated
+                     `padland` terminal; identical to what a FET/cap pad gets)
+      track_in_land  the net has no pour here, and same-net track/via nodes lie
+                     strictly INSIDE the pad land -- exact copper contact
+      proximity      NEITHER of the above; `_pad_land_terminal` fabricated spokes
+                     to same-net nodes NEAR the pad. REFUSED unless the module
+                     block declares `allow_proximity_bond: true`, because those
+                     spokes are up to (half-diagonal + 1.5*pitch) long and they
+                     are part of the loop being reported.
+
+    A pad that resolves to nothing at all raises. It never silently drops to a bare
+    pad-centre node: that is point injection, and on a closure pad it would move
+    L_loop while still returning a plausible small number.
+    """
+    mode = getattr(model, "terminal_mode", "padland")
+    if mode != "padland":
+        raise ValueError(
+            f"module {ref}: --terminal-mode {mode!r} is not supported for the "
+            f"pad-plane closure. The closure pad's contact patch IS the quantity "
+            f"here, and single/finite/point change it; only the validated padland "
+            f"terminal is accepted. Re-run with --terminal-mode padland.")
+    net = pad.GetNetname()
+    num = str(pad.GetNumber())
+    pos = pad.GetPosition()
+    x, y = mm(pos.x), mm(pos.y)
+    cu = _cu_stack(board)
+    touched = [l for l in cu if pad.IsOnLayer(l)]
+    if not touched:
+        raise ValueError(
+            f"module {ref}: {role} pad {num} is on NO copper layer (layer set "
+            f"{list(cu)}); it is probably a paste/mask-only land and cannot carry "
+            f"the closure.")
+    top_node, prev = None, None
+    bonds, detail = [], []
+    for lid in touched:
+        contains = _pad_contains(pad, lid)
+        if contains is None:
+            raise ValueError(
+                f"module {ref}: {role} pad {num}: pcbnew returned no land polygon "
+                f"on layer {lid}, so overlap with the mesh cannot be verified. "
+                f"Refusing rather than assuming contact.")
+        n = None
+        bond = None
+        if _pad_region_contacts(model, net, lid, contains):
+            n = _pad_land_terminal(model, net, lid, x, y, zmap[lid], pad, fp=fp)
+            bond = "overlap"
+        if n is None:
+            term_key_existing = model.existing_node(net, lid, x, y, zmap[lid])
+            contacts = _pad_land_nonzone_contacts(model, net, lid, contains)
+            if contacts:
+                term = model.node(net, lid, x, y, zmap[lid])
+                model.distributed_terminals.add(term)
+                model.terminal_owner[term] = dict(
+                    ref=_pad_ref(fp), pad=num, proximity=False,
+                    contacts=len(contacts))
+                w = _pad_size_min(pad) or 0.5
+                for c in contacts:
+                    if c != term and not model.has_direct_link(term, c):
+                        model.seg(term, c, w)
+                model.terminal_regions.append(
+                    dict(ref=_pad_ref(fp), net=net,
+                         layer=int(lid) if isinstance(lid, int) else str(lid),
+                         x=x, y=y, contacts=len(contacts),
+                         used_contacts=len(contacts), mode="module_track_in_land",
+                         proximity=False))
+                n, bond = term, "track_in_land"
+                detail.append(f"layer {lid}: {len(contacts)} track/via node(s) "
+                              f"inside the land"
+                              + ("" if term_key_existing is None
+                                 else " (pad-centre node pre-existed)"))
+        if n is None and allow_proximity:
+            n = _pad_land_terminal(model, net, lid, x, y, zmap[lid], pad, fp=fp)
+            if n is not None:
+                bond = "proximity"
+        if n is None:
+            reason = (model.terminal_fallbacks[-1].get("reason", "unknown")
+                      if model.terminal_fallbacks else "no_contact_found")
+            raise ValueError(
+                f"module {ref}: {role} pad {num} (net {net!r}) resolved to NO "
+                f"copper contact on layer {lid} ({reason})"
+                + ("" if allow_proximity else
+                   ", and a fabricated PROXIMITY bond is not allowed by default")
+                + ". The pad-plane closure would be point-injected and the "
+                  "reported input-loop L would not be the board's. Lower --pitch "
+                  "so a mesh node lands inside the land, raise --margin so the pad "
+                  "is inside the meshed ROI, check that the declared net is the one "
+                  "on this pad, or declare module.allow_proximity_bond: true to "
+                  "accept the approximation explicitly (it is then recorded).")
+        bonds.append(bond)
+        if prev is not None and not model.has_direct_link(prev, n):
+            model.seg(prev, n, mm(pad.GetSizeX()) or 1.0)
+        prev = n
+        if lid == cu[0] or top_node is None:
+            top_node = n
+    if "proximity" in bonds:
+        sys.stderr.write(
+            f"WARNING: module {ref} {role} pad {num} bonded by PROXIMITY "
+            f"(fabricated spokes to nearby same-net nodes) on "
+            f"{bonds.count('proximity')} of {len(bonds)} layer(s), allowed by "
+            f"module.allow_proximity_bond. The reported input-loop L carries that "
+            f"approximation at the closure.\n")
+    return top_node, dict(pad=num, net=net, layers=len(touched),
+                          bond=("proximity" if "proximity" in bonds
+                                else "track_in_land" if "track_in_land" in bonds
+                                else "overlap"),
+                          bonds=bonds, detail=detail)
+
+
+def _module_pad_group(board, model, zmap, fp, pads, role, ref, allow_proximity):
+    """Terminals for EVERY declared module pad on one net -> (rep_node, nodes, info).
+
+    Pads that share a net are `.equiv`-ed into ONE terminal. That is the package's
+    own geometry -- several lands of one module terminal are the same net inside
+    the package, tied together by leadframe the board cannot see -- and it is the
+    conservative direction: it removes board spreading BETWEEN lands of one
+    terminal from the loop, it never adds copper. Recorded in the manifest as
+    `<role>_pad_group_shorted` so a reader can see it was done.
+    """
+    by_num = {}
+    for pad in fp.Pads():
+        num = str(pad.GetNumber())
+        if num:
+            by_num.setdefault(num, []).append(pad)
+    nodes, infos = [], []
+    for num in pads:
+        for pad in by_num.get(num, []):
+            n, info = _module_pad_node_stack(
+                board, model, zmap, fp, pad, ref, role, allow_proximity)
+            if n is None:
+                raise ValueError(
+                    f"module {ref}: {role} pad {num} produced no terminal node")
+            nodes.append(n)
+            infos.append(info)
+    if not nodes:
+        raise ValueError(f"module {ref}: no {role} pad terminals were built")
+    rep = nodes[0]
+    for n in nodes[1:]:
+        model.equiv(rep, n)
+    return rep, nodes, infos
+
+
+def build_module(board, model, zmap, topo):
+    """Close the input commutation loop at the PACKAGE PADS of an integrated module.
+
+    This is the module counterpart of `build_fet` + the die `.equiv`. There is no
+    die plane and no `lead_mm`: see lib/module_stage.py for why an internal path
+    length is refused rather than invented. The emitted geometry is exactly one
+    ideal link, VIN pad group <-> GND pad group, so the extracted loop contains
+    BOARD COPPER ONLY on both closures.
+
+    Annotates topo['module'] with the closure nodes and terminal provenance.
+    """
+    spec = topo["module"]
+    ref = spec["ref"]
+    fp = next((f for f in board.GetFootprints() if f.GetReference() == ref), None)
+    if fp is None:                      # discover_module already checked; belt and braces
+        raise ValueError(f"module {ref}: footprint vanished between discovery and build")
+
+    allow_prox = bool(spec.get("allow_proximity_bond"))
+    vin_rep, vin_nodes, vin_info = _module_pad_group(
+        board, model, zmap, fp, spec["vin_pad_numbers"], "vin", ref, allow_prox)
+    gnd_rep, gnd_nodes, gnd_info = _module_pad_group(
+        board, model, zmap, fp, spec["gnd_pad_numbers"], "gnd", ref, allow_prox)
+    if spec.get("sw_pad_numbers"):
+        # SW pads are built ONLY so their copper is in the deck and so a probe_ports
+        # entry can land on them. They are NOT part of the input loop and get no
+        # closure: on a module the SW node is internal, and shorting it to anything
+        # would fabricate a path the package does not have.
+        _module_pad_group(board, model, zmap, fp, spec["sw_pad_numbers"], "sw", ref,
+                          allow_prox)
+
+    # THE CLOSURE. One ideal link. Internal contribution is exactly 0 H by
+    # construction on BOTH closure modes -- `declared_internal` differs only in
+    # what the reduction reports alongside the board number, never in the solve.
+    model.equiv(vin_rep, gnd_rep)
+    spec["_vin_node"] = vin_rep
+    spec["_gnd_node"] = gnd_rep
+    spec["closure_nodes"] = [vin_rep, gnd_rep]
+    spec["vin_terminals"] = vin_info
+    spec["gnd_terminals"] = gnd_info
+    spec["vin_pad_group_shorted"] = len(vin_nodes) > 1
+    spec["gnd_pad_group_shorted"] = len(gnd_nodes) > 1
+    spec["internal_L_H"] = module_stage_lib.internal_henries(spec)
+    spec["basis"] = "board_copper_only"
+    spec["note"] = module_stage_lib.basis_note(spec)
+    return spec
+
+
+def _connected_without(model, seed, banned):
+    """Nodes reachable from `seed` over segs+equivs, EXCLUDING the `banned` pair.
+
+    `banned` is frozenset({a, b}). Used to ask the one question that decides
+    whether a module extraction measured anything: is the Cin port still joined to
+    the module's VIN pad (and its GND pad) when the synthesized closure is removed?
+    If not, the only path between the port terminals IS the ideal link, and the
+    solve would report a loop that never passed through the package.
+    """
+    adj = {}
+    for _, a, b, _, _ in model.segs:
+        if frozenset((a, b)) == banned:
+            continue
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    for a, b in model.equivs:
+        if frozenset((a, b)) == banned:
+            continue
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    seen, stack = set(), [seed]
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend(adj.get(n, ()))
+    return seen
+
+
+def validate_module_ports(model, topo):
+    """Fail closed on every way a module extraction can produce a plausible lie.
+
+    Runs AFTER the stitch/weld and after floating-port pruning, i.e. on the deck
+    that will actually be solved. Three checks, each of which has a concrete
+    failure it exists to catch:
+
+    1. P_pwr present. Without it there is no commutation port and nothing to
+       reduce. (Same bar as the discrete path's `validate_required_ports`.)
+
+    2. P_pwr does not span an IDEAL-LINK-ONLY path. If the Cin pads end up joined
+       to each other through the closure `.equiv` and nothing else, FastHenry
+       happily returns L ~ 0 / R ~ 0 -- a number, in the right units, that measured
+       no copper. `Model.ideal_link_component` is the existing test for exactly
+       this and is reused rather than re-derived.
+
+    3. The loop passes THROUGH the module. With the closure removed, the Cin port's
+       Vin terminal must still reach the module's VIN pad node, and its GND
+       terminal must still reach the module's GND pad node. If either fails, the
+       closure is not on the Cin loop: the extraction would be some other loop (or
+       the closure alone), reported under the name of the input loop.
+    """
+    spec = topo.get("module") or {}
+    ports = {lbl: (a, b) for lbl, a, b in model.ports}
+    if "P_pwr" not in ports:
+        raise ValueError(
+            "invalid module extraction: P_pwr input-cap commutation port missing. "
+            "The loop is Cin -> VIN pad -> (module) -> GND pad -> Cin; with no Cin "
+            "port there is nothing to measure. Check the input caps, cin_loop_refs, "
+            "and the vin/gnd net names.")
+    a, b = ports["P_pwr"]
+    if b in model.ideal_link_component(a):
+        raise ValueError(
+            f"invalid module extraction: the P_pwr terminals are joined through "
+            f"IDEAL LINKS ONLY (the {spec.get('ref')} pad-plane closure and/or "
+            f"zero-length links), so the solve would report ~0 nH / ~0 mOhm without "
+            f"measuring any copper. The Cin pads and the module pads are resolving "
+            f"to the same nodes -- check that the input cap is not being terminated "
+            f"onto the module's own pad lands, and lower --pitch.")
+    vin_node, gnd_node = spec.get("_vin_node"), spec.get("_gnd_node")
+    if not (vin_node and gnd_node):
+        raise ValueError(
+            "invalid module extraction: the pad-plane closure nodes were never "
+            "recorded; build_module did not run.")
+    banned = frozenset((vin_node, gnd_node))
+    reach_vin = _connected_without(model, vin_node, banned)
+    reach_gnd = _connected_without(model, gnd_node, banned)
+    missing = []
+    if a not in reach_vin:
+        missing.append(f"P_pwr Vin terminal does not reach {spec.get('ref')} VIN pad")
+    if b not in reach_gnd:
+        missing.append(f"P_pwr GND terminal does not reach {spec.get('ref')} GND pad")
+    if missing:
+        raise ValueError(
+            "invalid module extraction: with the pad-plane closure removed, "
+            + "; ".join(missing) + ". The only path between the P_pwr terminals is "
+            "the synthesized closure itself, so the extracted loop did not pass "
+            "through the module and is not the input commutation loop. Check the "
+            "declared vin/gnd nets and module pads, the mesh pitch, and --margin.")
+
+
 def _device_closure_nodes(topo):
     """{refdes: {node, ...}} — each FET's drain/source pad and die nodes, i.e. the
     nodes its synthesized drain-source closure ties together.
@@ -2261,9 +2580,17 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     zmap = layer_z_map(board)
     model = Model(cu_thickness=cu_thickness, terminal_mode=terminal_mode)
     model.pitch = pitch
+    # An INTEGRATED-MODULE stage (lib/module_stage.py): both switches are inside one
+    # package, so there is no die plane, no gate net and no per-switch conduction
+    # split. The meshing, Cin selection, probe ports and port pruning below are
+    # shared verbatim with the discrete path; only the LOOP CLOSURE differs.
+    is_module = topo.get("kind") == "module"
     power_nets = {topo["sw"], topo["vin"], topo["gnd"]}
+    power_nets.discard(None)
 
     def side_gate_nets(role):
+        if is_module:
+            return set()          # no gate copper on the board: it is inside the package
         if parallel_fets == "per-device":
             return {dev.get("gate", topo[role]["gate"])
                     for dev in topo[role].get("devices", [])}
@@ -2297,6 +2624,25 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     # the path between two pads on a net with a thin or fragmented pour.
     mesh_nets = power_nets | extra
     nets = mesh_nets | gate_nets
+    if is_module:
+        # Every one of these is a HALF-BRIDGE construct with no module meaning. They
+        # are refused rather than ignored: silently dropping a declared option is
+        # how a run ends up measuring something other than what its config says.
+        if cin_extraction_basis != "full_loop":
+            raise ValueError(
+                f"module extraction supports only cin_extraction_basis full_loop; "
+                f"{cin_extraction_basis!r} is a plane-P gauge defined by the "
+                f"discrete HS/LS demarcation, which does not exist inside a package")
+        if parallel_fets != "lumped":
+            raise ValueError(
+                "module extraction has no per-device model: there is one package "
+                "and its internal devices are not separable; drop parallel_fets")
+        if lead_mm and lead_mm > 0:
+            raise ValueError(
+                f"module extraction ignores lead_mm (got {lead_mm}): a module has no "
+                f"declarable die plane -- see lib/module_stage.py. Leaving it set "
+                f"would read as a lead-inclusive extraction; remove it (0) and "
+                f"declare module.internal_closure instead.")
     if cin_extraction_basis not in ("full_loop", "cap_only", "switch_residual"):
         raise ValueError("--cin-extraction-basis must be one of: full_loop, cap_only, "
                          "switch_residual")
@@ -2362,11 +2708,14 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
         fet_closure = "cap_only_cell_bridge"
     else:
         fet_closure = "full_loop"
-    build_fet(board, model, zmap, topo, "hs", lead_mm, parallel_mode=parallel_fets,
-              closure_mode=fet_closure)
-    build_fet(board, model, zmap, topo, "ls", lead_mm, parallel_mode=parallel_fets,
-              closure_mode=fet_closure)
-    setup_demarcation_plane(model, topo, cin_extraction_basis, closure=cin_closure)
+    if is_module:
+        build_module(board, model, zmap, topo)
+    else:
+        build_fet(board, model, zmap, topo, "hs", lead_mm, parallel_mode=parallel_fets,
+                  closure_mode=fet_closure)
+        build_fet(board, model, zmap, topo, "ls", lead_mm, parallel_mode=parallel_fets,
+                  closure_mode=fet_closure)
+        setup_demarcation_plane(model, topo, cin_extraction_basis, closure=cin_closure)
 
     # Cin pad stacks (create nodes now so the global stitch bonds them to the pours).
     # With cin_parallel>1 the N nearest ceramics each get their own port, so the
@@ -2380,7 +2729,8 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     topo["cin_network_model"] = cin_network_model
     topo["cin_extraction_basis"] = cin_extraction_basis
     topo["cin_closure"] = cin_closure
-    topo["fet_closure"] = "pad_ideal" if lead_mm <= 0 else "lead_stub"
+    topo["fet_closure"] = ("module_pad_plane" if is_module
+                          else "pad_ideal" if lead_mm <= 0 else "lead_stub")
     topo["lead_mm"] = lead_mm
     topo["parallel_fets"] = parallel_fets
     residual_only = cin_extraction_basis == "switch_residual"
@@ -2431,7 +2781,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     model.cin_ports = cin_labels
     if not residual_only:
         topo["cin_used"] = [ref for ref, _, _ in cins]
-    if cin_extraction_basis not in ("cap_only", "switch_residual"):
+    if not is_module and cin_extraction_basis not in ("cap_only", "switch_residual"):
         for role, label in (("hs", "P_ghs"), ("ls", "P_gls")):
             d = topo[role]
             if parallel_fets == "per-device":
@@ -2454,7 +2804,13 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     if cref and cin_extraction_basis not in ("cap_only", "switch_residual"):
         cond_ref, cvn_dc, cgn_dc, cond_klass = cref
         model.port("P_bulk", cvn_dc, cgn_dc)
-        if parallel_fets == "per-device":
+        if is_module:
+            # P_bulk alone: it is the whole LF input loop through the pad-plane
+            # closure, which IS extractable. P_hs/P_ls are the per-switch conduction
+            # split, and a module has no board copper between its two switches --
+            # emitting them would attribute the module's internal R to board copper.
+            pass
+        elif parallel_fets == "per-device":
             for dev in topo["hs"].get("_devices", []):
                 if dev.get("_src_pad_node"):
                     model.port(dev["switch_label"], cvn_dc, dev["_src_pad_node"])
@@ -2494,7 +2850,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
         return [n] if n else []
 
     out_xy = out_ref = None
-    for fp in board.GetFootprints():
+    for fp in (() if is_module else board.GetFootprints()):
         ref = fp.GetReference()
         if ref[:1] not in ("J", "L"):
             continue
@@ -2613,7 +2969,9 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
         for w in extra_nets_lib.run_warnings(extra_entries):
             sys.stderr.write(f"WARNING: {w}\n")
 
-    if cin_extraction_basis == "cap_only":
+    if is_module:
+        validate_module_ports(model, topo)
+    elif cin_extraction_basis == "cap_only":
         validate_cap_only_ports(model)
     elif cin_extraction_basis == "switch_residual":
         validate_switch_residual_ports(model, topo)
@@ -2886,6 +3244,16 @@ def main():
                          "pad land. Default refuses: for a mount-loop measurement "
                          "those spokes are the quantity being measured. Recorded as "
                          "bond=proximity per probe when enabled.")
+    ap.add_argument("--module-spec", default="",
+                    help="JSON declaration of an INTEGRATED-MODULE power stage "
+                         "(both FETs inside one package), e.g. "
+                         "'{\"ref\":\"U1\",\"vin_pads\":[\"3\"],"
+                         "\"gnd_pads\":[\"10\"],"
+                         "\"internal_closure\":\"ideal_pad_plane\"}'. "
+                         "Mutually exclusive with --hs-ref/--ls-ref and the gate "
+                         "options. internal_closure has NO default: see "
+                         "lib/module_stage.py for why the pad-to-die path must be "
+                         "declared rather than inferred.")
     ap.add_argument("--lead-mm", type=float, default=3.0, help="FET exposed-lead length (mm)")
     ap.add_argument("--weld-tol", type=float, default=0.6,
                     help="fuse same-net nodes within this many mm (fixes pad/trace and "
@@ -2941,6 +3309,24 @@ def main():
         raise SystemExit("--merge-via-radius must be > 0 mm")
 
     board = pcbnew.LoadBoard(args.pcb)
+    try:
+        module_spec = module_stage_lib.parse_spec(args.module_spec)
+    except module_stage_lib.ModuleError as e:
+        raise SystemExit(str(e))
+    if module_spec:
+        # Half-bridge-only options are REFUSED, not ignored: a config that declares
+        # both a module and hs_ref/ls_ref/gate overrides is describing two different
+        # power stages, and the tool must not pick one.
+        conflicting = [n for n, v in (("--hs-ref", args.hs_ref), ("--ls-ref", args.ls_ref),
+                                      ("--hs-gate", args.hs_gate), ("--ls-gate", args.ls_gate),
+                                      ("--hs-kelvin", args.hs_kelvin),
+                                      ("--ls-kelvin", args.ls_kelvin),
+                                      ("--gate-net-override", args.gate_net_override)) if v]
+        if conflicting:
+            raise SystemExit(
+                f"--module-spec declares an integrated module; the half-bridge "
+                f"option(s) {', '.join(conflicting)} describe discrete FETs and "
+                f"cannot apply. Remove them or drop the module declaration.")
     gate_override_tracks = {}
     if args.gate_net_override:
         gate_net_override.warn_if_lumped(
@@ -2949,11 +3335,15 @@ def main():
         gate_override_tracks = gate_net_override.apply(
             board, args.gate_net_override, fet_refs=fet_refs)
     try:
-        topo = fet_discovery.discover(
-            board, args.sw, args.gnd, vin=args.vin,
-            hs_ref=args.hs_ref, ls_ref=args.ls_ref,
-            hs_gate=args.hs_gate, ls_gate=args.ls_gate,
-            hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
+        if module_spec:
+            topo = fet_discovery.discover_module(
+                board, args.sw, args.gnd, args.vin, module_spec)
+        else:
+            topo = fet_discovery.discover(
+                board, args.sw, args.gnd, vin=args.vin,
+                hs_ref=args.hs_ref, ls_ref=args.ls_ref,
+                hs_gate=args.hs_gate, ls_gate=args.ls_gate,
+                hs_kelvin=args.hs_kelvin, ls_kelvin=args.ls_kelvin)
         if gate_override_tracks:
             topo["gate_net_override"] = {
                 ref: track["net"] for ref, track in gate_override_tracks.items()}
@@ -3048,6 +3438,15 @@ def main():
     # else"; an empty one would be a new field in every historical artifact.
     if topo.get("extra_nets"):
         side["extra_nets"] = topo["extra_nets"]
+    # Same rule as extra_nets: written ONLY for a module run, so a discrete run's
+    # sidecar is byte-identical to one produced before this feature existed.
+    if topo.get("kind") == "module":
+        side["kind"] = "module"
+        side["module"] = {k: v for k, v in topo["module"].items()
+                          if not k.startswith("_")}
+        note = topo["module"].get("note")
+        if note:
+            sys.stderr.write("NOTE: " + note + "\n")
     with open(args.out + ".ports.json", "w") as f:
         json.dump(side, f, indent=2)
     vm = getattr(model, "via_merge", None)
