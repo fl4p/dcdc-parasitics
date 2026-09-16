@@ -1,0 +1,46 @@
+Running FastHenry 3.0.1 (28May12)
+Source code fixes and compilation by FastFieldSolvers, 2012
+  Date: Wed Sep 16 14:35:45 2026
+  Host: fmb-2.local
+Solution technique: ITERATIVE
+Matrix vector product method: MULTIPOLE
+  Order of expansion: 2
+Preconditioner: ON
+Error tolerance: 0.001
+Reading from file: split.inp
+Title:
+* two galvanically separate conductors (VIN copper, GND copper) with a port spanning them
+
+all lengths multiplied by 0.001 to convert to meters
+Total number of filaments before multipole refine: 2
+Total number of filaments after multipole refine: 16
+
+Multipole Summary
+  Expansion order: 2
+  Number of partitioning levels: 3
+  Total number of filaments: 16
+zero element request in file `induct.c' at line 1720
+zero element request in file `induct.c' at line 1720
+zero element request in file `induct.c' at line 1720
+zero element request in file `induct.c' at line 1720
+zero element request in file `induct.c' at line 1720
+zero element request in file `induct.c' at line 1720
+zero element request in file `induct.c' at line 1720
+Couldn't create sparse matrix, err 5
+No expansions at level 3 (lowest)
+No expansions at level 2
+Percentage of multiplies done by multipole: 100%
+Scanning graph to find fundamental circuits...
+Number of Groundplanes : 0 
+Number of filaments:         16
+Number of segments:          16
+Number of nodes:             18
+Number of meshes:             0
+          ----from tree:                   0 
+          ----from planes: (before holes)  0 
+Number of conductors:         1   (rows of matrix in Zc.mat) 
+Number of columns:            1   (columns of matrix in Zc.mat) 
+Number of real nodes:        18
+filling M...
+filling R and L...
+Total Memory allocated: 53 kilobytes
