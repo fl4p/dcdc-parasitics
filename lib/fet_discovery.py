@@ -260,9 +260,18 @@ def _module_pads(fp, want_net, declared, role, ref):
     number; that is exactly the class of failure this tool must not produce.
     """
     by_num = {}
+    unnumbered_on_net = 0
     for pad in fp.Pads():
         num = str(pad.GetNumber())
-        if not num:                 # unnumbered mechanical/NC lands: not terminals
+        if not num:
+            # Unnumbered lands. Usually mechanical/NC (buck-tpsm33610's U1 carries
+            # 14 of them, all netless). They are skipped because REF.PAD is how a
+            # terminal is named here and an unnumbered land cannot be named -- but
+            # count the ones that DO carry the wanted net, so the "no pad on this
+            # net" error can say that is what happened instead of implying the net
+            # is absent from the package.
+            if pad.GetNetname() == want_net:
+                unnumbered_on_net += 1
             continue
         by_num.setdefault(num, []).append(pad)
     if declared is None:
@@ -272,10 +281,17 @@ def _module_pads(fp, want_net, declared, role, ref):
             have = ", ".join(sorted({p.GetNetname() for pads in by_num.values()
                                      for p in pads if p.GetNetname()})) or "(none)"
             raise ValueError(
-                f"module {ref}: no pad on the {role} net {want_net!r}. The input "
-                f"commutation loop cannot be closed at a package terminal that is "
-                f"not there. Nets on {ref}: {have}. Declare module.{role}_pads if "
-                f"the net name is right but the pads are numbered oddly.")
+                f"module {ref}: no NUMBERED pad on the {role} net {want_net!r}. The "
+                f"input commutation loop cannot be closed at a package terminal that "
+                f"cannot be named. Nets on {ref}: {have}."
+                + (f" NOTE: {unnumbered_on_net} UNNUMBERED land(s) on {ref} do carry "
+                   f"{want_net!r}; this extractor names terminals as REF.PAD and "
+                   f"cannot address them. Give those lands pad numbers in the "
+                   f"footprint. Not worked around: closing the loop on a land the "
+                   f"config cannot name would make the result unreproducible."
+                   if unnumbered_on_net else
+                   f" Declare module.{role}_pads if the net name is right but the "
+                   f"pads are numbered oddly."))
         declared = sorted(num for num, _ in found)
         auto = True
     else:
