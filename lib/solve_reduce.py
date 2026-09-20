@@ -379,6 +379,134 @@ def fit_skin_ladder(freqs, R_meas, R_flat, n_poles=SKIN_POLES):
     return poles, diag
 
 
+# max |dR_ij| / sqrt(R_ii R_jj) of the fitted R(f) matrix. Measured on the
+# fugu2-perDeev-noLeads band scan at the default 5 poles: 1.64%. The fit is NOT
+# monotone in pole count -- 4 poles gives 8.8% and 6 gives 9.3%, because the
+# least squares starts trading oscillatory residues against each other once the
+# corners outnumber what 11 swept points support -- so this gate is what stops a
+# raised `--skin-poles` from silently shipping a worse matrix. It refuses both
+# neighbours of the working value.
+SKIN_MATRIX_FIT_TOL = 0.05
+
+
+def fit_skin_ladder_matrix(freqs, R_sweep, n_poles=SKIN_POLES):
+    """Fit the per-port R(f) MATRIX as a Foster ladder with matrix residues.
+
+    `fit_skin_ladder` fits the REDUCED loop R(f) -- one scalar curve -- so it is
+    only valid for the one reduction it was fitted to. Measured on
+    fugu2-dualLS-perDev: every diagonal of `R_dc + ladder*11^T` is 30-75% below
+    the corresponding ring-band port read, and the scalar ladder reproduces the
+    full-bank reduction to 0.2% only because those per-port errors cancel there.
+    Change the capacitors and the current distribution changes, so the
+    cancellation stops: a realistically loaded seven-port bank is 18% wrong in
+    Re(Z) at the ring, and 12-52% across the band. An analytic consumer
+    (`mlcc.copper_matrix`) needs the matrix; a SPICE deck cannot place one, which
+    is why the scalar ladder stays and this is emitted alongside it.
+
+        R(f) = R_base + sum_k s_k(f) M_k        s_k(f) = (wt_k)^2/(1+(wt_k)^2)
+
+    The corners are the same fixed geomspaced set `fit_skin_ladder` uses, so the
+    fit is LINEAR in the residues and solved by least squares -- deterministic,
+    no local minima. Each residue is then projected onto the PSD cone, which is
+    what makes the result passive: s_k(f) >= 0, so a non-negative combination of
+    PSD matrices is PSD at every frequency, hence R(f) - R_base never dissipates
+    negative power in any current mode. The scalar ladder is the rank-1 special
+    case M_k = R_k * 1 1^T, so this strictly generalises it.
+
+    The fit error is measured AFTER the projection. Projection changes the model,
+    so an error measured before it is not the error of the thing being returned.
+
+    `R_sweep` is (nf, n, n), the Cin submatrix real part at each swept frequency,
+    ordered as `freqs`. Returns (payload, reason); EXACTLY one is non-None.
+    """
+    freqs = np.asarray(sorted(freqs), dtype=float)
+    R_sweep = np.asarray(R_sweep, dtype=float)
+    nf = freqs.size
+    if R_sweep.shape[0] != nf or R_sweep.ndim != 3 or R_sweep.shape[1] != R_sweep.shape[2]:
+        return None, (f"R_sweep is {R_sweep.shape}, expected ({nf}, n, n) to match the "
+                      f"{nf} swept frequencies")
+    if nf < 3:
+        return None, f"only {nf} swept frequencies -- too few to fit a ladder"
+    if n_poles < 1 or n_poles >= nf:
+        return None, (f"{n_poles} poles against {nf} swept points is under-determined; "
+                      f"the residual would go to zero while R(f) between the points "
+                      f"stays unconstrained")
+    n = R_sweep.shape[1]
+    base = R_sweep[0]
+    if np.any(np.diagonal(base) <= 0):
+        return None, "the base-band R matrix has a non-positive self-term"
+
+    # Each port's OWN resistance is monotone non-decreasing in frequency: current
+    # crowds into less copper as the skin depth shrinks, it never spreads back
+    # out. A falling self-R means the port set or the reduction is wrong, and a
+    # passive ladder cannot realize it. Checked per port, because the scalar
+    # check on the reduction can pass while an individual port falls.
+    d = np.diagonal(R_sweep, axis1=1, axis2=2)          # (nf, n)
+    span = np.maximum(d[-1] - d[0], 1e-15)
+    worst = float(np.min(np.diff(d, axis=0) / span))
+    if worst < -0.05:
+        i = int(np.argmin(np.min(np.diff(d, axis=0) / span, axis=0)))
+        return None, (f"port {i}'s self-resistance falls with frequency (worst step "
+                      f"{worst*100:.1f}% of its span) -- a passive ladder cannot "
+                      f"realize a falling R(f); check the cap port set / reduction basis")
+
+    fc = np.geomspace(freqs[0] * 3.0, freqs[-1] / 3.0, n_poles)
+    tau = 1.0 / (2 * np.pi * fc)
+    # Offset so every block vanishes AT THE BASE BAND: the consumer places the
+    # R_base matrix and this on top of it, so a basis that is already non-zero at
+    # f_base double-counts there. Unoffset, the lowest pole contributes ~10% of
+    # its residue at 39 kHz and that single gap IS the worst entrywise error
+    # (8.14% -> see the fit diagnostics). s_k is monotone non-decreasing, so the
+    # offset basis is still >= 0 for f >= f_base and passivity is unaffected.
+    basis = _skin_basis(freqs, tau)                      # (nf, k)
+    basis = basis - basis[0]
+    rise = (R_sweep - base).reshape(nf, -1)
+    resid, *_ = np.linalg.lstsq(basis, rise, rcond=None)
+    resid = resid.reshape(n_poles, n, n)
+
+    clipped = 0.0
+    psd = []
+    for k in range(n_poles):
+        sym = 0.5 * (resid[k] + resid[k].T)
+        ev, vec = np.linalg.eigh(sym)
+        clipped = min(clipped, float(ev.min()))
+        psd.append((vec * np.clip(ev, 0.0, None)) @ vec.T)
+    psd = np.array(psd)
+
+    def _err(residues):
+        fit = np.einsum("fk,kij->fij", basis, residues) + base
+        dd = np.diagonal(R_sweep, axis1=1, axis2=2)
+        scale = np.sqrt(np.einsum("fi,fj->fij", dd, dd))
+        return float(np.max(np.abs(fit - R_sweep) / scale)), fit
+
+    before, _ = _err(resid)
+    after, fit = _err(psd)
+    if after > SKIN_MATRIX_FIT_TOL:
+        return None, (f"the matrix ladder tracks the swept per-port R(f) only to "
+                      f"{after*100:.1f}% of sqrt(Rii*Rjj) (tol "
+                      f"{SKIN_MATRIX_FIT_TOL*100:.0f}%), measured after the PSD "
+                      f"projection; not emitting a matrix a consumer would trust")
+
+    payload = dict(
+        base_band="R_dc",
+        corners_Hz=[float(v) for v in fc],
+        residues=[[[float(v) for v in row] for row in m] for m in psd],
+        fit=dict(
+            n_poles=int(n_poles),
+            freq_Hz=[float(v) for v in freqs],
+            max_rel_err=float(after),
+            max_rel_err_before_projection=float(before),
+            # what a consumer placing R_base alone would be guilty of, for the report
+            flat_max_rel_err=float(_err(np.zeros_like(psd))[0]),
+        ),
+        psd_projection=dict(
+            worst_clipped_eigenvalue=float(clipped),
+            changed_fit_by=float(after - before),
+        ),
+    )
+    return payload, None
+
+
 def _cin_skin_payload(zc, net_idx, L_plateau, R_base, f_base, n_poles=SKIN_POLES,
                       ring_freq_Hz=SKIN_RING_FREQ_HZ, fitted_basis=None, fitted_refs=None):
     """Fit the loop-copper skin ladder for the emitted Cin matrix, or explain why not.
@@ -1025,6 +1153,9 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     cin_dec_lf = None
     cin_matrix = None
     cin_skin = None
+    cin_skin_matrix = None
+    cin_skin_matrix_reason = "no cin_matrix (the matrix ladder is the matrix basis only)"
+    port_R_sweep = None
     cin_skin_reason = "no cin_matrix (skin ladder is fitted for the matrix basis only)"
     if cin_net:
         net_idx = [idx[e["label"]] for e in cin_net if e.get("label") in idx]
@@ -1045,6 +1176,28 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             cin_skin, cin_skin_reason = _cin_skin_payload(
                 zc, net_idx, L, R_dc, f_dc, n_poles=skin_poles, ring_freq_Hz=ring_freq,
                 fitted_basis="identity", fitted_refs=net_refs)
+            # The per-port R(f), for analytic consumers. The scalar ladder above is
+            # fitted to ONE reduction and is only valid for it; see
+            # fit_skin_ladder_matrix. The swept matrices are already in `zc` and were
+            # being discarded after that reduction, so this costs no solve.
+            sweep_f = sorted(zc.keys())
+            R_sweep = np.array([zc[f].real[np.ix_(net_idx, net_idx)] for f in sweep_f])
+            L_sweep = np.array([zc[f].imag[np.ix_(net_idx, net_idx)] / (2 * np.pi * f)
+                                for f in sweep_f])
+            cin_skin_matrix, cin_skin_matrix_reason = fit_skin_ladder_matrix(
+                sweep_f, R_sweep, n_poles=skin_poles)
+            if cin_skin_matrix is not None:
+                # same provenance the scalar ladder carries, and for the same reason:
+                # a ladder fitted against another basis or port set is silently wrong
+                cin_skin_matrix.update(basis="identity", fitted_refs=list(net_refs),
+                                       base_freq_Hz=float(f_dc))
+            # the raw evidence, so a consumer can CHECK the fit rather than trust it
+            port_R_sweep = dict(
+                freq_Hz=[float(f) for f in sweep_f],
+                refs=list(net_refs),
+                R=R_sweep.tolist(),
+                L=L_sweep.tolist(),
+            )
             if cin_skin is not None and not cin_skin["fit_ok"]:
                 warn.append(
                     f"loop-copper skin ladder fits the swept R(f) only to "
@@ -1556,6 +1709,11 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         # never read "no ladder" as "copper is flat with frequency" (it never is).
         cin_skin=cin_skin,
         cin_skin_unavailable_reason=cin_skin_reason,
+        # per-port R(f) for analytic consumers, plus the raw swept matrices it was
+        # fitted to. EXACTLY one of the payload/reason pair is set, as above.
+        cin_skin_matrix=cin_skin_matrix,
+        cin_skin_matrix_unavailable_reason=cin_skin_matrix_reason,
+        port_R_sweep=port_R_sweep,
         # raw ring-band port reads, for cross-checks against the fitted ladder
         port_R_ring=R_ring.tolist(), port_L_ring=L_ring.tolist(),
         R_ring_freq_Hz=f_ring, R_loop_ring=R_loop_ring, L_loop_ring=L_loop_ring,
