@@ -449,7 +449,9 @@ _PROVENANCE = None
 
 def _extractor_provenance():
     """(HEAD sha, `git status --porcelain` lines) of this extractor checkout,
-    or (None, None) when it cannot be established. Stamped into meta so a
+    or (None, None) when it cannot be established. Untracked files are kept
+    only if they are .py (the only kind that can change what runs), so agent
+    scratch directories are not copied into every artifact. Stamped into meta so a
     reused parasitics.json is bound to the code that produced it, not only
     to its board and config (consumed by kicad-design's
     loop_inductance_guard.py, which refuses an unstamped extraction)."""
@@ -467,7 +469,9 @@ def _extractor_provenance():
         if head is None or st is None or head.returncode or st.returncode:
             _PROVENANCE = (None, None)
         else:
-            _PROVENANCE = (head.stdout.strip(), st.stdout.splitlines())
+            _PROVENANCE = (head.stdout.strip(),
+                           [s for s in st.stdout.splitlines()
+                            if not s.startswith("??") or s.endswith(".py")])
     return _PROVENANCE
 
 
