@@ -444,8 +444,37 @@ def _load_altium_sidecar(pcb_input, resolved_pcb, workdir):
     return meta
 
 
+_PROVENANCE = None
+
+
+def _extractor_provenance():
+    """(HEAD sha, `git status --porcelain` lines) of this extractor checkout,
+    or (None, None) when it cannot be established. Stamped into meta so a
+    reused parasitics.json is bound to the code that produced it, not only
+    to its board and config (consumed by kicad-design's
+    loop_inductance_guard.py, which refuses an unstamped extraction)."""
+    global _PROVENANCE
+    if _PROVENANCE is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"],
+                                  capture_output=True, text=True)
+            st = subprocess.run(["git", "-C", here, "status", "--porcelain",
+                                 "--untracked-files=all"],
+                                capture_output=True, text=True)
+        except OSError:
+            head = st = None
+        if head is None or st is None or head.returncode or st.returncode:
+            _PROVENANCE = (None, None)
+        else:
+            _PROVENANCE = (head.stdout.strip(), st.stdout.splitlines())
+    return _PROVENANCE
+
+
 def _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
+    commit, status = _extractor_provenance()
     return dict(pitch=pitch, lead_mm=side.get("lead_mm"),
+                extractor_commit=commit, extractor_status=status,
                 cu_temp=side.get("cu_temp"), cu_thickness=side.get("cu_thickness"),
                 lf_freq=side.get("lf_freq"),
                 hf_freq=side.get("hf_freq"), ndec=side.get("ndec"),
