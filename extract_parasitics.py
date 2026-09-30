@@ -450,8 +450,10 @@ _PROVENANCE = None
 def _extractor_provenance():
     """(HEAD sha, `git status --porcelain` lines) of this extractor checkout,
     or (None, None) when it cannot be established. Untracked files are kept
-    only if they are .py (the only kind that can change what runs), so agent
-    scratch directories are not copied into every artifact. Stamped into meta so a
+    only if they are .py, so agent scratch directories are not copied into
+    every artifact; paths with spaces come quoted, hence the rstrip. This is
+    not a complete account of what ran: ignored modules and PYTHONPATH are
+    invisible to git status, and the guard checks those itself. Stamped into meta so a
     reused parasitics.json is bound to the code that produced it, not only
     to its board and config (consumed by kicad-design's
     loop_inductance_guard.py, which refuses an unstamped extraction)."""
@@ -471,7 +473,8 @@ def _extractor_provenance():
         else:
             _PROVENANCE = (head.stdout.strip(),
                            [s for s in st.stdout.splitlines()
-                            if not s.startswith("??") or s.endswith(".py")])
+                            if not s.startswith("??")
+                            or s.rstrip('"').endswith(".py")])
     return _PROVENANCE
 
 
