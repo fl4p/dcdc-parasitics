@@ -132,3 +132,13 @@ def test_closure_onto_a_single_node_is_refused():
     m.port("P_pwr", cin_v, cin_g)
     with pytest.raises(ValueError, match="SAME node"):
         kicad_geom.validate_module_ports(m, _topo(pad, pad))
+
+
+def test_finite_segment_cannot_stand_in_for_the_ideal_closure():
+    """A segment between the closure nodes is copper, not the zero-inductance
+    pad-plane link the metadata promises: 1.79 nH against the ideal 1.40 nH
+    (review of 364d5ae, finding 1)."""
+    m, pv, pg = _deck(closed=False)
+    m.seg(pv, pg, 0.5)
+    with pytest.raises(ValueError, match="not in the deck being solved"):
+        kicad_geom.validate_module_ports(m, _topo(pv, pg))

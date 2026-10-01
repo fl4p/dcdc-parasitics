@@ -1956,9 +1956,12 @@ def validate_module_ports(model, topo):
     #    to 0.39 nH where the valid closure gives 1.40 nH (merge review of d70128c,
     #    finding 1). model.equiv() drops a link whose two ends are one node, and
     #    floating-port pruning can drop equivs, so absence is a real state.
-    edges = {frozenset(e) for e in model.equivs}
-    edges |= {frozenset((s[1], s[2])) for s in model.segs}
-    if vin_node == gnd_node or banned not in edges:
+    #    It must be the IDEAL link build_module emits: a finite segment between the
+    #    two pad nodes passed as a closure and solved to 1.79 nH against the ideal
+    #    1.40 nH while the metadata still said internal L = 0 (review of 364d5ae,
+    #    finding 1). Nothing builds one today; this keeps it that way.
+    ideal = {frozenset(e) for e in model.equivs}
+    if vin_node == gnd_node or banned not in ideal:
         raise ValueError(
             f"invalid module extraction: the {spec.get('ref')} pad-plane closure "
             f"({vin_node} <-> {gnd_node}) is not in the deck being solved"
@@ -1969,7 +1972,8 @@ def validate_module_ports(model, topo):
     # 6. The closure is the ONLY Vin-GND path. With it removed, the P_pwr terminals
     #    must be disconnected: Vin and GND copper meet only through the module (and
     #    the caps, which are ports, not copper). A second path is a bypass -- a
-    #    short, a mis-netted pour, a weld across nets -- and it shunts the module:
+    #    short or a mis-netted pour (welding is same-net only, so it cannot make
+    #    one) -- and it shunts the module:
     #    0.31 nH reported against the valid 1.40 nH (same review, same finding).
     if b in _connected_without(model, a, banned):
         raise ValueError(
@@ -1977,8 +1981,8 @@ def validate_module_ports(model, topo):
             f"{spec.get('ref')} pad-plane closure removed, so a copper path joins Vin "
             f"to GND without passing through the module. The solve would measure "
             f"that bypass in parallel with the module loop and report less than the "
-            f"loop. Check for a Vin-GND short, a mis-netted pour or zone, or a "
-            f"--weld-tol large enough to fuse nodes across the nets.")
+            f"loop. Check for a Vin-GND short in the layout, a pour or zone assigned "
+            f"to the wrong net, or a probe/extra net that joins the two.")
 
 
 def _device_closure_nodes(topo):
