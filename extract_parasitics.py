@@ -444,10 +444,14 @@ def _load_altium_sidecar(pcb_input, resolved_pcb, workdir):
     return meta
 
 
-# Importable from a directory on this CLI's sys.path (root and lib/). Keep
-# in step with IMPORTABLE_GLOBS in kicad-design's loop_inductance_guard.py.
-_IMPORTABLE_GLOBS = ("*.py", "*.pyc", "*.so", "*/__init__.py",
-                     "*/__init__.pyc", "*/__init__.so")
+# Untracked files that can change what runs: root-level modules and packages
+# (`*/__init__.*` covers ABI-tagged extension initializers), and ANYTHING under
+# lib/ -- it holds only code and has no subdirectories today, so a recursive
+# match is cheap and closes nested packages too. __pycache__ is Python's own
+# cache, validated against its source, and is filtered out after matching.
+# Keep in step with IMPORTABLE_PATHSPECS in kicad-design's loop_inductance_guard.py.
+_IMPORTABLE_PATHSPECS = (":(glob)*.py", ":(glob)*.pyc", ":(glob)*.so",
+                         ":(glob)*/__init__.*", ":(glob)lib/**")
 
 
 def _extractor_provenance():
@@ -460,14 +464,14 @@ def _extractor_provenance():
     Status lines are `git status --porcelain` for tracked changes and
     untracked .py (other untracked files are agent scratch, not copied into
     every artifact; quoted paths keep their closing quote, hence the
-    rstrip), plus "!! <path>" for any untracked module, ignored or not, in
-    root or lib/ -- git status never shows ignored files, and an ignored
+    rstrip), plus "!! <path>" for any untracked module or package in root and
+    any untracked file under lib/, ignored or not -- git status never shows
+    ignored files, and an ignored
     lib/numpy.py would shadow the real one. Read on every call, not cached,
     so a checkout that changes between extractions is not stamped stale.
     PYTHONPATH and user site-packages are outside the checkout and not
     covered."""
     here = os.path.dirname(os.path.abspath(__file__))
-    pats = [f":(glob){d}{p}" for d in ("", "lib/") for p in _IMPORTABLE_GLOBS]
     try:
         head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"],
                               capture_output=True, text=True)
@@ -475,7 +479,8 @@ def _extractor_provenance():
                              "--untracked-files=all"],
                             capture_output=True, text=True)
         strays = subprocess.run(["git", "-C", here, "ls-files", "--others",
-                                 "--", *pats], capture_output=True, text=True)
+                                 "--", *_IMPORTABLE_PATHSPECS],
+                                capture_output=True, text=True)
     except OSError:
         return None, None
     if head.returncode or st.returncode or strays.returncode:
@@ -483,7 +488,8 @@ def _extractor_provenance():
     return (head.stdout.strip(),
             [s for s in st.stdout.splitlines()
              if not s.startswith("??") or s.rstrip('"').endswith(".py")]
-            + [f"!! {p}" for p in strays.stdout.splitlines()])
+            + [f"!! {p}" for p in strays.stdout.splitlines()
+               if "__pycache__/" not in p])
 
 
 def _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
