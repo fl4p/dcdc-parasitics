@@ -514,6 +514,78 @@ python3 extract_parasitics.py .../Fugu2.kicad_pcb --sw SW --gnd BuckGND --vin So
         --emit-cin-network --cin-network-model matrix --pitch 1.0 -o out/
 ```
 
+### `module` — an INTEGRATED-MODULE power stage (both FETs in one package)
+
+Everything above assumes **discrete** switches: `fet_discovery` finds a high-side
+FET whose drain sits on a non-GND rail and a low-side FET bridging SW and GND,
+and `build_fet` closes each channel at a die plane `lead_mm` above the pad. That
+die short is what makes the deck solvable at all. Hand it a board whose power
+stage is a module — a TI TPSM33610S3Q, say — and it is correctly refused:
+
+```
+no high-side FET found on '/SW' (drain to a non-GND rail)
+```
+
+`probe_ports` does **not** substitute. A probe is an extra `.external` on copper
+that is already in the deck; what is missing here is not a port but the galvanic
+path. Without a closure the Vin copper and the GND copper are two separate
+conductors, `P_pwr` spans them, and FastHenry answers (measured 2026-09-16):
+
+```
+Number of meshes:             0
+Couldn't create sparse matrix, err 5          (exit 1, no Zc.mat)
+```
+
+Declare a `module:` block instead. It closes the input commutation loop at the
+**package pads**:
+
+```yaml
+module:
+  ref: U1
+  vin_pads: ["3"]          # optional — auto-discovered from the vin net if omitted
+  gnd_pads: ["10"]
+  internal_closure: ideal_pad_plane
+lead_mm: 0                 # required: a module has no declarable die plane
+```
+
+**`internal_closure` has no default, and never will.** The geometry from the
+package pads to the dies is not public (TI's SNVSCS7E gives a land pattern and
+layout guidance and no internal dimensions), so the tool refuses to choose it:
+
+| `internal_closure` | solve | what `L_loop` means | extra fields |
+|---|---|---|---|
+| `ideal_pad_plane` | one `.equiv`, VIN pad group ↔ GND pad group | **board copper only**, internal contribution exactly 0 — a *lower bound* on the physical loop | `module.L_loop_board`, `module.internal_L = 0` |
+| `declared_internal` | **identical** — FastHenry has no lumped element | still board copper only | `module.L_loop_with_internal`, plus the required `internal_nh` and `internal_source` |
+
+`L_loop` is board copper on **both** closures, on purpose: a declared internal
+inductance is only ever added under its own name, so no consumer can read an
+assumed path as an extracted one. `declared_internal` refuses a value without an
+`internal_source` provenance string.
+
+Every module declaration fails closed: a missing or misspelled key, an unknown
+closure name, a refdes or pad that is not on the board, a pad that is on a
+different net than declared, a closure that does not lie on the Cin loop, a
+`P_pwr` joined through ideal links only, and a `P_pwr` whose terminals are not
+connected at all (the "no loop" case above) are all hard errors. The closure pads
+must terminate on real copper — a pour-mesh `overlap`, or `track_in_land` for a
+rail routed with tracks and no pour — and a fabricated `proximity` bond is
+refused unless the block declares `allow_proximity_bond: true`. The bond class
+of every closure pad is recorded in `parasitics.json`.
+
+Not available for a module, because none of it exists on the board: gate loops
+and CSI (reported as `null`, never 0), the per-switch conduction split
+(`r_hs`/`r_ls`), the plane-P `cap_only`/`switch_residual` bases, and
+`parallel_fets: per-device`. `P_pwr`, `P_bulk`, `cin_branches` and `probe_ports`
+all work unchanged.
+
+Example — `examples/buck-tpsm33610-module.yaml`, TPSM33610S3Q on a 2-layer
+9.1 × 12.6 mm breakout, pitch 0.25 mm:
+
+```
+L_loop = 3.63 nH (board copper only)   R_loop = 8.04 mOhm @ 3.9 MHz
+cin trunk 2.90 nH   C2 (0603 HF) branch 0.84 nH   C1 (1206) branch 5.16 nH
+```
+
 ### `extra_nets` — meshing copper the half-bridge topology does not touch
 
 The meshed set is *derived*: `{--sw, --vin, --gnd}` plus the HS/LS gate nets, and

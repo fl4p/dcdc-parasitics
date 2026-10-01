@@ -1,0 +1,77 @@
+# buck-tpsm33610 -- INPUT COMMUTATION LOOP of an INTEGRATED-MODULE power stage.
+#
+# The power stage is a TI TPSM33610S3QRDNRQ1 (refdes U1): both switches, both gate
+# drivers and the output inductor are inside the package. There are no discrete
+# FETs, so `fet_discovery.discover()` refuses the board --
+#
+#     no high-side FET found on '/SW' (drain to a non-GND rail)
+#
+# -- and it is right to: the loop closes through dies the board cannot see. The
+# `module:` block below is the module path (lib/module_stage.py). It closes the
+# loop at the PACKAGE PADS instead of at a die plane.
+#
+# WHAT THE EXTRACTED L_loop CONTAINS -- read this before quoting the number.
+# `internal_closure: ideal_pad_plane` joins U1's VIN pad group to its GND pad group
+# with ONE FastHenry `.equiv`. The internal contribution is EXACTLY ZERO by
+# construction, so `L_loop` here is BOARD COPPER ONLY: the same basis as
+# examples/fugu2-cu.yaml (lead_mm=0.1), and a LOWER BOUND on the physical loop.
+# The real module adds a bondwire/leadframe/die path whose geometry TI does not
+# publish -- SNVSCS7E (rev E) gives a land pattern and layout guidance (SS8.5.1,
+# SS8.5.2) and no internal dimensions. The extractor will not invent it. If you
+# ever obtain a defensible figure, switch to:
+#
+#     internal_closure: declared_internal
+#     internal_nh: <value>
+#     internal_source: "where it came from, and when"
+#
+# which leaves the board solve identical (FastHenry has no lumped element) and
+# reports `L_loop_with_internal` as a SEPARATE field alongside `L_loop_board`.
+# `L_loop` stays board copper on both closures, on purpose.
+#
+# lead_mm MUST be 0 here. It is the discrete die-plane riser length; leaving it at
+# its 3 mm default would read as a lead-inclusive extraction of a package that has
+# no declarable die plane, so the tool refuses the combination rather than ignoring
+# it.
+#
+# BOARD (read-only test input, ee/hw/buck-tpsm33610 @ e6fe53a, 2 copper layers):
+#   U1.3  = /VIN    U1.5, U1.6 = /SW    U1.10 = GND    U1.4 = /VOUT
+#   C2  1u  0603  = CIN HF, nearest the module
+#   C1  10u 1206  = CIN bulk (package-class MLCC, so `cin_class` calls it mlcc)
+# /SW appears ONLY on U1 pads 5 and 6 -- a ~0.7 mm stub to an internal node. It is
+# declared so the net is meshed and named in the manifest; it plays no part in the
+# input loop and gets no closure.
+pcb: ../../../../../ee/hw/buck-tpsm33610/buck-tpsm33610.kicad_pcb
+sw: /SW
+gnd: GND
+vin: /VIN
+module:
+  ref: U1
+  vin_pads: ["3"]
+  gnd_pads: ["10"]
+  internal_closure: ideal_pad_plane
+# Both input caps ported individually so the per-cap branch decomposition
+# (cin_branches: C2 = HF branch, C1 = bulk branch) falls out of the same solve.
+cin_loop_refs: [C2, C1]
+cin_parallel: 2
+emit_cin_network: true
+# 0.25 mm. The module's VIN pad is a 0.35 x 1.2 mm rotated land, and the pad-plane
+# closure refuses a fabricated proximity bond -- a real mesh node (or, on /VIN which
+# has no pour here, a real track node) has to fall inside the land.
+#
+# PITCH IS NOT FREELY CHOOSABLE ON THIS BOARD. Measured 2026-09-16:
+#   0.50  L_loop 3.620 nH   (trunk 2.854, C2 0.904, C1 4.994)
+#   0.25  L_loop 3.627 nH   (trunk 2.903, C2 0.842, C1 5.158)   <- this config
+#   0.20  L_loop 3.561 nH   (trunk 2.851, C2 0.823, C1 5.165)
+# i.e. +-1% over a 2.5x pitch range: L is converged. But 0.35 mm FAILS, hard, with
+#   "the P_pwr terminals are NOT connected in the modeled copper"
+# because at that pitch the GND pour mesh under U1.10 forms a 22-node island that
+# never reaches the rest of the plane. That is the guard doing its job, not a
+# spurious refusal: the deck built with the guard bypassed DOES get through
+# FastHenry (two conductors bridged only by the two source branches) and reduces to
+# L = 4.3e16 nH. Without the guard that garbage is what a caller would receive.
+pitch: [0.25]
+lead_mm: 0                    # required for a module; see above
+lf_freq: 39000
+weld_tol: 0.6
+margin: 8.0
+out: out/buck-tpsm33610/
