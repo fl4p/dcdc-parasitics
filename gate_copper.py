@@ -21,6 +21,7 @@ import ast
 import html
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = os.path.join(HERE, "lib")
@@ -38,6 +39,8 @@ except ImportError:
     raise
 
 import fet_discovery  # noqa: E402
+import gate_net_override  # noqa: E402
+import pcb_source  # noqa: E402
 
 NM = 1e6
 
@@ -57,6 +60,10 @@ DEFAULTS = {
     "hs_gate": None, "ls_gate": None,
     "hs_kelvin": False, "ls_kelvin": False,
     "margin": 10.0, "config": None, "separate": False, "split_fets": False,
+    # Honoured, not ignored: it rewires a FET's gate (pad-1 net + a synthetic wire to
+    # its sibling), so it changes the very geometry this tool draws. Accepting it as
+    # an extraction-only key made dual-LS Fugu2 fail discovery (review of 5d41b35).
+    "gate_net_override": None,
 }
 REQUIRED_ARGS = ("pcb", "sw", "gnd", "out")
 LIST_TYPES = {"hs_ref": str, "ls_ref": str, "pitch": float, "cin_refs": str}
@@ -598,6 +605,14 @@ def _validate_config(config, path):
                     raise TypeError("expected list")
             elif key in SCALAR_TYPES:
                 out[key] = _coerce(key, value, SCALAR_TYPES[key])
+            elif key == "gate_net_override":
+                # same wire format the extractor hands its geometry step
+                if value is None or isinstance(value, str):
+                    out[key] = value
+                elif isinstance(value, dict):
+                    out[key] = ",".join(f"{k}={v}" for k, v in value.items())
+                else:
+                    raise TypeError("expected a REF: NET mapping or 'REF=NET,...'")
         except TypeError as e:
             raise SystemExit(f"{path}: {key}: {e}")
     return out
@@ -663,7 +678,17 @@ def parse_args(argv=None):
 # --------------------------------------------------------------------------- #
 def main(argv=None):
     args = parse_args(argv)
-    board = pcbnew.LoadBoard(args.pcb)
+    # Resolve the board as the extractor does (cwd first, then the YAML's own
+    # directory; two different boards is an error). Handing a config-relative path
+    # straight to KiCad loaded None and crashed later (review of 5d41b35).
+    pcb = pcb_source.resolve_pcb_path(args.pcb, tempfile.gettempdir(),
+                                      config_path=args.config)
+    board = pcbnew.LoadBoard(pcb)
+    if board is None:
+        raise SystemExit(f"KiCad could not load the board {pcb!r} (from {args.pcb!r})")
+    if args.gate_net_override:
+        fet_refs = list(args.hs_ref or ()) + list(args.ls_ref or ())
+        gate_net_override.apply(board, args.gate_net_override, fet_refs=fet_refs)
     try:
         topo = fet_discovery.discover(
             board, args.sw, args.gnd, vin=args.vin,
