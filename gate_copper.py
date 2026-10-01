@@ -17,7 +17,6 @@ Usage:
     python3 gate_copper.py --config fugu2.yaml
 """
 import argparse
-import ast
 import html
 import os
 import sys
@@ -39,6 +38,7 @@ except ImportError:
     raise
 
 import fet_discovery  # noqa: E402
+import extractor_keys  # noqa: E402
 import gate_net_override  # noqa: E402
 import pcb_source  # noqa: E402
 
@@ -551,41 +551,9 @@ def _coerce(name, value, typ):
     raise AssertionError(name)
 
 
-def _extractor_config_keys():
-    """The keys extract_parasitics.py accepts: its REQUIRED_ARGS | DEFAULTS.
-
-    Read from its source with ast rather than imported: this tool runs under
-    KiCad's Python, which need not have the extractor's numpy stack. A copied
-    whitelist went stale -- by 2026-10-01 it rejected 11 of the 13 committed
-    example configs (lf_freq, cin_loop_refs, module, probe_ports, ...), though
-    the header promises the same YAML works here (merge review of d70128c,
-    finding 2). Extractor-only keys are accepted and ignored.
-    """
-    src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "extract_parasitics.py")
-    keys = set()
-    try:
-        tree = ast.parse(open(src).read(), src)
-    except (OSError, SyntaxError) as e:
-        raise SystemExit(f"cannot read the extractor's config schema from {src}: {e}")
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        names = {t.id for t in node.targets if isinstance(t, ast.Name)}
-        if names & {"REQUIRED_ARGS", "DEFAULTS"}:
-            v = node.value
-            elts = v.keys if isinstance(v, ast.Dict) else getattr(v, "elts", [])
-            keys |= {e.value for e in elts
-                     if isinstance(e, ast.Constant) and isinstance(e.value, str)}
-    if not keys:
-        raise SystemExit(f"found no REQUIRED_ARGS/DEFAULTS in {src}; cannot tell an "
-                         f"extractor key from a typo")
-    return keys
-
-
 def _validate_config(config, path):
     allowed = (set(REQUIRED_ARGS) | set(DEFAULTS) | set(LIST_TYPES)
-               | set(SCALAR_TYPES) | BOOL_ARGS | _extractor_config_keys())
+               | set(SCALAR_TYPES) | BOOL_ARGS | extractor_keys.extractor_config_keys())
     unknown = sorted(set(config) - allowed)
     if unknown:
         raise SystemExit(f"{path}: unknown key(s): {', '.join(unknown)}")

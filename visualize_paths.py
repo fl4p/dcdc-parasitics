@@ -35,6 +35,8 @@ except ImportError:
 
 import fet_discovery  # noqa: E402
 import pcb_source  # noqa: E402
+import extractor_keys  # noqa: E402
+import gate_net_override  # noqa: E402
 
 NM = 1e6
 # Outer copper layer ids from pcbnew, NOT hardcoded: KiCad 8/9 renumbered the
@@ -53,6 +55,7 @@ DEFAULTS = {
     "ls_kelvin": False,
     "margin": 10.0,
     "config": None,
+    "gate_net_override": None,   # applied in memory before discovery, as kicad_geom does
 }
 
 REQUIRED_ARGS = ("pcb", "sw", "gnd", "out")
@@ -814,13 +817,17 @@ def _coerce_scalar(name, value, typ):
 # that an extraction config can be handed to it unchanged, but its type tables
 # model only scalars and homogeneous lists, so a mapping-valued key would be
 # rejected as "unknown" — breaking the advertised behaviour for any config that
-# declares one. Accept and drop them.
-IGNORED_STRUCTURED_KEYS = {"gate_net_override", "probe_ports"}
+# declares one. Accept and drop them. Every other extractor key is accepted too
+# (extractor_keys), and ignored unless this viewer has a use for it.
+# gate_net_override is NOT ignored: it rewires a FET's gate, i.e. the paths drawn.
+IGNORED_STRUCTURED_KEYS = {"probe_ports"}
 
 
 def _validate_config(config, path):
-    allowed = (set(REQUIRED_ARGS) | set(DEFAULTS) | set(LIST_TYPES)
-               | set(SCALAR_TYPES) | BOOL_ARGS | IGNORED_STRUCTURED_KEYS)
+    own = (set(REQUIRED_ARGS) | set(DEFAULTS) | set(LIST_TYPES)
+           | set(SCALAR_TYPES) | BOOL_ARGS)
+    extraction_only = (extractor_keys.extractor_config_keys() | IGNORED_STRUCTURED_KEYS) - own
+    allowed = own | extraction_only
     unknown = sorted(set(config) - allowed)
     if unknown:
         raise SystemExit(f"{path}: unknown config key(s): {', '.join(unknown)}")
@@ -828,8 +835,16 @@ def _validate_config(config, path):
     out = {}
     for key, value in config.items():
         try:
-            if key in IGNORED_STRUCTURED_KEYS:
+            if key in extraction_only:
                 continue                       # extraction-only; the viewer has no use for it
+            elif key == "gate_net_override":
+                if value is None or isinstance(value, str):
+                    out[key] = value
+                elif isinstance(value, dict):
+                    out[key] = ",".join(f"{k}={v}" for k, v in value.items())
+                else:
+                    raise TypeError("expected a REF: NET mapping or 'REF=NET,...'")
+                continue
             elif key in BOOL_ARGS:
                 if not isinstance(value, bool):
                     raise TypeError("expected boolean")
@@ -887,10 +902,14 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     workdir = tempfile.mkdtemp(prefix="dcdc_view_")
-    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir)
+    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir,
+                                           config_path=getattr(args, "config", None))
     board = pcbnew.LoadBoard(args.pcb)
     if board is None:
         raise SystemExit(f"{args.pcb}: KiCad failed to load PCB")
+    if getattr(args, "gate_net_override", None):
+        fet_refs = list(args.hs_ref or ()) + list(args.ls_ref or ())
+        gate_net_override.apply(board, args.gate_net_override, fet_refs=fet_refs)
     topo = fet_discovery.discover(board, args.sw, args.gnd, vin=args.vin,
                                   hs_ref=args.hs_ref, ls_ref=args.ls_ref,
                                   hs_gate=args.hs_gate, ls_gate=args.ls_gate,
