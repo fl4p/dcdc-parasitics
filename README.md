@@ -779,13 +779,21 @@ The `--pitch 2.0` result reproduces the historical lead-inclusive fixture's
 `extract_parasitics.py` at the repo root is the extraction CLI. It runs the
 two-interpreter pipeline: the geometry step (`lib/kicad_geom.py`) under KiCad's
 python, the solve/reduce/emit under system python. `visualize_paths.py` is the
-standalone HTML path-viewer exporter.
+standalone HTML path-viewer exporter. `gate_copper.py` writes one SVG per
+gate-drive loop (HS, LS): every track, via, pour fill and pad on the driver,
+gate and source-return nets around the FETs, one colour per copper layer. Use it
+to check that the extraction meshes the right gate geometry and to spot missing
+vias, thin necks and detours. It takes the same YAML as the extractor
+(`python3 gate_copper.py --config examples/fugu2-cu.yaml`, with `out:` set) and
+ignores the extraction-only keys; `--split-fets` draws paralleled devices
+separately.
 
 ```
 extract_parasitics.py   # FastHenry CLI (orchestrates the two interpreters)
 extract_capacitance.py  # KiCad filled zones -> FasterCap diagnostic deck
 extract_palace_mesh.py  # complete KiCad PCB -> source-bound Palace PLC mesh
 visualize_paths.py      # -> standalone HTML PCB path viewer
+gate_copper.py          # -> one SVG per gate-drive loop, colour per layer
 lib/
   kicad_geom.py         # pcbnew -> multiport FastHenry .inp (KiCad python)
   kicad_fastercap_dump.py # stdlib + pcbnew -> exact contour JSON
