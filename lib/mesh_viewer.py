@@ -11,7 +11,7 @@ Toggles (an image shows only while every toggle it belongs to is on):
   Bottom (B.Cu)   B copper underlay + B mesh; also gates bottom caps/ports
   Vias            inter-layer vias
   FET leads       FET-lead risers
-  Capacitors      cap glyphs on every layer
+  Capacitors      cap glyphs + references on every layer
   Ports           port-node markers on every layer
   Board edge      Edge.Cuts outline (needs --copper)
 
@@ -88,9 +88,19 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
 
     xs = [v[0] for v in N.values()]; ys = [v[1] for v in N.values()]
     m = 2.0
+    W_mesh = (max(xs) - min(xs)) + 2 * m
+    # The canvas covers the board edge too, when one is known: sized to the mesh
+    # alone, every image clipped the Edge.Cuts outline to the mesh ROI, so on
+    # Fugu2 only part of the left edge survived and zoom could not recover the rest
+    # (review of 49e8c93, finding 5). Resolution is held at the mesh's original
+    # px/mm by growing the canvas, capped at MAX_PX wide.
+    edge = (cu or {}).get("edge") or []
+    for e in edge:
+        xs += [e[0], e[2]]; ys += [e[1], e[3]]
     bbox = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)   # x0,x1,y0,y1
     W = bbox[1] - bbox[0]; H = bbox[3] - bbox[2]
-    figw = 9.0; figsize = (figw, figw * H / W)
+    MAX_PX = 16000
+    figw = min(9.0 * W / W_mesh, MAX_PX / dpi); figsize = (figw, figw * H / W)
     pxw, pxh = int(figw * dpi), int(figw * H / W * dpi)
     stem = os.path.splitext(out_html)[0]
     layers = []  # (id, label, filename)
@@ -115,7 +125,8 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
     for p in capname:
         if p in pmap and pmap[p][0] in N and pmap[p][1] in N:
             a1, b1 = pmap[p]; pl = plane(N[a1][2])
-            (tcap if pl == "top" else bcap if pl == "bot" else ocap).append((N[a1], N[b1]))
+            (tcap if pl == "top" else bcap if pl == "bot" else ocap).append(
+                (N[a1], N[b1], capname[p]))
     tport, bport, oport = [], [], []
     for na, nb in ext:
         for n in (na, nb):
@@ -124,7 +135,17 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
                 (tport if pl == "top" else bport if pl == "bot" else oport).append(pt)
 
     def caps(lst):
-        return lambda ax: [cap_glyph(ax, p1, p2) for p1, p2 in lst]
+        # glyph plus its reference, as the superseded issue7 viewer labelled them
+        # (review of 49e8c93, finding 4)
+        def d(ax):
+            for p1, p2, name in lst:
+                cap_glyph(ax, p1, p2)
+                ax.annotate(name, ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2),
+                            xytext=(10, 8), textcoords="offset points", fontsize=4,
+                            color=CAP, clip_on=True,
+                            bbox=dict(boxstyle="round,pad=0.15", fc="#141414",
+                                      ec="none", alpha=0.8))
+        return d
 
     def ports_mk(lst):
         def d(ax):
@@ -153,7 +174,6 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
         g = [] if side == "other" else [side]
         layer(f"cap_{side}", ["cap"] + g, caps(lc))
         layer(f"port_{side}", ["port"] + g, ports_mk(lp))
-    edge = (cu or {}).get("edge") or []
     if edge:
         layer("edge", ["edge"], lambda ax: ax.add_collection(LineCollection(
             [[(e[0], e[1]), (e[2], e[3])] for e in edge], colors="#d8d8d8", linewidths=0.6)))
