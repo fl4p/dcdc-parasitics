@@ -6,10 +6,14 @@ tiny single-file HTML that stacks them as toggleable <img> layers with pan/zoom.
 The browser composites raster instantly, so even the 0.2mm mesh (170k+ filaments)
 stays responsive — no 100k-element SVG DOM.
 
-Layers:
-  Top (F.Cu)      F copper underlay (if --copper) + F mesh + top-layer SMD caps/ports
-  Bottom (B.Cu)   B copper underlay + B mesh + bottom-layer SMD caps/ports
-  Vias/FET leads  inter-layer vias, FET-lead risers, FET-plane caps/ports (shared)
+Toggles (an image shows only while every toggle it belongs to is on):
+  Top (F.Cu)      F copper underlay (if --copper) + F mesh; also gates top caps/ports
+  Bottom (B.Cu)   B copper underlay + B mesh; also gates bottom caps/ports
+  Vias            inter-layer vias
+  FET leads       FET-lead risers
+  Capacitors      cap glyphs on every layer
+  Ports           port-node markers on every layer
+  Board edge      Edge.Cuts outline (needs --copper)
 
 With --copper, the PCB copper is split into separate per-layer PNGs so hiding a
 layer hides its copper too. An opacity slider in Overlays fades both copper
@@ -91,15 +95,22 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
     stem = os.path.splitext(out_html)[0]
     layers = []  # (id, label, filename)
 
-    def layer(lid, label, draw):
+    def layer(lid, groups, draw):
+        """Rasterize one image. `groups` are the toggles it belongs to; the image is
+        shown only while ALL of them are on, so a top-layer cap hides with either
+        "Top" or "Capacitors"."""
         fig, ax = _new_ax(bbox, figsize, dpi)
         draw(ax)
         fn = f"{stem}_{lid}.png"
         fig.savefig(fn, transparent=True, dpi=dpi); plt.close(fig)
-        layers.append((lid, label, fn))
+        layers.append((lid, groups, fn))
 
-    # classify caps + port-node markers by the LAYER (z) they sit on, so an SMD cap/port
-    # on a layer hides when that layer is hidden. (FET-plane z~3 nodes -> shared annot.)
+    # Caps and port markers are classified by the LAYER (z) they sit on, and drawn as
+    # their own images, one per (kind, layer). Baking them into the copper image, as
+    # this viewer used to, left no way to hide cap/port clutter while keeping the mesh,
+    # and drawing vias and FET leads into one image left no way to tell them apart --
+    # capabilities the superseded issue7 HTML viewer had (7 toggles; this had 3).
+    # Merge review of d70128c, Codex finding (issue7 superseded, not equivalent).
     tcap, bcap, ocap = [], [], []
     for p in capname:
         if p in pmap and pmap[p][0] in N and pmap[p][1] in N:
@@ -112,69 +123,71 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
                 pl = plane(N[n][2]); pt = (N[n][0], N[n][1])
                 (tport if pl == "top" else bport if pl == "bot" else oport).append(pt)
 
-    def caps(ax, lst):
-        for p1, p2 in lst:
-            cap_glyph(ax, p1, p2)
+    def caps(lst):
+        return lambda ax: [cap_glyph(ax, p1, p2) for p1, p2 in lst]
 
-    def ports_mk(ax, lst):
-        if lst:
-            ax.scatter([q[0] for q in lst], [q[1] for q in lst], s=8, marker="s",
-                       c=PORT, edgecolors="k", linewidths=.25)
+    def ports_mk(lst):
+        def d(ax):
+            if lst:
+                ax.scatter([q[0] for q in lst], [q[1] for q in lst], s=8, marker="s",
+                           c=PORT, edgecolors="k", linewidths=.25)
+        return d
 
-    if cu:
-        def d_fcu_pcb(ax):
-            draw_copper_underlay(ax, cu, "F", F_CU)
-        layer("fcu_pcb", "F copper", d_fcu_pcb)
-
-    def d_fcu(ax):
-        ax.add_collection(LineCollection(top, colors=F_CU, linewidths=0.3))
-        caps(ax, tcap); ports_mk(ax, tport)
-    layer("fcu", "Top (F.Cu) + top SMD", d_fcu)
+    def ends(segs4):
+        return ([v[0] for v in segs4] + [v[2] for v in segs4],
+                [v[1] for v in segs4] + [v[3] for v in segs4])
 
     if cu:
-        def d_bcu_pcb(ax):
-            draw_copper_underlay(ax, cu, "B", B_CU)
-        layer("bcu_pcb", "B copper", d_bcu_pcb)
-
-    def d_bcu(ax):
-        ax.add_collection(LineCollection(bot, colors=B_CU, linewidths=0.3))
-        caps(ax, bcap); ports_mk(ax, bport)
-    layer("bcu", "Bottom (B.Cu) + bottom SMD", d_bcu)
-
-    def d_annot(ax):
-        ax.scatter([v[0] for v in via] + [v[2] for v in via], [v[1] for v in via] + [v[3] for v in via], s=10, c=VIA)
-        ax.scatter([v[0] for v in lead] + [v[2] for v in lead], [v[1] for v in lead] + [v[3] for v in lead],
-                   s=45, marker="^", c=LEAD, edgecolors="k", linewidths=.4)
-        caps(ax, ocap); ports_mk(ax, oport)
-    layer("annot", "Vias / FET leads", d_annot)
+        layer("fcu_pcb", ["fcu"], lambda ax: draw_copper_underlay(ax, cu, "F", F_CU))
+    layer("fcu", ["fcu"], lambda ax: ax.add_collection(
+        LineCollection(top, colors=F_CU, linewidths=0.3)))
+    if cu:
+        layer("bcu_pcb", ["bcu"], lambda ax: draw_copper_underlay(ax, cu, "B", B_CU))
+    layer("bcu", ["bcu"], lambda ax: ax.add_collection(
+        LineCollection(bot, colors=B_CU, linewidths=0.3)))
+    layer("via", ["via"], lambda ax: ax.scatter(*ends(via), s=10, c=VIA))
+    layer("lead", ["lead"], lambda ax: ax.scatter(
+        *ends(lead), s=45, marker="^", c=LEAD, edgecolors="k", linewidths=.4))
+    # a cap/port on F or B also obeys that layer's toggle; FET-plane ones only their own
+    for side, lc, lp in (("fcu", tcap, tport), ("bcu", bcap, bport), ("other", ocap, oport)):
+        g = [] if side == "other" else [side]
+        layer(f"cap_{side}", ["cap"] + g, caps(lc))
+        layer(f"port_{side}", ["port"] + g, ports_mk(lp))
+    edge = (cu or {}).get("edge") or []
+    if edge:
+        layer("edge", ["edge"], lambda ax: ax.add_collection(LineCollection(
+            [[(e[0], e[1]), (e[2], e[3])] for e in edge], colors="#d8d8d8", linewidths=0.6)))
 
     def src(fn):
         if embed:
             return "data:image/png;base64," + base64.b64encode(open(fn, "rb").read()).decode()
         return os.path.basename(fn)
 
-    imgs = "\n".join(f'<img id="{lid}" class="ly" src="{src(fn)}">' for lid, _, fn in layers)
-    lab = {lid: l for lid, l, _ in layers}
+    imgs = "\n".join(f'<img id="{lid}" class="ly" data-g="{" ".join(g)}" src="{src(fn)}">'
+                     for lid, g, fn in layers)
 
-    def chk(ids, sw, label):
-        ids_js = "','".join(ids)
-        return (f'<label><input type="checkbox" checked '
-                f'onchange="[\'{ids_js}\'].forEach(id=>document.getElementById(id).style.display=this.checked?\'block\':\'none\')">'
-                f'<span class="swatch" style="background:{sw}"></span>{label}</label>')
+    def chk(group, sw, label):
+        return (f'<label><input type="checkbox" class="tg" data-g="{group}" checked '
+                f'onchange="vis()"><span class="swatch" style="background:{sw}"></span>'
+                f'{label}</label>')
     def op_slider(ids):
         ids_js = "','".join(ids)
         return (f'<label class="op-row"><span>opacity</span>'
                 f'<input type="range" min="0" max="1" step="0.05" value="1" '
                 f'oninput="[\'{ids_js}\'].forEach(id=>document.getElementById(id).style.opacity=this.value)"></label>')
     pcb_op = "\n" + op_slider(["fcu_pcb", "bcu_pcb"]) if cu else ""
-    controls = ("<h2>Layers</h2>\n" + chk(["fcu_pcb", "fcu"] if cu else ["fcu"], F_CU, lab["fcu"])
-                + "\n" + chk(["bcu_pcb", "bcu"] if cu else ["bcu"], B_CU, lab["bcu"])
-                + "\n<h2>Overlays</h2>\n" + chk(["annot"], VIA, lab["annot"]) + pcb_op)
+    controls = ("<h2>Layers</h2>\n" + chk("fcu", F_CU, "Top (F.Cu)")
+                + "\n" + chk("bcu", B_CU, "Bottom (B.Cu)") + pcb_op
+                + "\n<h2>Overlays</h2>\n" + chk("via", VIA, "Vias")
+                + "\n" + chk("lead", LEAD, "FET leads")
+                + "\n" + chk("cap", CAP, "Capacitors")
+                + "\n" + chk("port", PORT, "Ports")
+                + ("\n" + chk("edge", "#d8d8d8", "Board edge") if edge else ""))
     total_png = sum(os.path.getsize(fn) for _, _, fn in layers)
     counts = (f"F.Cu mesh {len(top)}, B.Cu mesh {len(bot)}, vias {len(via)}, "
               f"ports {len(ext)}, caps {len(capname)}" + (", + real-copper overlay" if cu else ""))
     html = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width, initial-scale=1"><title>Fugu2 mesh + PCB</title>
+<meta name=viewport content="width=device-width, initial-scale=1"><title>FastHenry mesh + PCB</title>
 <style>
 :root{{color-scheme:dark}} *{{box-sizing:border-box}}
 body{{margin:0;height:100vh;display:grid;grid-template-columns:232px 1fr;
@@ -195,7 +208,7 @@ label{{display:flex;align-items:center;gap:8px;min-height:26px;cursor:pointer}}
  -webkit-user-drag:none;user-drag:none;pointer-events:none}}
 </style></head><body>
 <aside>
- <h1>Fugu2 mesh + PCB</h1>
+ <h1>FastHenry mesh + PCB</h1>
  {controls}
  <div class=meta>{counts}</div>
  <div class=meta>scroll = zoom, drag = pan · <a href="#" onclick="reset();return false" style=color:#6af>reset</a></div>
@@ -206,6 +219,8 @@ let s=1,tx=0,ty=0,st=document.getElementById('stage'),vp=document.getElementById
 function ap(){{st.style.transform=`translate(${{tx}}px,${{ty}}px) scale(${{s}})`}}
 function reset(){{let r=vp.getBoundingClientRect();s=Math.min(r.width/{pxw},r.height/{pxh});
  tx=(r.width-{pxw}*s)/2;ty=(r.height-{pxh}*s)/2;ap()}}
+function vis(){{let on=new Set([...document.querySelectorAll('.tg')].filter(c=>c.checked).map(c=>c.dataset.g));
+ document.querySelectorAll('.ly').forEach(i=>{{i.style.display=i.dataset.g.split(' ').every(g=>on.has(g))?'block':'none'}})}}
 addEventListener('load',reset);addEventListener('resize',reset);
 vp.addEventListener('wheel',e=>{{e.preventDefault();let r=vp.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
  let k=Math.exp(-e.deltaY*0.0015);tx=mx-(mx-tx)*k;ty=my-(my-ty)*k;s*=k;ap()}},{{passive:false}});
