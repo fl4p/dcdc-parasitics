@@ -444,38 +444,46 @@ def _load_altium_sidecar(pcb_input, resolved_pcb, workdir):
     return meta
 
 
-_PROVENANCE = None
+# Importable from a directory on this CLI's sys.path (root and lib/). Keep
+# in step with IMPORTABLE_GLOBS in kicad-design's loop_inductance_guard.py.
+_IMPORTABLE_GLOBS = ("*.py", "*.pyc", "*.so", "*/__init__.py",
+                     "*/__init__.pyc", "*/__init__.so")
 
 
 def _extractor_provenance():
-    """(HEAD sha, `git status --porcelain` lines) of this extractor checkout,
-    or (None, None) when it cannot be established. Untracked files are kept
-    only if they are .py, so agent scratch directories are not copied into
-    every artifact; paths with spaces come quoted, hence the rstrip. This is
-    not a complete account of what ran: ignored modules and PYTHONPATH are
-    invisible to git status, and the guard checks those itself. Stamped into meta so a
-    reused parasitics.json is bound to the code that produced it, not only
-    to its board and config (consumed by kicad-design's
-    loop_inductance_guard.py, which refuses an unstamped extraction)."""
-    global _PROVENANCE
-    if _PROVENANCE is None:
-        here = os.path.dirname(os.path.abspath(__file__))
-        try:
-            head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"],
-                                  capture_output=True, text=True)
-            st = subprocess.run(["git", "-C", here, "status", "--porcelain",
-                                 "--untracked-files=all"],
-                                capture_output=True, text=True)
-        except OSError:
-            head = st = None
-        if head is None or st is None or head.returncode or st.returncode:
-            _PROVENANCE = (None, None)
-        else:
-            _PROVENANCE = (head.stdout.strip(),
-                           [s for s in st.stdout.splitlines()
-                            if not s.startswith("??")
-                            or s.rstrip('"').endswith(".py")])
-    return _PROVENANCE
+    """(HEAD sha, status lines) of this extractor checkout, or (None, None)
+    when it cannot be established. Stamped into meta so a reused
+    parasitics.json is bound to the code that produced it, not only to its
+    board and config (consumed by kicad-design's loop_inductance_guard.py,
+    which refuses an unstamped extraction).
+
+    Status lines are `git status --porcelain` for tracked changes and
+    untracked .py (other untracked files are agent scratch, not copied into
+    every artifact; quoted paths keep their closing quote, hence the
+    rstrip), plus "!! <path>" for any untracked module, ignored or not, in
+    root or lib/ -- git status never shows ignored files, and an ignored
+    lib/numpy.py would shadow the real one. Read on every call, not cached,
+    so a checkout that changes between extractions is not stamped stale.
+    PYTHONPATH and user site-packages are outside the checkout and not
+    covered."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    pats = [f":(glob){d}{p}" for d in ("", "lib/") for p in _IMPORTABLE_GLOBS]
+    try:
+        head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"],
+                              capture_output=True, text=True)
+        st = subprocess.run(["git", "-C", here, "status", "--porcelain",
+                             "--untracked-files=all"],
+                            capture_output=True, text=True)
+        strays = subprocess.run(["git", "-C", here, "ls-files", "--others",
+                                 "--", *pats], capture_output=True, text=True)
+    except OSError:
+        return None, None
+    if head.returncode or st.returncode or strays.returncode:
+        return None, None
+    return (head.stdout.strip(),
+            [s for s in st.stdout.splitlines()
+             if not s.startswith("??") or s.rstrip('"').endswith(".py")]
+            + [f"!! {p}" for p in strays.stdout.splitlines()])
 
 
 def _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
