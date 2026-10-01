@@ -1950,6 +1950,35 @@ def validate_module_ports(model, topo):
             "the synthesized closure itself, so the extracted loop did not pass "
             "through the module and is not the input commutation loop. Check the "
             "declared vin/gnd nets and module pads, the mesh pitch, and --margin.")
+    # 5. The closure is IN the deck being solved. Check 4 asks whether each Cin
+    #    terminal reaches its module pad, never whether the closure edge exists, so a
+    #    deck with no closure but an alternate Vin-GND copper path passed and solved
+    #    to 0.39 nH where the valid closure gives 1.40 nH (merge review of d70128c,
+    #    finding 1). model.equiv() drops a link whose two ends are one node, and
+    #    floating-port pruning can drop equivs, so absence is a real state.
+    edges = {frozenset(e) for e in model.equivs}
+    edges |= {frozenset((s[1], s[2])) for s in model.segs}
+    if vin_node == gnd_node or banned not in edges:
+        raise ValueError(
+            f"invalid module extraction: the {spec.get('ref')} pad-plane closure "
+            f"({vin_node} <-> {gnd_node}) is not in the deck being solved"
+            + (" -- the VIN and GND pad groups resolved to the SAME node"
+               if vin_node == gnd_node else "")
+            + ". Without it the loop does not close through the module, and any "
+            "Vin-GND path the solve finds is some other copper.")
+    # 6. The closure is the ONLY Vin-GND path. With it removed, the P_pwr terminals
+    #    must be disconnected: Vin and GND copper meet only through the module (and
+    #    the caps, which are ports, not copper). A second path is a bypass -- a
+    #    short, a mis-netted pour, a weld across nets -- and it shunts the module:
+    #    0.31 nH reported against the valid 1.40 nH (same review, same finding).
+    if b in _connected_without(model, a, banned):
+        raise ValueError(
+            f"invalid module extraction: the P_pwr terminals stay connected with the "
+            f"{spec.get('ref')} pad-plane closure removed, so a copper path joins Vin "
+            f"to GND without passing through the module. The solve would measure "
+            f"that bypass in parallel with the module loop and report less than the "
+            f"loop. Check for a Vin-GND short, a mis-netted pour or zone, or a "
+            f"--weld-tol large enough to fuse nodes across the nets.")
 
 
 def _device_closure_nodes(topo):

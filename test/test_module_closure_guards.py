@@ -97,3 +97,38 @@ def test_closure_nodes_must_have_been_recorded():
     m, pv, pg = _deck()
     with pytest.raises(ValueError, match="build_module did not run"):
         kicad_geom.validate_module_ports(m, _topo(None, None))
+
+
+def test_missing_closure_with_an_alternate_path_is_refused():
+    """No closure, but a Vin-GND copper path elsewhere: every terminal still
+    reaches its module pad, so check 4 alone passed it and the solve reported
+    0.39 nH against the valid deck's 1.40 nH (merge review of d70128c)."""
+    m, pv, pg = _deck(closed=False)
+    cin_v, cin_g = m.ports[0][1], m.ports[0][2]
+    m.seg(cin_v, cin_g, 0.5)
+    with pytest.raises(ValueError, match="not in the deck being solved"):
+        kicad_geom.validate_module_ports(m, _topo(pv, pg))
+
+
+def test_closure_bypassed_by_copper_is_refused():
+    """The closure exists, but a second Vin-GND copper path shunts the module:
+    0.31 nH reported against the valid 1.40 nH (same review)."""
+    m, pv, pg = _deck()
+    cin_v, cin_g = m.ports[0][1], m.ports[0][2]
+    m.seg(cin_v, cin_g, 0.5)
+    with pytest.raises(ValueError, match="stay connected with the U1 pad-plane closure removed"):
+        kicad_geom.validate_module_ports(m, _topo(pv, pg))
+
+
+def test_closure_onto_a_single_node_is_refused():
+    """VIN and GND pad groups resolving to one node: model.equiv() drops the link,
+    so there is no closure even though both handles are recorded."""
+    m = kicad_geom.Model()
+    cin_v = m.node("VIN", 0, 0.0, 0.0, 0.0)
+    pad = m.node("VIN", 0, 2.0, 0.0, 0.0)
+    cin_g = m.node("GND", 0, 0.0, 1.0, 0.0)
+    m.seg(cin_v, pad, 0.5)
+    m.seg(pad, cin_g, 0.5)
+    m.port("P_pwr", cin_v, cin_g)
+    with pytest.raises(ValueError, match="SAME node"):
+        kicad_geom.validate_module_ports(m, _topo(pad, pad))
