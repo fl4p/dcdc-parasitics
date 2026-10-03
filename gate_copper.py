@@ -649,7 +649,10 @@ def main(argv=None):
     # Resolve the board as the extractor does (cwd first, then the YAML's own
     # directory; two different boards is an error). Handing a config-relative path
     # straight to KiCad loaded None and crashed later (review of 5d41b35).
-    pcb = pcb_source.resolve_pcb_path(args.pcb, tempfile.gettempdir(),
+    # A URL board downloads into a PRIVATE directory, as visualize_paths does: the
+    # shared temp dir let a run overwrite any file of the same basename there
+    # (review of 48f5262).
+    pcb = pcb_source.resolve_pcb_path(args.pcb, tempfile.mkdtemp(prefix="dcdc_gate_"),
                                       config_path=args.config)
     board = pcbnew.LoadBoard(pcb)
     if board is None:
