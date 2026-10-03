@@ -32,6 +32,7 @@ import base64
 import json
 import math
 import os
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -42,12 +43,15 @@ from mesh_geom import (F_CU, B_CU, VIA, LEAD, PORT, CAP,  # noqa: E402
                        parse_inp, plane, cap_names, draw_copper_underlay)
 
 
+CAP_PLATE_MM = 0.8   # half-length of a cap glyph's plates, perpendicular to p1-p2
+
+
 def cap_glyph(ax, p1, p2):
     """Subtle grey -||- capacitor glyph straddling terminal nodes p1,p2."""
     mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]; L = math.hypot(dx, dy)
     ux, uy = (1.0, 0.0) if L < 1e-3 else (dx / L, dy / L); vx, vy = -uy, ux
-    g, pl, ll = 0.3, 0.8, 0.7
+    g, pl, ll = 0.3, CAP_PLATE_MM, 0.7
     for s in (-1, 1):
         cx, cy = mx + ux * g * s, my + uy * g * s
         ax.plot([cx - vx * pl, cx + vx * pl], [cy - vy * pl, cy + vy * pl], color=CAP, lw=1.6, solid_capstyle="round")
@@ -93,15 +97,25 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
     # alone, every image clipped the Edge.Cuts outline to the mesh ROI, so on
     # Fugu2 only part of the left edge survived and zoom could not recover the rest
     # (review of 49e8c93, finding 5). Resolution is held at the mesh's original
-    # px/mm by growing the canvas, capped at MAX_PX wide.
+    # px/mm by growing the canvas, its longer side capped at MAX_PX.
     edge = (cu or {}).get("edge") or []
     for e in edge:
         xs += [e[0], e[2]]; ys += [e[1], e[3]]
     bbox = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)   # x0,x1,y0,y1
     W = bbox[1] - bbox[0]; H = bbox[3] - bbox[2]
     MAX_PX = 16000
-    figw = min(9.0 * W / W_mesh, MAX_PX / dpi); figsize = (figw, figw * H / W)
+    want = 9.0 * W / W_mesh
+    figw = min(want, MAX_PX / dpi, MAX_PX / dpi * W / H)   # longer side <= MAX_PX
+    figsize = (figw, figw * H / W)
     pxw, pxh = int(figw * dpi), int(figw * H / W * dpi)
+    px_per_mm = pxw / W
+    # Past the cap the board gets FEWER px/mm than its mesh alone would -- say so,
+    # in the summary and the page, rather than lose detail silently (review of
+    # dfd0972, finding 4). MAX_PX bounds the PNGs' memory; --dpi does not lift it.
+    capped = (f"canvas capped at {MAX_PX} px: {px_per_mm:.1f} px/mm, not the "
+              f"{want * dpi / W:.1f} px/mm the mesh alone gets") if want > figw else ""
+    if capped:
+        print(f"mesh_viewer: WARNING {capped}", file=sys.stderr)
     stem = os.path.splitext(out_html)[0]
     layers = []  # (id, label, filename)
 
@@ -135,16 +149,34 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
                 (tport if pl == "top" else bport if pl == "bot" else oport).append(pt)
 
     def caps(lst):
-        # glyph plus its reference, as the superseded issue7 viewer labelled them
-        # (review of 49e8c93, finding 4)
+        def d(ax):
+            for p1, p2, _ in lst:
+                cap_glyph(ax, p1, p2)
+        return d
+
+    def cap_labels(lst):
+        # Each cap's reference, as the superseded issue7 viewer labelled them (review
+        # of 49e8c93, finding 4). Anchored just past the glyph's plate tip, on the
+        # side the plates point to, and aligned AWAY from it, so the text box never
+        # covers its own symbol; a fixed (10, 8) pt offset put the backing across the
+        # plates of the module's C1/C2 (review of dfd0972, finding 3). Labels are
+        # their own images stacked above every glyph, so another layer's plate
+        # cannot cross the text either.
         def d(ax):
             for p1, p2, name in lst:
-                cap_glyph(ax, p1, p2)
-                ax.annotate(name, ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2),
-                            xytext=(10, 8), textcoords="offset points", fontsize=4,
-                            color=CAP, clip_on=True,
-                            bbox=dict(boxstyle="round,pad=0.15", fc="#141414",
-                                      ec="none", alpha=0.8))
+                mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+                dx, dy = p2[0] - p1[0], p2[1] - p1[1]; L = math.hypot(dx, dy)
+                ux, uy = (1.0, 0.0) if L < 1e-3 else (dx / L, dy / L)
+                vx, vy = -uy, ux
+                if vy > 0 or (vy == 0 and vx < 0):     # prefer the side above on screen
+                    vx, vy = -vx, -vy
+                r = CAP_PLATE_MM + 0.25
+                ha = "left" if vx > 0.38 else "right" if vx < -0.38 else "center"
+                va = "bottom" if vy < -0.38 else "top" if vy > 0.38 else "center"
+                ax.text(mx + vx * r, my + vy * r, name, ha=ha, va=va, fontsize=4,
+                        color=CAP, clip_on=True,
+                        bbox=dict(boxstyle="round,pad=0.15", fc="#141414",
+                                  ec="none", alpha=0.8))
         return d
 
     def ports_mk(lst):
@@ -177,6 +209,9 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
     if edge:
         layer("edge", ["edge"], lambda ax: ax.add_collection(LineCollection(
             [[(e[0], e[1]), (e[2], e[3])] for e in edge], colors="#d8d8d8", linewidths=0.6)))
+    for side, lc in (("fcu", tcap), ("bcu", bcap), ("other", ocap)):
+        layer(f"caplbl_{side}", ["cap"] + ([] if side == "other" else [side]),
+              cap_labels(lc))
 
     def src(fn):
         if embed:
@@ -205,7 +240,8 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
                 + ("\n" + chk("edge", "#d8d8d8", "Board edge") if edge else ""))
     total_png = sum(os.path.getsize(fn) for _, _, fn in layers)
     counts = (f"F.Cu mesh {len(top)}, B.Cu mesh {len(bot)}, vias {len(via)}, "
-              f"ports {len(ext)}, caps {len(capname)}" + (", + real-copper overlay" if cu else ""))
+              f"ports {len(ext)}, caps {len(capname)}" + (", + real-copper overlay" if cu else "")
+              + (f" · <b style=color:#fa6>{capped}</b>" if capped else ""))
     html = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>FastHenry mesh + PCB</title>
 <style>
@@ -252,7 +288,8 @@ addEventListener('mouseup',()=>{{dr=0;vp.classList.remove('dragging')}});
     open(out_html, "w").write(html)
     return (f"{os.path.basename(out_html)} ({len(html) / 1024:.0f} KB html"
             + (" embedded" if embed else f" + {len(layers)} PNG {total_png / 1024:.0f} KB")
-            + f", {pxw}x{pxh}px)")
+            + f", {pxw}x{pxh}px, {px_per_mm:.1f} px/mm"
+            + (f"; WARNING {capped}" if capped else "") + ")")
 
 
 def main():
