@@ -1,6 +1,7 @@
 """lib/extractor_keys.py reads the extractor's accepted config keys for the viewers
 (gate_copper.py, visualize_paths.py) that share its YAML. Copied whitelists went
 stale and rejected 11 of 13 committed example configs; this pins the shared one."""
+import ast
 import glob
 import os
 import sys
@@ -31,3 +32,56 @@ def test_unreadable_schema_refuses_rather_than_guessing(tmp_path):
     empty.write_text("x = 1\n")
     with pytest.raises(SystemExit, match="cannot tell an extractor key from a typo"):
         extractor_keys.extractor_config_keys(str(empty))
+
+
+def _rebind(src, name, wrap):
+    """Replace the module-level assignment to `name` by wrap(value_node)."""
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            node.value = wrap(node.value)
+            return ast.unparse(tree)
+    raise AssertionError(f"no {name} in the extractor")
+
+
+def _call(fn):
+    return lambda v: ast.Call(func=ast.Name(fn, ast.Load()), args=[v], keywords=[])
+
+
+def _spread(v):
+    v.keys.insert(0, None)
+    v.values.insert(0, ast.Name("BASE", ast.Load()))
+    return v
+
+
+def _renamed(src):
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "DEFAULTS":
+                    t.id = "DEFAULTS_"
+    return ast.unparse(tree)
+
+
+# Each mutant is VALID Python: a syntax error would be refused for the wrong reason
+# and prove nothing about the shape check.
+@pytest.mark.parametrize("mutate", [
+    lambda s: _rebind(s, "DEFAULTS", _call("dict")),
+    _renamed,
+    lambda s: _rebind(s, "DEFAULTS", _spread),
+    lambda s: _rebind(s, "REQUIRED_ARGS", _call("tuple")),
+    lambda s: s + "\nDEFAULTS = {}\n",
+], ids=["dict-call", "renamed", "spread", "required-non-literal", "reassigned"])
+def test_a_schema_it_cannot_read_whole_refuses_instead_of_returning_part(tmp_path, mutate):
+    """Each of these returned a PARTIAL key set and raised nothing (dict(...) gave 4
+    keys, a non-literal REQUIRED_ARGS gave 50) -- review of 294d476."""
+    src = open(extractor_keys.EXTRACTOR).read()
+    bad = mutate(src)
+    compile(bad, "mutant", "exec")
+    assert bad != src
+    p = tmp_path / "extract_parasitics.py"
+    p.write_text(bad)
+    with pytest.raises(SystemExit, match="config schema"):
+        extractor_keys.extractor_config_keys(str(p))
