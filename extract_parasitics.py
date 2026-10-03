@@ -487,13 +487,13 @@ def _extractor_provenance():
     board and config (consumed by kicad-design's loop_inductance_guard.py,
     which refuses an unstamped extraction).
 
-    Status lines are `git status --porcelain` for tracked changes and
-    untracked .py (other untracked files are agent scratch, not copied into
-    every artifact; quoted paths keep their closing quote, hence the
-    rstrip), plus "!! <path>" for every untracked importable file
-    _importable_pathspecs selects, ignored or not -- git status never shows
-    ignored files, and an ignored lib/numpy.py would shadow the real one.
-    Read on every call, not cached, so a checkout that changes between
+    Status lines are `git status --porcelain` for TRACKED changes, plus
+    "!! <path>" for every untracked importable file _importable_pathspecs
+    selects, ignored or not -- git status never shows ignored files, and an
+    ignored lib/numpy.py would shadow the real one. Untracked files come only
+    from that list: the porcelain "?? *.py" lines it replaced also stamped a
+    .py anywhere, e.g. an un-ignored .venv's site-packages, as code (review
+    of 77f69ce). Read on every call, not cached, so a checkout that changes between
     extractions is not stamped stale.
     PYTHONPATH and user site-packages are outside the checkout and not
     covered."""
@@ -505,7 +505,7 @@ def _extractor_provenance():
         head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"],
                               capture_output=True, text=True)
         st = subprocess.run(["git", "-C", here, "status", "--porcelain",
-                             "--untracked-files=all"],
+                             "--untracked-files=no"],
                             capture_output=True, text=True)
         strays = subprocess.run(["git", "-C", here, "ls-files", "--others",
                                  "--", *specs],
@@ -515,8 +515,7 @@ def _extractor_provenance():
     if head.returncode or st.returncode or strays.returncode:
         return None, None
     return (head.stdout.strip(),
-            [s for s in st.stdout.splitlines()
-             if not s.startswith("??") or s.rstrip('"').endswith(".py")]
+            st.stdout.splitlines()
             + [f"!! {p}" for p in strays.stdout.splitlines() if not _is_cache(p)])
 
 
