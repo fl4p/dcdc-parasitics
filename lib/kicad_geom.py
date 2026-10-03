@@ -1844,7 +1844,11 @@ def build_module(board, model, zmap, topo):
 
 
 def _connected_without(model, seed, banned):
-    """Nodes reachable from `seed` over segs+equivs, EXCLUDING the `banned` pair.
+    """Nodes reachable from `seed` over segs+equivs, EXCLUDING the ideal `banned` link.
+
+    Only the .equiv between the banned pair is removed; a copper SEGMENT between the
+    same two nodes is a bypass and stays in the graph. Dropping segments too let
+    "ideal closure + parallel 0.5 mm segment" pass check 6 (review of 9a74415).
 
     `banned` is frozenset({a, b}). Used to ask the one question that decides
     whether a module extraction measured anything: is the Cin port still joined to
@@ -1854,8 +1858,6 @@ def _connected_without(model, seed, banned):
     """
     adj = {}
     for _, a, b, _, _ in model.segs:
-        if frozenset((a, b)) == banned:
-            continue
         adj.setdefault(a, set()).add(b)
         adj.setdefault(b, set()).add(a)
     for a, b in model.equivs:

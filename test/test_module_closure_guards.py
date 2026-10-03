@@ -142,3 +142,14 @@ def test_finite_segment_cannot_stand_in_for_the_ideal_closure():
     m.seg(pv, pg, 0.5)
     with pytest.raises(ValueError, match="not in the deck being solved"):
         kicad_geom.validate_module_ports(m, _topo(pv, pg))
+
+
+def test_copper_segment_parallel_to_the_ideal_closure_is_a_bypass():
+    """Ideal closure present AND a copper segment across the same two pad nodes:
+    removing the closure must remove only the .equiv, so the segment is seen as
+    the Vin-GND bypass it is. It passed when check 6 dropped segments between the
+    banned pair too (review of 9a74415)."""
+    m, pv, pg = _deck()
+    m.seg(pv, pg, 0.5)
+    with pytest.raises(ValueError, match="stay connected with the U1 pad-plane closure removed"):
+        kicad_geom.validate_module_ports(m, _topo(pv, pg))
