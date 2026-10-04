@@ -25,21 +25,57 @@ def extractor_config_keys(path=EXTRACTOR):
     # Fail closed on ANY shape but the two literals: a partial set is worse than
     # none, because a missing key reads as a typo and a viewer refuses a valid
     # config. Wrapping DEFAULTS in dict(...) returned 4 keys (the str values of
-    # the call's args) and raised nothing (review of 294d476).
-    found = {}
-    for node in tree.body:
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            targets, value = [node.target], node.value
-        elif isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        else:
-            continue
+    # the call's args) and raised nothing (review of 294d476). The literal is also
+    # the accepted set only if nothing ADDS to it later: DEFAULTS.update(...),
+    # DEFAULTS[k] = ..., |=, a rebinding inside an if/try, or an alias that is then
+    # mutated each passed _validate_config while the viewers refused the key
+    # (review of 60c5585). Mutation through a function that receives DEFAULTS as an
+    # argument is not visible here.
+    found, problems = {}, []
+    names = ("REQUIRED_ARGS", "DEFAULTS")
+
+    def is_schema(n):
+        return isinstance(n, ast.Name) and n.id in names
+
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", "?")
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            if is_schema(node.value):
+                problems.append(f"line {line}: {node.value.id} is aliased")
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]          # a bare annotation binds nothing
+        elif isinstance(node, (ast.AugAssign, ast.For, ast.AsyncFor)):
+            targets = [node.target]
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            targets = [i.optional_vars for i in node.items if i.optional_vars]
+        elif isinstance(node, ast.NamedExpr):
+            targets = [node.target]
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            problems += [f"line {line}: {n} is declared {type(node).__name__.lower()}"
+                         for n in node.names if n in names]
+        elif isinstance(node, ast.Delete):
+            targets = node.targets
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and is_schema(node.func.value)
+              and node.func.attr in ("update", "setdefault", "pop", "popitem", "clear",
+                                     "__setitem__", "__delitem__", "__ior__")):
+            problems.append(f"line {line}: {node.func.value.id}.{node.func.attr}(...)")
         for t in targets:
-            if isinstance(t, ast.Name) and t.id in ("REQUIRED_ARGS", "DEFAULTS"):
-                if t.id in found:
-                    raise SystemExit(f"{path}: {t.id} is assigned more than once; "
-                                     f"cannot tell which is the extractor's config schema")
-                found[t.id] = value
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Subscript) and is_schema(sub.value):
+                    problems.append(f"line {line}: {sub.value.id}[...] is written")
+            if is_schema(t):
+                if (isinstance(node, ast.Assign) and node in tree.body
+                        and t.id not in found):
+                    found[t.id] = node.value
+                else:
+                    problems.append(f"line {line}: {t.id} is rebound")
+    if problems:
+        raise SystemExit(f"{path}: the literal REQUIRED_ARGS/DEFAULTS may not be the "
+                         f"accepted set ({'; '.join(problems)}); cannot read the "
+                         f"extractor's config schema")
     keys = set()
     for name, kinds in (("REQUIRED_ARGS", (ast.Tuple, ast.List)), ("DEFAULTS", (ast.Dict,))):
         v = found.get(name)

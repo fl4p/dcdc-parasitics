@@ -85,3 +85,34 @@ def test_a_schema_it_cannot_read_whole_refuses_instead_of_returning_part(tmp_pat
     p.write_text(bad)
     with pytest.raises(SystemExit, match="config schema"):
         extractor_keys.extractor_config_keys(str(p))
+
+
+# The literal is the accepted set only if nothing adds to it afterwards; each of
+# these passed _validate_config with the extra key while the reader omitted it
+# (review of 60c5585). Valid Python, appended after the unchanged literal.
+@pytest.mark.parametrize("tail", [
+    "DEFAULTS.update(extra_key=1)",
+    "DEFAULTS['extra_key'] = 1",
+    "DEFAULTS |= {'extra_key': 1}",
+    "if True:\n    DEFAULTS = {**DEFAULTS, 'extra_key': 1}",
+    "try:\n    pass\nfinally:\n    DEFAULTS.setdefault('extra_key', 1)",
+    "_d = DEFAULTS\n_d['extra_key'] = 1",
+    "def _f():\n    global DEFAULTS\n    DEFAULTS = {}",
+], ids=["update", "subscript", "ior", "if-rebind", "setdefault", "alias", "global"])
+def test_a_later_mutation_of_the_schema_refuses(tmp_path, tail):
+    src = open(extractor_keys.EXTRACTOR).read() + "\n" + tail + "\n"
+    compile(src, "mutant", "exec")
+    p = tmp_path / "extract_parasitics.py"
+    p.write_text(src)
+    with pytest.raises(SystemExit, match="config schema"):
+        extractor_keys.extractor_config_keys(str(p))
+
+
+def test_a_bare_annotation_is_not_a_second_assignment(tmp_path):
+    """`DEFAULTS: dict` binds nothing; it was refused as "assigned more than once"
+    (review of 60c5585, finding 2)."""
+    src = open(extractor_keys.EXTRACTOR).read().replace(
+        "DEFAULTS = {", "DEFAULTS: dict\nDEFAULTS = {", 1)
+    p = tmp_path / "extract_parasitics.py"
+    p.write_text(src)
+    assert extractor_keys.extractor_config_keys(str(p)) == extractor_keys.extractor_config_keys()
