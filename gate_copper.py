@@ -17,8 +17,10 @@ Usage:
     python3 gate_copper.py --config fugu2.yaml
 """
 import argparse
+import atexit
 import html
 import os
+import shutil
 import sys
 import tempfile
 
@@ -652,8 +654,11 @@ def main(argv=None):
     # A URL board downloads into a PRIVATE directory, as visualize_paths does: the
     # shared temp dir let a run overwrite any file of the same basename there
     # (review of 48f5262).
-    pcb = pcb_source.resolve_pcb_path(args.pcb, tempfile.mkdtemp(prefix="dcdc_gate_"),
-                                      config_path=args.config)
+    # Removed at exit, so repeated runs do not accumulate board copies (review of
+    # 31ea1a1, finding 2); the board is in memory once loaded.
+    workdir = tempfile.mkdtemp(prefix="dcdc_gate_")
+    atexit.register(shutil.rmtree, workdir, True)
+    pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config)
     board = pcbnew.LoadBoard(pcb)
     if board is None:
         raise SystemExit(f"KiCad could not load the board {pcb!r} (from {args.pcb!r})")

@@ -6,9 +6,11 @@ because it needs pcbnew. If launched with a normal Python that cannot import
 pcbnew, it re-execs itself under $KICAD_PY.
 """
 import argparse
+import atexit
 import html
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -902,6 +904,7 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     workdir = tempfile.mkdtemp(prefix="dcdc_view_")
+    atexit.register(shutil.rmtree, workdir, True)   # no board copy left per run
     args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir,
                                            config_path=getattr(args, "config", None))
     board = pcbnew.LoadBoard(args.pcb)
