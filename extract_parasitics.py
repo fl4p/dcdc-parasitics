@@ -445,39 +445,53 @@ def _load_altium_sidecar(pcb_input, resolved_pcb, workdir):
 
 
 # Untracked files that can change what runs, by IMPORTABLE extension only (an
-# editor's .swp or ~ backup cannot be imported and must not refuse a run):
-#   - root-level modules (*.py, *.pyc, *.so, *.pyd) and new root packages
-#     (`*/__init__.*` covers ABI-tagged extension initializers);
-#   - importable files at any depth under lib/ and under every other top-level
-#     directory that already holds tracked Python (a package's untracked members,
-#     e.g. experiments/x.pyc), except test/, docs/ and examples/, which the
-#     extraction never imports.
-# A path with a __pycache__ COMPONENT is Python's own cache, validated against its
-# source, and dropped after matching; a mere substring (lib/x__pycache__/) is not.
-# Keep in step with importable_pathspecs() in kicad-design's loop_inductance_guard.py.
+# editor's .swp or ~ backup cannot be imported and must not refuse a run). Two lists:
+#   1. ignored or not: root-level modules (*.py, *.pyc, *.so, *.pyd), new root
+#      package initializers (`*/__init__.py[c]`, `*/__init__*.so|.pyd`, which covers
+#      ABI-tagged extension initializers), and importable files at any depth under
+#      lib/ and every other top-level dir that already holds tracked Python -- git
+#      status never shows ignored files, and an ignored lib/numpy.py would shadow
+#      the real one;
+#   2. NOT ignored, at any depth anywhere: an untracked root directory joins a
+#      namespace package of the same name -- mpl_toolkits/mplot3d.py at the root ran
+#      inside matplotlib's import (review of 844dad2, finding 1).
+# Dropped from both: test/, docs/, examples/ (never imported), dot-directories (no
+# importable name: .venv, .git), and anything inside a __pycache__ directory
+# (Python's own cache, validated against its source). An IGNORED root directory
+# named like a namespace package is not seen.
+# Keep in step with importable_strays() in kicad-design's loop_inductance_guard.py.
 _IMPORTABLE_EXTS = (".py", ".pyc", ".so", ".pyd")
 _NOT_IMPORTED_DIRS = {"test", "docs", "examples"}
 
 
-def _importable_pathspecs(here):
-    """Pathspecs for `git ls-files --others`, or None if git fails."""
-    try:
-        tracked = subprocess.run(
-            ["git", "-C", here, "ls-files", "--",
-             *(f":(glob)*/**/*{e}" for e in _IMPORTABLE_EXTS)],
-            capture_output=True, text=True)
-    except OSError:
-        return None
-    if tracked.returncode:
-        return None
-    dirs = sorted(({p.split("/", 1)[0] for p in tracked.stdout.splitlines()}
-                   | {"lib"}) - _NOT_IMPORTED_DIRS)
-    return ([f":(glob)*{e}" for e in _IMPORTABLE_EXTS] + [":(glob)*/__init__.*"]
-            + [f":(glob){d}/**/*{e}" for d in dirs for e in _IMPORTABLE_EXTS])
+def _git_lines(here, *args):
+    r = subprocess.run(["git", "-C", here, *args], capture_output=True, text=True)
+    if r.returncode:
+        raise OSError(r.stderr.strip())
+    return r.stdout.splitlines()
 
 
-def _is_cache(path):
-    return "__pycache__" in path.split("/")
+def _importable_strays(here):
+    """Untracked importable paths (see above). Raises OSError if git fails."""
+    exts = _IMPORTABLE_EXTS
+    tracked = _git_lines(here, "ls-files", "--", *(f":(glob)*/**/*{e}" for e in exts))
+    dirs = sorted(({p.split("/", 1)[0] for p in tracked} | {"lib"}) - _NOT_IMPORTED_DIRS)
+    code = ([f":(glob)*{e}" for e in exts]
+            + [":(glob)*/__init__.py", ":(glob)*/__init__.pyc",
+               ":(glob)*/__init__*.so", ":(glob)*/__init__*.pyd"]
+            + [f":(glob){d}/**/*{e}" for d in dirs for e in exts])
+    found = set(_git_lines(here, "ls-files", "--others", "--", *code))
+    found |= set(_git_lines(here, "ls-files", "--others", "--exclude-standard", "--",
+                            *(f":(glob)**/*{e}" for e in exts)))
+    keep = []
+    for p in sorted(found):
+        parts = p.split("/")
+        if "__pycache__" in parts:
+            continue
+        if len(parts) > 1 and (parts[0] in _NOT_IMPORTED_DIRS or parts[0].startswith(".")):
+            continue
+        keep.append(p)
+    return keep
 
 
 def _extractor_provenance():
@@ -488,35 +502,27 @@ def _extractor_provenance():
     which refuses an unstamped extraction).
 
     Status lines are `git status --porcelain` for TRACKED changes, plus
-    "!! <path>" for every untracked importable file _importable_pathspecs
-    selects, ignored or not -- git status never shows ignored files, and an
-    ignored lib/numpy.py would shadow the real one. Untracked files come only
-    from that list: the porcelain "?? *.py" lines it replaced also stamped a
-    .py anywhere, e.g. an un-ignored .venv's site-packages, as code (review
-    of 77f69ce). Read on every call, not cached, so a checkout that changes between
-    extractions is not stamped stale.
+    "!! <path>" for every untracked importable file _importable_strays
+    lists (see the comment above it). Untracked files come only from that
+    list: the porcelain "?? *.py" lines it replaced also stamped a .py in any
+    dot-directory, e.g. an un-ignored .venv's site-packages, as code (review
+    of 77f69ce). Read on every call, not cached, so a checkout that changes
+    between extractions is not stamped stale.
     PYTHONPATH and user site-packages are outside the checkout and not
     covered."""
     here = os.path.dirname(os.path.abspath(__file__))
-    specs = _importable_pathspecs(here)
-    if specs is None:
-        return None, None
     try:
         head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"],
                               capture_output=True, text=True)
         st = subprocess.run(["git", "-C", here, "status", "--porcelain",
                              "--untracked-files=no"],
                             capture_output=True, text=True)
-        strays = subprocess.run(["git", "-C", here, "ls-files", "--others",
-                                 "--", *specs],
-                                capture_output=True, text=True)
+        strays = _importable_strays(here)
     except OSError:
         return None, None
-    if head.returncode or st.returncode or strays.returncode:
+    if head.returncode or st.returncode:
         return None, None
-    return (head.stdout.strip(),
-            st.stdout.splitlines()
-            + [f"!! {p}" for p in strays.stdout.splitlines() if not _is_cache(p)])
+    return head.stdout.strip(), st.stdout.splitlines() + [f"!! {p}" for p in strays]
 
 
 def _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_meta):
