@@ -44,6 +44,12 @@ from mesh_geom import (F_CU, B_CU, VIA, LEAD, PORT, CAP,  # noqa: E402
 
 
 CAP_PLATE_MM = 0.8   # half-length of a cap glyph's plates, perpendicular to p1-p2
+CAP_GAP_MM, CAP_LEAD_MM = 0.3, 0.7
+# Radius of the circle about the glyph centre that holds both plates and both leads.
+CAP_GLYPH_R_MM = math.hypot(CAP_GAP_MM + CAP_LEAD_MM, CAP_PLATE_MM)
+# Point-sized clearance beyond that circle: half the 1.6 pt plate stroke, the label
+# box's 0.15 x 4 pt padding, and a 1.5 pt visible gap.
+CAP_LABEL_GAP_PT = 0.8 + 0.6 + 1.5
 
 
 def cap_glyph(ax, p1, p2):
@@ -51,7 +57,7 @@ def cap_glyph(ax, p1, p2):
     mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]; L = math.hypot(dx, dy)
     ux, uy = (1.0, 0.0) if L < 1e-3 else (dx / L, dy / L); vx, vy = -uy, ux
-    g, pl, ll = 0.3, CAP_PLATE_MM, 0.7
+    g, pl, ll = CAP_GAP_MM, CAP_PLATE_MM, CAP_LEAD_MM
     for s in (-1, 1):
         cx, cy = mx + ux * g * s, my + uy * g * s
         ax.plot([cx - vx * pl, cx + vx * pl], [cy - vy * pl, cy + vy * pl], color=CAP, lw=1.6, solid_capstyle="round")
@@ -156,12 +162,15 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
 
     def cap_labels(lst):
         # Each cap's reference, as the superseded issue7 viewer labelled them (review
-        # of 49e8c93, finding 4). Anchored just past the glyph's plate tip, on the
-        # side the plates point to, and aligned AWAY from it, so the text box never
-        # covers its own symbol; a fixed (10, 8) pt offset put the backing across the
-        # plates of the module's C1/C2 (review of dfd0972, finding 3). Labels are
-        # their own images stacked above every glyph, so another layer's plate
-        # cannot cross the text either.
+        # of 49e8c93, finding 4). The glyph lies inside a circle of radius
+        # CAP_GLYPH_R_MM about its centre; the label is anchored ON that circle on
+        # the side the plates point to, and aligned so the whole box lies in the
+        # quadrant beyond the anchor, which touches the circle only at the anchor.
+        # The remaining clearance (half the 1.6 pt plate stroke, the box padding and
+        # a gap) is in POINTS, as text and strokes are, so it holds at any px/mm: a
+        # 0.25 mm clearance overlapped at 32 px/mm and below (review of 473c664,
+        # finding 1). Labels are their own images stacked above every glyph, so
+        # another layer's plate cannot cross the text either.
         def d(ax):
             for p1, p2, name in lst:
                 mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
@@ -170,13 +179,16 @@ def build_viewer(inp, out_html, ports_json=None, copper=None, dpi=300, embed=Tru
                 vx, vy = -uy, ux
                 if vy > 0 or (vy == 0 and vx < 0):     # prefer the side above on screen
                     vx, vy = -vx, -vy
-                r = CAP_PLATE_MM + 0.25
-                ha = "left" if vx > 0.38 else "right" if vx < -0.38 else "center"
-                va = "bottom" if vy < -0.38 else "top" if vy > 0.38 else "center"
-                ax.text(mx + vx * r, my + vy * r, name, ha=ha, va=va, fontsize=4,
-                        color=CAP, clip_on=True,
-                        bbox=dict(boxstyle="round,pad=0.15", fc="#141414",
-                                  ec="none", alpha=0.8))
+                sx, sy = vx, -vy                         # screen direction (y axis is inverted)
+                eps = 1e-6
+                ha = "left" if sx > eps else "right" if sx < -eps else "center"
+                va = "bottom" if sy > eps else "top" if sy < -eps else "center"
+                ax.annotate(name, (mx + vx * CAP_GLYPH_R_MM, my + vy * CAP_GLYPH_R_MM),
+                            xytext=(sx * CAP_LABEL_GAP_PT, sy * CAP_LABEL_GAP_PT),
+                            textcoords="offset points", ha=ha, va=va, fontsize=4,
+                            color=CAP, annotation_clip=False, clip_on=True,
+                            bbox=dict(boxstyle="round,pad=0.15", fc="#141414",
+                                      ec="none", alpha=0.8))
         return d
 
     def ports_mk(lst):
