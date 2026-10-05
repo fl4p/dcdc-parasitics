@@ -379,6 +379,13 @@ class Model:
         # a finite ~4e16 nH (two ports). The seed itself is always kept so the
         # caller's validator names the defect; validate_port_connectivity refuses it.
         seen = self.component([seed[1]])
+        if seed[2] not in seen:
+            # The seed is open, so there is no reference loop to prune against, and
+            # which terminal seeded `seen` would decide which healthy ports get
+            # dropped -- dropping the gate ports surfaced "missing gate ports" and hid
+            # the real defect (review of a900891). Drop nothing; the extraction is
+            # refused by validate_port_connectivity (or the module check) naming it.
+            return []
         island = set(island_nets or ())
         kept, dropped = [], []
         for lbl, a, b in self.ports:

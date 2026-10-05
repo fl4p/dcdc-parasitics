@@ -42,14 +42,32 @@ def test_known_bad_seed_across_a_gap_is_refused():
 
 
 def test_known_bad_second_port_across_the_same_gap():
-    """The two-port case that solved to a finite ~4e16 nH. Seeding from both seed
-    terminals kept P_hs (VIN side -> GND side); now it is dropped as floating, and
-    the seed is still refused."""
+    """The two-port case that solved to a finite ~4e16 nH: both ports are named."""
     m, (v0, v1), (g0, g1) = _split_loop()
     m.port("P_hs", v1, g1)
-    dropped = m.drop_floating_ports("P_pwr")
-    assert dropped == ["P_hs"]
-    with pytest.raises(ValueError, match="NOT connected"):
+    assert m.drop_floating_ports("P_pwr") == []
+    with pytest.raises(ValueError, match="P_pwr, P_hs span copper that is NOT connected"):
+        kicad_geom.validate_port_connectivity(m)
+
+
+@pytest.mark.parametrize("flip", [False, True])
+def test_an_open_seed_drops_nothing_whichever_way_round(flip):
+    """With an open P_pwr, seeding from one terminal dropped the healthy gate ports
+    on the other conductor, so the path validator reported "missing gate ports"
+    instead of the open loop -- and which ports went depended on terminal order
+    (review of a900891). Nothing is dropped now; the open seed is what is named."""
+    m = kicad_geom.Model()
+    a0, a1 = m.node("VIN", 0, 0.0, 0.0, 0.0), m.node("VIN", 0, 1.0, 0.0, 0.0)
+    m.seg(a0, a1, 0.5)                                    # small island
+    b = [m.node("GND", 0, 10.0 + i, 0.0, 0.0) for i in range(5)]
+    for x, y in zip(b, b[1:]):
+        m.seg(x, y, 0.5)                                  # main conductor
+    m.port("P_pwr", *((b[0], a0) if flip else (a0, b[0])))
+    m.port("P_ghs", b[1], b[2])
+    m.port("P_gls", b[3], b[4])
+    assert m.drop_floating_ports("P_pwr") == []
+    assert [p[0] for p in m.ports] == ["P_pwr", "P_ghs", "P_gls"]
+    with pytest.raises(ValueError, match=r"port\(s\) P_pwr span"):
         kicad_geom.validate_port_connectivity(m)
 
 
