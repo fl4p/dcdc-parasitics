@@ -1628,11 +1628,17 @@ def main():
               f"CSI_hs={_nh(p['csi_hs'])}  CSI_ls={_nh(p['csi_ls'])}  "
               f"L_gate_hs={_nh(p['L_gate_hs'])}{extra}")
         _emit_reduce_warnings(p, prefix=f"pitch {pitch:g}: " if len(pitches) > 1 else "")
-        if p.get("r_hs") is not None:
+        # r_hs and r_ls are independent: either is None when that switch's
+        # conduction ports are not in the LF solve. Formatting r_ls while testing
+        # only r_hs crashed every Fugu2 per-device run (TypeError on None * 1e3);
+        # hiding the line when either is missing would drop the one that exists.
+        if p.get("r_hs") is not None or p.get("r_ls") is not None:
+            def _mo(v):
+                return f"{v*1e3:.2f} mOhm" if v is not None else "n/a"
             cr = (p.get("cond_ref") or {}).get("ref", "?")
             print(f"            R_conduction (LF, bulk={cr}): "
-                  f"HS={p['r_hs']*1e3:.2f} mOhm  LS={p['r_ls']*1e3:.2f} mOhm  "
-                  f"SW-spread={p.get('r_sw', 0)*1e3:.2f} mOhm   "
+                  f"HS={_mo(p.get('r_hs'))}  LS={_mo(p.get('r_ls'))}  "
+                  f"SW-spread={_mo(p.get('r_sw'))}   "
                   f"(ring R_loop={p['R_loop']*1e3:.2f} mOhm)")
 
     if len(results) > 1:

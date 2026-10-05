@@ -155,6 +155,17 @@ def test_missing_gate_ports_render_unavailable_not_zero():
     assert "0.60 nH" in md2 and "gate routing unavailable" not in md2
 
 
+def test_report_renders_a_missing_conduction_r_as_na_not_a_crash():
+    """r_hs and r_ls are independent: a dropped P_ls (fugu2-cu on Fugu2 971ab77)
+    leaves r_ls None while r_hs is real. The report tested only r_hs and then
+    formatted r_ls -> TypeError, the same crash as the console line."""
+    md = emit.markdown(_p(r_hs=0.56e-3, r_ls=None, r_cond_freq=39e3))
+    assert "Conduction R** (HS 0.56 / LS n/a mΩ" in md
+    md = emit.markdown(_p(r_hs=None, r_ls=0.59e-3, r_cond_freq=39e3))
+    assert "Conduction R** (HS n/a / LS 0.59 mΩ" in md
+    assert "Two resistances" not in emit.markdown(_p())   # neither: no section
+
+
 def test_schematic_renders_unavailable_gate_as_na_not_zero():
     """--svg must label null csi/L_gate as 'n/a', not a fabricated 0.00 nH."""
     svg = emit_svg.schematic(_p(

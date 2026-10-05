@@ -516,7 +516,9 @@ def markdown(p):
             "bank.",
         ]
 
-    if p.get("r_hs") is not None:
+    if p.get("r_hs") is not None or p.get("r_ls") is not None:
+        def _mohm(v):  # either side may be absent from the LF solve; never crash or fake 0
+            return f"{v*1e3:.2f}" if v is not None else "n/a"
         lines += [
             "",
             "## Two resistances, two frequencies",
@@ -527,7 +529,7 @@ def markdown(p):
             f"- **Ring R** ({p['R_loop']*1e3:.2f} mΩ @ {p['freq_Hz']:.2g} Hz) — the HF "
             "commutation-edge loop, anchored on the nearest **MLCC**, skin-elevated. "
             "Sets the switch-node ringing Q / damping.",
-            f"- **Conduction R** (HS {p['r_hs']*1e3:.2f} / LS {p['r_ls']*1e3:.2f} mΩ @ "
+            f"- **Conduction R** (HS {_mohm(p.get('r_hs'))} / LS {_mohm(p.get('r_ls'))} mΩ @ "
             f"{p.get('r_cond_freq', 0):.2g} Hz) — the near-DC fundamental, anchored on the "
             "**bulk electrolytics** (the MLCCs are ~open at the switching fundamental and "
             "carry no conduction current). This is the copper the loss tool multiplies by "
