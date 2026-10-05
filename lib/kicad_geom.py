@@ -369,14 +369,20 @@ class Model:
         """
         if not self.ports:
             return []
-        seed = next(((a, b) for lbl, a, b in self.ports if lbl == seed_label), None)
+        seed = next(((lbl, a, b) for lbl, a, b in self.ports if lbl == seed_label), None)
         if seed is None:
-            seed = (self.ports[0][1], self.ports[0][2])
-        seen = self.component(seed)
+            seed = self.ports[0]
+        # The reference conductor is the one the seed's FIRST terminal is on. Seeding
+        # from both terminals, as this did, made a seed that spans two disconnected
+        # conductors count both as "the loop", so the seed and every port across
+        # the same gap survived and FastHenry failed ("err 5", one port) or returned
+        # a finite ~4e16 nH (two ports). The seed itself is always kept so the
+        # caller's validator names the defect; validate_port_connectivity refuses it.
+        seen = self.component([seed[1]])
         island = set(island_nets or ())
         kept, dropped = [], []
         for lbl, a, b in self.ports:
-            if a in seen and b in seen:
+            if (lbl, a, b) == seed or (a in seen and b in seen):
                 kept.append((lbl, a, b))
             elif island and self._is_declared_island_port(a, b, island):
                 kept.append((lbl, a, b))
@@ -2445,6 +2451,42 @@ def validate_required_ports(model, topo, allow_missing_gate_ports=False):
                              "extraction:\n  - " + "\n  - ".join(hard))
 
 
+def validate_port_connectivity(model):
+    """Every solved port's two terminals must be on ONE conductor.
+
+    The invariant FastHenry needs is per port: a port whose terminals sit on
+    galvanically separate copper is an open circuit. With one such port the solve
+    fails ("Number of meshes: 0 / Couldn't create sparse matrix, err 5"); with two
+    across the same gap it returns a FINITE matrix -- ~4e16 nH -- that looks like a
+    number. Disjoint conductors are otherwise fine (declared extra_nets islands are
+    measured as their own two-terminal loops), so this checks each port's own
+    endpoints, not membership in the seed's conductor. Runs after the path-specific
+    validators so their more specific diagnoses come first.
+    """
+    parent = {}
+
+    def find(n):
+        parent.setdefault(n, n)
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+
+    for _, a, b, _, _ in model.segs:
+        parent[find(a)] = find(b)
+    for a, b in model.equivs:
+        parent[find(a)] = find(b)
+    bad = [lbl for lbl, a, b in model.ports if find(a) != find(b)]
+    if bad:
+        raise ValueError(
+            f"invalid extraction: port(s) {', '.join(bad)} span copper that is NOT "
+            f"connected -- each terminal is on a different conductor, so the port is "
+            f"an open circuit. FastHenry would fail (err 5) or, with two such ports, "
+            f"return a meaningless finite matrix (~1e16 nH). Check the --sw/--gnd/--vin "
+            f"nets, that the cap and FET pads bonded into the meshed copper at this "
+            f"pitch/margin, and that no closure joins the wrong terminals.")
+
+
 def validate_cap_only_ports(model):
     labels = {lbl for lbl, _, _ in model.ports}
     if "P_pwr" not in labels:
@@ -3031,6 +3073,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     else:
         validate_required_ports(
             model, topo, allow_missing_gate_ports=allow_missing_gate_ports)
+    validate_port_connectivity(model)
     return model
 
 
