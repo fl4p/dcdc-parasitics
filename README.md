@@ -414,10 +414,12 @@ so another session's uncommitted edits to the board cannot leak into the
 extraction. A missing commit or a file absent from it fails hard; there is no
 fallback to the working copy. `gate_copper.py` and `visualize_paths.py` honour it
 too, and the full commit lands in `meta.pcb_rev`. The Fugu2 examples are pinned
-this way. `loop_inductance_guard.py` (kicad-design) hashes the board file it is
-given, so gate a pinned config against the exported board (`git show
-<rev>:Fugu2.kicad_pcb > board.kicad_pcb`), not the working copy -- otherwise it
-refuses the extraction as a different board, which is the safe failure.
+this way. `loop_inductance_guard.py` (kicad-design) passes the board it gates on
+the command line, which replaces the config's `pcb` and its pin, so a fresh guard
+run extracts and gates exactly the file it was given -- pinned or not. Give it the
+exported board (`git show <rev>:Fugu2.kicad_pcb > board.kicad_pcb`); handed the
+working copy it gates the working copy. Only re-gating a saved extraction
+(`--json`) compares board hashes and refuses a different board.
 
 ```yaml
 pcb: https://github.com/org/repo/blob/<commit-sha>/hw/Fugu2/Fugu2.kicad_pcb
