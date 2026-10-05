@@ -30,7 +30,13 @@
 # power-loop rig does, puts a wire across the board's own current-sense shunt. That
 # split is external wiring and is not measured here; these legs give the on-board
 # copper each candidate path carries, which is what the split calculation needs.
+# Fugu2 board pinned to e8bb240 (2026-09-02, GitHub main): the latest 50 x 88 mm board
+# every Fugu2 example extracts on. Later boards: 1b13241 (op-amp current sense)
+# leaves P_pwr's ground pad unbonded at 1 mm pitch and has no T_HV+ copper;
+# 971ab77 widened the board to 58.5 mm and dropped Net-(Q2-G). The working copy
+# is read only to locate the repository.
 pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+pcb_rev: e8bb240067fc6af078344b42ae14f68ecbfd1aa4
 sw: SW
 gnd: BuckGND
 vin: Solar+

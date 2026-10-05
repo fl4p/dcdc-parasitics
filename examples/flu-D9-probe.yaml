@@ -53,7 +53,13 @@
 # below are local pad-to-pad loops; the extra Q2 lead/die copper shifts the commutation
 # loop, not the mount loops. Letting a single-D9 override anchor on a non-populated
 # footprint's pad is the proper fix and is out of scope here.
+# Fugu2 board pinned to e8bb240 (2026-09-02, GitHub main): the latest 50 x 88 mm board
+# every Fugu2 example extracts on. Later boards: 1b13241 (op-amp current sense)
+# leaves P_pwr's ground pad unbonded at 1 mm pitch and has no T_HV+ copper;
+# 971ab77 widened the board to 58.5 mm and dropped Net-(Q2-G). The working copy
+# is read only to locate the repository.
 pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+pcb_rev: e8bb240067fc6af078344b42ae14f68ecbfd1aa4
 sw: SW
 gnd: BuckGND
 vin: Solar+

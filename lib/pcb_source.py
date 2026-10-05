@@ -56,11 +56,68 @@ def file_sha256(path):
     return h.hexdigest()
 
 
-def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url):
+def board_at_rev(path, rev, workdir):
+    """Write `path` as committed at git revision `rev` into `workdir`; return
+    (new path, full commit sha). `path` locates the repository and the file in
+    it; the working copy's bytes are never read, so uncommitted edits to the
+    board cannot leak into an extraction pinned to a commit.
+
+    Fails hard -- the path is not in a git checkout, the revision does not exist
+    (rebased away, never fetched), or the file is not in that commit -- rather
+    than fall back to the working copy, which is exactly what the pin excludes."""
+    where = os.path.dirname(path) or "."
+    while not os.path.isdir(where):        # the file may not exist in the working copy
+        parent = os.path.dirname(where)
+        if parent == where:
+            break
+        where = parent
+
+    def git(*args, text=True):
+        try:
+            return subprocess.run(["git", "-C", where, *args], capture_output=True,
+                                  text=text)
+        except OSError as e:
+            raise SystemExit(f"pcb_rev {rev!r}: cannot run git: {e}")
+
+    top = git("rev-parse", "--show-toplevel")
+    if top.returncode:
+        raise SystemExit(f"pcb_rev {rev!r}: {path} is not inside a git checkout "
+                         f"({top.stderr.strip()})")
+    root = top.stdout.strip()
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(root))
+    sha = git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    if sha.returncode:
+        raise SystemExit(f"pcb_rev {rev!r}: no such commit in {root}")
+    sha = sha.stdout.strip()
+    blob = git("show", f"{sha}:{rel}", text=False)
+    if blob.returncode:
+        raise SystemExit(f"pcb_rev {rev!r}: {rel} is not in commit {sha[:12]} of {root}: "
+                         f"{blob.stderr.decode(errors='replace').strip()}")
+    out = os.path.join(workdir, f"{sha[:12]}-{os.path.basename(path)}")
+    with open(out, "wb") as fh:
+        fh.write(blob.stdout)
+    return out, sha
+
+
+def resolve_pinned(pcb, rev, workdir, config_path=None):
+    """(path, full commit sha) of `pcb` as committed at `rev`; see board_at_rev."""
+    if is_url(pcb):
+        raise SystemExit(f"pcb_rev {rev!r} applies to a local board in a git "
+                         f"checkout, not to the URL {pcb}; pin the commit in the URL")
+    return board_at_rev(_resolve_local(pcb, config_path, must_exist=False), rev, workdir)
+
+
+def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url, rev=None):
     """Download URL PCB inputs to a temp file; local paths resolve against the
     current working directory first, then — when a YAML config supplied the
     path — against the config file's own directory. If both resolve to a real
-    file but to *different* boards (by SHA-256), fail hard rather than guess."""
+    file but to *different* boards (by SHA-256), fail hard rather than guess.
+
+    With `rev` (a commit hash or tag; YAML `pcb_rev`), the resolved local path
+    only names the repository and file: the board is read from that commit, see
+    board_at_rev. A URL with a rev is refused -- pin the URL itself instead."""
+    if rev:
+        return resolve_pinned(pcb, rev, workdir, config_path)[0]
     if is_url(pcb):
         url = normalize_pcb_url(pcb)
         name = os.path.basename(urllib.parse.urlparse(url).path) or "board.kicad_pcb"
@@ -70,6 +127,13 @@ def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url):
         downloader(url, path)
         return path
 
+    return _resolve_local(pcb, config_path)
+
+
+def _resolve_local(pcb, config_path, must_exist=True):
+    """cwd first, then the config's own directory; see resolve_pcb_path. With
+    must_exist=False (a pinned rev) a path missing from the working copy still
+    resolves -- config-relative when a config gave it -- since only git reads it."""
     cwd_path = pcb if os.path.isabs(pcb) else os.path.abspath(pcb)
     cfg_path = None
     if config_path and not os.path.isabs(pcb):
@@ -91,5 +155,7 @@ def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url):
     if cwd_exists:
         return cwd_path
     if cfg_exists:
+        return cfg_path
+    if not must_exist and cfg_path is not None:
         return cfg_path
     return cwd_path

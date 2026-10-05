@@ -66,11 +66,14 @@ DEFAULTS = {
     # its sibling), so it changes the very geometry this tool draws. Accepting it as
     # an extraction-only key made dual-LS Fugu2 fail discovery (review of 5d41b35).
     "gate_net_override": None,
+    # Honoured: the board to draw is the one committed at this rev, as the extractor
+    # reads it (lib/pcb_source.py board_at_rev), never the working copy.
+    "pcb_rev": None,
 }
 REQUIRED_ARGS = ("pcb", "sw", "gnd", "out")
 LIST_TYPES = {"hs_ref": str, "ls_ref": str, "pitch": float, "cin_refs": str}
 SCALAR_TYPES = {
-    "pcb": str, "sw": str, "gnd": str, "vin": str,
+    "pcb": str, "pcb_rev": str, "sw": str, "gnd": str, "vin": str,
     "hs_gate": str, "ls_gate": str, "margin": float, "out": str, "config": str,
     "cin_parallel": int, "cin_esl": float, "cin_esr": float,
     "lead_mm": float, "weld_tol": float, "nwinc": int, "nhinc": int,
@@ -595,6 +598,8 @@ def build_parser():
     ap.add_argument("pcb", nargs="?", default=argparse.SUPPRESS)
     ap.add_argument("--config", default=argparse.SUPPRESS,
                     help="YAML file containing CLI args (same keys as extract_parasitics.py)")
+    ap.add_argument("--pcb-rev", default=argparse.SUPPRESS,
+                    help="git commit/tag: draw the board as committed there")
     ap.add_argument("--sw", default=argparse.SUPPRESS, help="switch-node net name")
     ap.add_argument("--gnd", default=argparse.SUPPRESS, help="ground net name")
     ap.add_argument("--vin", default=argparse.SUPPRESS, help="input rail net (auto if omitted)")
@@ -636,6 +641,11 @@ def parse_args(argv=None):
     merged.update(DEFAULTS)
     merged.update(yaml_args)
     merged.update(cli)
+    if "pcb" in cli and yaml_args.get("pcb_rev") and "pcb_rev" not in cli:
+        # an explicit board replaces the config's pcb and its pin (as the extractor)
+        sys.stderr.write(f"WARNING: board given on the command line; the config's "
+                         f"pcb_rev pins the config's own pcb and is not applied.\n")
+        merged["pcb_rev"] = None
     missing = [k for k in REQUIRED_ARGS if not merged.get(k)]
     if missing:
         ap.error("missing required argument(s): " + ", ".join(missing))
@@ -658,7 +668,8 @@ def main(argv=None):
     # 31ea1a1, finding 2); the board is in memory once loaded.
     workdir = tempfile.mkdtemp(prefix="dcdc_gate_")
     atexit.register(shutil.rmtree, workdir, True)
-    pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config)
+    pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config,
+                                      rev=args.pcb_rev)
     board = pcbnew.LoadBoard(pcb)
     if board is None:
         raise SystemExit(f"KiCad could not load the board {pcb!r} (from {args.pcb!r})")

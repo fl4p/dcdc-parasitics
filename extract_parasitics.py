@@ -201,6 +201,9 @@ DEFAULTS = {
     "svg": False,
     "viewer": True,
     "config": None,
+    # A commit hash or tag: read `pcb` as committed there (lib/pcb_source.py
+    # board_at_rev), never the working copy. Recorded as meta.pcb_rev.
+    "pcb_rev": None,
 }
 
 REQUIRED_ARGS = ("pcb", "sw", "gnd", "out")
@@ -218,6 +221,7 @@ LIST_TYPES = {
 }
 SCALAR_TYPES = {
     "pcb": str,
+    "pcb_rev": str,   # quote an all-digit short hash: YAML would read it as a number
     "sw": str,
     "gnd": str,
     "vin": str,
@@ -543,6 +547,7 @@ def _meta_base(args, pitch, side, pcb_input, pcb_sha256, config_sha256, altium_m
                 terminal_regions=side.get("terminal_regions", []),
                 terminal_fallbacks=side.get("terminal_fallbacks", []),
                 pcb_source=pcb_input, pcb_resolved=args.pcb,
+                pcb_rev=getattr(args, "pcb_rev_sha", None),
                 pcb_sha256=pcb_sha256,
                 extract_config=args.config, extract_config_sha256=config_sha256,
                 altium_import=altium_meta)
@@ -1018,6 +1023,9 @@ def build_parser():
     ap.add_argument("pcb", nargs="?", default=argparse.SUPPRESS)
     ap.add_argument("--config", default=argparse.SUPPRESS,
                     help="YAML file containing CLI args as argparse dest names")
+    ap.add_argument("--pcb-rev", default=argparse.SUPPRESS,
+                    help="git commit/tag: read the board as committed there, not the "
+                         "working copy (the path names the repository and file)")
     ap.add_argument("--sw", default=argparse.SUPPRESS, help="switch-node net name")
     ap.add_argument("--gnd", default=argparse.SUPPRESS, help="ground net name")
     ap.add_argument("--vin", default=argparse.SUPPRESS, help="input rail net (auto if omitted)")
@@ -1371,6 +1379,16 @@ def parse_args(argv=None):
     merged.update(DEFAULTS)
     merged.update(yaml_args)
     merged.update(cli_args)
+    # A board named on the command line replaces the YAML's `pcb`, so it replaces
+    # the YAML's pin on that `pcb` too: the explicit file is extracted as given
+    # (loop_inductance_guard.py passes the board it hashes this way). Only a
+    # --pcb-rev on the same command line pins an explicit board.
+    if "pcb" in cli_args and yaml_args.get("pcb_rev") and "pcb_rev" not in cli_args:
+        sys.stderr.write(
+            f"WARNING: board {cli_args['pcb']!r} given on the command line; the "
+            f"config's pcb_rev {yaml_args['pcb_rev']!r} pins the config's own pcb and "
+            f"is not applied to it. Pass --pcb-rev to pin this board.\n")
+        merged["pcb_rev"] = None
 
     missing = [name for name in REQUIRED_ARGS if not merged.get(name)]
     if missing:
@@ -1490,7 +1508,14 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="dcdc_par_")
     pcb_input = args.pcb
-    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config)
+    args.pcb_rev_sha = None
+    if args.pcb_rev:
+        args.pcb, args.pcb_rev_sha = pcb_source.resolve_pinned(
+            args.pcb, args.pcb_rev, workdir, config_path=args.config)
+        _info(f"board pinned to {args.pcb_rev} = {args.pcb_rev_sha[:12]} "
+              f"(working copy not read)")
+    else:
+        args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config)
 
     # --- Altium auto-conversion (subprocess under KiCad Python) ---
     altium_meta = None

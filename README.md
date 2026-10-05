@@ -407,6 +407,18 @@ boolean options via `--no-svg`, `--no-hs-kelvin`, and the other `--no-*` forms.
 `blob` URLs are converted to raw downloads automatically. Prefer a commit SHA in
 the URL instead of a branch name for reproducible extraction.
 
+For a local board in a git checkout, `pcb_rev: <commit or tag>` (`--pcb-rev`) pins
+it the same way without publishing anything: the board is read with `git show
+<rev>:<path>` from the repository `pcb` points into, never from the working copy,
+so another session's uncommitted edits to the board cannot leak into the
+extraction. A missing commit or a file absent from it fails hard; there is no
+fallback to the working copy. `gate_copper.py` and `visualize_paths.py` honour it
+too, and the full commit lands in `meta.pcb_rev`. The Fugu2 examples are pinned
+this way. `loop_inductance_guard.py` (kicad-design) hashes the board file it is
+given, so gate a pinned config against the exported board (`git show
+<rev>:Fugu2.kicad_pcb > board.kicad_pcb`), not the working copy -- otherwise it
+refuses the extraction as a different board, which is the safe failure.
+
 ```yaml
 pcb: https://github.com/org/repo/blob/<commit-sha>/hw/Fugu2/Fugu2.kicad_pcb
 sw: SW
@@ -743,7 +755,8 @@ The `--pitch 2.0` result reproduces the historical lead-inclusive fixture's
   gate-drive/DPT or SW-overshoot sim.
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
   `meta.pcb_sha256` records the SHA-256 of the resolved `.kicad_pcb` input so
-  downstream tools can detect stale extraction artifacts. When extracted through
+  downstream tools can detect stale extraction artifacts; `meta.pcb_rev` is the
+  full commit when the board was pinned with `pcb_rev`, else null. When extracted through
   `--config`, `meta.extract_config_sha256` records that YAML file's SHA-256 too.
   CSI fields: `csi_hs` / `csi_ls` are side-specific source-lead mutuals used in
   the emitted subckt; `csi_hs_loop` / `csi_ls_loop` are the full-loop mutuals for

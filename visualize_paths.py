@@ -58,6 +58,7 @@ DEFAULTS = {
     "margin": 10.0,
     "config": None,
     "gate_net_override": None,   # applied in memory before discovery, as kicad_geom does
+    "pcb_rev": None,             # draw the board as committed there, as the extractor reads it
 }
 
 REQUIRED_ARGS = ("pcb", "sw", "gnd", "out")
@@ -69,6 +70,7 @@ LIST_TYPES = {
 }
 SCALAR_TYPES = {
     "pcb": str,
+    "pcb_rev": str,
     "sw": str,
     "gnd": str,
     "vin": str,
@@ -763,6 +765,8 @@ def build_parser():
     ap.add_argument("pcb", nargs="?", default=argparse.SUPPRESS)
     ap.add_argument("--config", default=argparse.SUPPRESS,
                     help="YAML file containing CLI args as argparse dest names")
+    ap.add_argument("--pcb-rev", default=argparse.SUPPRESS,
+                    help="git commit/tag: draw the board as committed there")
     ap.add_argument("--sw", default=argparse.SUPPRESS, help="switch-node net name")
     ap.add_argument("--gnd", default=argparse.SUPPRESS, help="ground net name")
     ap.add_argument("--vin", default=argparse.SUPPRESS, help="input rail net")
@@ -888,6 +892,11 @@ def parse_args(argv=None):
     merged.update(DEFAULTS)
     merged.update(yaml_args)
     merged.update(cli_args)
+    if "pcb" in cli_args and yaml_args.get("pcb_rev") and "pcb_rev" not in cli_args:
+        # an explicit board replaces the config's pcb and its pin (as the extractor)
+        sys.stderr.write(f"WARNING: board given on the command line; the config's "
+                         f"pcb_rev pins the config's own pcb and is not applied.\n")
+        merged["pcb_rev"] = None
 
     missing = [name for name in REQUIRED_ARGS if not merged.get(name)]
     if missing:
@@ -906,7 +915,8 @@ def main(argv=None):
     workdir = tempfile.mkdtemp(prefix="dcdc_view_")
     atexit.register(shutil.rmtree, workdir, True)   # no board copy left per run
     args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir,
-                                           config_path=getattr(args, "config", None))
+                                           config_path=getattr(args, "config", None),
+                                           rev=getattr(args, "pcb_rev", None))
     board = pcbnew.LoadBoard(args.pcb)
     if board is None:
         raise SystemExit(f"{args.pcb}: KiCad failed to load PCB")
