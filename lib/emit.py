@@ -137,7 +137,10 @@ def subckt(p):
         "* CSI is the shared source-lead branch (Lscs_*). Drive HS gate between",
         "* HSG and SW for non-Kelvin (CSI in loop), or HSG-HSKEL for Kelvin.",
         "* Lloop_hs/Lloop_ls are a 50/50 split of the non-CSI loop L; only total L_loop is solved.",
-        "* Rser on Lloop_hs/Lloop_ls is split by LF r_hs:r_ls for damping; only total R_loop is solved.",
+        ("* Rser on Lloop_hs/Lloop_ls is split by LF r_hs:r_ls for damping; only total R_loop is solved."
+         if r_hs is not None and r_ls is not None and (r_hs + r_ls) > 0 else
+         "* Rser on Lloop_hs/Lloop_ls is split 50/50 (LF r_hs/r_ls not both available); "
+         "only total R_loop is solved."),
     ]
     if p.get("n_cin", 1) > 1:
         kind = "physical (cap ESL/ESR)" if p.get("L_loop_physical") is not None \

@@ -328,7 +328,8 @@ def schematic(p):
     s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 - 2, "R_loop·hs", 11.5, INK, "end", "bold"))
     s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 12, f"{_fmtR(rser_hs)}", 11, INK, "end"))
     s.append(_txt(xc - 14, (y_rl0+y_rl1)/2 + 24,
-                  f"ring R_loop {_fmtR(R_loop)}, r_hs:r_ls split", 8.5,
+                  f"ring R_loop {_fmtR(R_loop)}, "
+                  f"{'r_hs:r_ls' if have_rsplit and r_hs + r_ls > 0 else '50/50'} split", 8.5,
                   MUTE, "end", ital=True))
     s.append(_line(xc, y_rl1, xc, y_lh0, WIRE))
     s.append(_coil_v(xc, y_lh0, y_lh1))

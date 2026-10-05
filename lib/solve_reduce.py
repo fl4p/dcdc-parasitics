@@ -37,6 +37,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FASTHENRY = os.environ.get("FASTHENRY", "/Users/fab/dev/vendor/FastHenry2/bin/fasthenry")
 
 
+
+def _mohm(v):
+    """A resistance in mOhm for messages, or "n/a" -- never a fabricated 0.00."""
+    return f"{v*1e3:.2f} mOhm" if v is not None else "n/a"
+
 def run_fasthenry(inp, suffix="dcdc", fasthenry=FASTHENRY, cwd=None):
     """Run fasthenry; return the path to the produced Zc<suffix>.mat."""
     cwd = cwd or os.path.dirname(os.path.abspath(inp)) or "."
@@ -1122,6 +1127,18 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     hs_switch_labels = port_group("hs", "P_hs")
     ls_switch_labels = port_group("ls", "P_ls")
     r_hs, r_ls = eff_rdc(hs_switch_labels), eff_rdc(ls_switch_labels)
+    # One side measured, the other not (its switch port dropped as floating): the
+    # pair is INCOMPLETE. Recorded as r_cond_complete=False and warned, so no
+    # consumer reads the missing side as legacy-absent and substitutes a value --
+    # the loss deck replaced BOTH with R_loop/2, discarding the measured side
+    # (review of c104325). Both None (module, no switch ports) is not partial.
+    r_cond_complete = r_hs is not None and r_ls is not None
+    if (r_hs is None) != (r_ls is None):
+        warn.append(
+            f"conduction R INCOMPLETE: r_hs={_mohm(r_hs)}, r_ls={_mohm(r_ls)} -- the "
+            f"{'LS' if r_ls is None else 'HS'} switch port is not in the LF solve "
+            f"(dropped as floating?). Per-switch conduction copper is unknown on that "
+            f"side; do not use this extraction for a conduction-loss budget")
     r_loop_cond = rdc("P_bulk")
     r_sw = None
     if r_hs is not None and r_ls is not None and r_loop_cond is not None:
@@ -1134,8 +1151,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     # a single negative per-switch R would emit a non-physical negative Rser
     if (r_hs is not None and r_hs < -0.05e-3) or (r_ls is not None and r_ls < -0.05e-3):
         warn.append(
-            f"negative per-switch conduction R (r_hs={(r_hs or 0)*1e3:.2f}, "
-            f"r_ls={(r_ls or 0)*1e3:.2f} mOhm) — numerical/geometry artifact; "
+            f"negative per-switch conduction R (r_hs={_mohm(r_hs)}, "
+            f"r_ls={_mohm(r_ls)}) — numerical/geometry artifact; "
             f"would emit a negative Rser")
     cond_ref = (topo or {}).get("cond_ref") if isinstance(topo, dict) else None
 
@@ -1686,6 +1703,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
                                   hs_dropped_devices=hs_dropped,
                                   ls_dropped_devices=ls_dropped),
         r_hs=r_hs, r_ls=r_ls, r_loop_cond=r_loop_cond, r_sw=r_sw,
+        r_cond_complete=r_cond_complete,
         r_cond_freq=f_dc, R_dc_freq_Hz=f_dc, R_100k_freq_Hz=f_100k,
         cond_ref=cond_ref,
         cin_branches=(cin_dec["branches"] if cin_dec else None),
@@ -1806,6 +1824,7 @@ if __name__ == "__main__":
     print(f"L_loop    = {p['L_loop']*nH:7.2f} nH   R_loop = {p['R_loop']*1e3:.2f} mOhm (HF ring)")
     print(f"L_gate_hs = {p['L_gate_hs']*nH:7.2f} nH   L_gate_ls = {p['L_gate_ls']*nH:7.2f} nH")
     print(f"CSI_hs    = {p['csi_hs']*nH:7.2f} nH   CSI_ls    = {p['csi_ls']*nH:7.2f} nH")
-    if p.get("r_hs") is not None:
-        print(f"R_hs      = {p['r_hs']*1e3:7.2f} mOhm R_ls   = {p['r_ls']*1e3:.2f} mOhm "
-              f"(LF conduction @ {p['r_cond_freq']:g} Hz, SW spread {p.get('r_sw',0)*1e3:.2f} mOhm)")
+    if p.get("r_hs") is not None or p.get("r_ls") is not None:
+        # either side, and r_sw, may be None; each is printed on its own (review of c104325)
+        print(f"R_hs      = {_mohm(p.get('r_hs'))} R_ls   = {_mohm(p.get('r_ls'))} "
+              f"(LF conduction @ {p['r_cond_freq']:g} Hz, SW spread {_mohm(p.get('r_sw'))})")

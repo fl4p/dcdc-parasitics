@@ -743,3 +743,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_standalone_reducer_prints_a_missing_conduction_r_as_na():
+    """`python3 lib/solve_reduce.py Zc.mat` checked only r_hs, then formatted r_ls
+    and r_sw: TypeError with LS missing, and with r_sw None (review of c104325)."""
+    import runpy
+    import solve_reduce as sr
+    src = open(sr.__file__).read()
+    main_src = src[src.index('if __name__ == "__main__":'):]
+    for r_hs, r_ls, r_sw in ((0.7e-3, None, None), (0.7e-3, 0.6e-3, None), (None, 0.6e-3, None)):
+        p = dict(freq_Hz=5e6, L_loop=4e-9, R_loop=3e-3, L_gate_hs=1e-8, L_gate_ls=1e-8,
+                 csi_hs=1e-9, csi_ls=1e-9, r_hs=r_hs, r_ls=r_ls, r_sw=r_sw, r_cond_freq=39e3)
+        ns = dict(vars(sr), __name__="__main__", parse_zc=lambda _: None,
+                  reduce_parasitics=lambda *a, **k: p)
+        old_argv = sys.argv
+        sys.argv = ["solve_reduce.py", "Zc.mat"]
+        try:
+            import contextlib, io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                exec(compile(main_src, sr.__file__, "exec"), ns)
+        finally:
+            sys.argv = old_argv
+        line = [l for l in buf.getvalue().splitlines() if l.startswith("R_hs")][0]
+        assert ("n/a" in line) and "0.00" not in line, line
