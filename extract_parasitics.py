@@ -1375,6 +1375,11 @@ def parse_args(argv=None):
 
     ap = build_parser()
     cli_args = vars(ap.parse_args(argv))
+    # A pin that is given must name something (pcb_source.check_pin): an empty
+    # value read as false and selected the working copy (review of b8f4779).
+    for _src, _d in (("config", yaml_args), ("--pcb-rev", cli_args)):
+        if "pcb_rev" in _d:
+            _d["pcb_rev"] = pcb_source.check_pin(_d["pcb_rev"], _src)
     merged = {}
     merged.update(DEFAULTS)
     merged.update(yaml_args)
