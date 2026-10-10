@@ -2822,7 +2822,7 @@ def build(board, topo, pitch=1.0, lead_mm=3.0, margin=8.0, cin_parallel=1,
     # Cin pad stacks (create nodes now so the global stitch bonds them to the pours).
     # With cin_parallel>1 the N nearest ceramics each get their own port, so the
     # solve captures their mutual coupling and the reduce step forms the true
-    # parallel loop L (not the pessimistic single-cap bound).
+    # parallel loop L (not the nearest-cap-alone reference).
     if cin_refs is not None and cin_loop_refs is not None:
         raise ValueError("--cin-refs is an alias for --cin-loop-refs; pass only one")
     if cin_network_model not in ("scalar_trunk", "matrix", "matrix_with_sw_coupling", "none"):

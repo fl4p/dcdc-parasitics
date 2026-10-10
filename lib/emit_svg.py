@@ -472,7 +472,7 @@ def schematic(p):
     if n_used > 1:
         single = _num(p.get("L_loop_single")) or L_loop
         loop_txt = (f"Commutation loop L = {_fmtL(L_loop)} "
-                    f"({n_used} caps ∥;  single-cap bound {_fmtL(single)})"
+                    f"({n_used} caps ∥;  nearest cap alone {_fmtL(single)})"
                     f"   R = {_fmtR(R_loop)}")
     else:
         loop_txt = f"Commutation loop L = {_fmtL(L_loop)}  (R = {_fmtR(R_loop)})"

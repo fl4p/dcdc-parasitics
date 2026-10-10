@@ -1074,26 +1074,34 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     # MLCC with the bank's highest self-L (8.67 nH).
     self_L = [float(Z[j, j].imag / w) for j in cin_idx]
     L_uncoupled = 1.0 / sum(1.0 / x for x in self_L) if min(self_L) > 0 else None
+    cap_L_psd = None                       # single cap: nothing to check
     if len(cin_idx) > 1:
         Lc = np.array([[Z[a, b].imag / w for b in cin_idx] for a in cin_idx])
         eig = np.linalg.eigvalsh(0.5 * (Lc + Lc.T))
         # Resolution: FastHenry's iterative solve runs at a 1e-3 relative tolerance and
-        # Z is written to 6 significant digits, so a negative eigenvalue within 1e-3 of
-        # the spectral scale is numerically UNRESOLVED, not a physical violation: a
-        # valid close-port copper deck gave -2.0e-4 nH against 139 nH (-1.5e-6 relative),
-        # which a direct solve cleared (review of 5521bd8). Beyond 1e-3 the solver cannot
-        # explain it.
+        # Z is written to 6 significant digits. A valid close-port copper deck gave
+        # -2.0e-4 nH against 139 nH (-1.5e-6 relative), which a direct solve cleared
+        # (review of 5521bd8). 1e-3 of the spectral scale is a HEURISTIC line from
+        # those settings, not an eigenvalue error bound, so a negative eigenvalue
+        # inside it is UNRESOLVED -- still a warning (unevaluable is not OK, and the
+        # loop guard reads only warnings; review of 6b92948) -- and beyond it the
+        # solver cannot plausibly explain it. cap_L_psd carries the state.
         scale = max(abs(eig).max(), 1e-30) if np.all(np.isfinite(eig)) else 0.0
         if not np.all(np.isfinite(eig)) or eig.min() < -1e-3 * scale:
+            cap_L_psd = "violated"
             warn.append(f"cap-port inductance matrix is not positive semi-definite "
-                        f"(min eigenvalue {eig.min()*1e9:.3g} nH, beyond the solver's "
-                        f"1e-3 resolution) — a passive extraction cannot produce that; "
-                        f"check cap ports / mesh")
+                        f"(min eigenvalue {eig.min()*1e9:.3g} nH, beyond 1e-3 of the "
+                        f"{scale*1e9:.3g} nH scale) — a passive extraction should not "
+                        f"produce that; check cap ports / mesh")
         elif eig.min() < 0:
-            info_base.append(f"cap-port inductance matrix has a slightly negative "
-                             f"eigenvalue ({eig.min()*1e9:.3g} nH vs {scale*1e9:.3g} nH "
-                             f"scale), within the iterative solver's 1e-3 resolution: "
-                             f"PSD is numerically unresolved, not violated")
+            cap_L_psd = "unresolved"
+            warn.append(f"cap-port inductance matrix PSD is numerically UNRESOLVED: "
+                        f"min eigenvalue {eig.min()*1e9:.3g} nH vs {scale*1e9:.3g} nH "
+                        f"scale, inside the iterative solver's ~1e-3 resolution "
+                        f"(heuristic). Not shown violated; re-solve with a direct "
+                        f"solver to settle it before trusting a marginal result")
+        else:
+            cap_L_psd = "ok"
     if (len(cin_idx) > 1 and L_uncoupled is not None
             and L_loop_ideal < L_uncoupled - 1e-12):
         info_base.append(
@@ -1715,6 +1723,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
         L_loop=L_loop, R_loop=R_loop,
         L_loop_ideal=L_loop_ideal,            # ideal-cap copper-only parallel (reference)
         L_loop_single=L_loop_single,          # nearest single cap alone (reference)
+        cap_L_psd=cap_L_psd,                  # ok | unresolved | violated | None (1 cap)
         L_loop_physical=(L_loop if physical else None),
         per_cap_L=per_cap_L, current_split=split,
         cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond,

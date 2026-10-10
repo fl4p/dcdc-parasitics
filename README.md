@@ -203,11 +203,12 @@ taps the die-source (**Kelvin**, CSI excluded) or the power-source pad
 
 ### Parallel input caps (`--cin-parallel N`)
 
-By default `P_pwr` sits across the **single nearest** ceramic — a *conservative
-upper bound* on the loop L, because it ignores the other input caps that share the
-commutation current. Since inductances in parallel combine reciprocally, the real
-effective loop L is **lower**, so the single-cap number over-estimates SW-node
-overshoot. `--cin-parallel N` ports the **N nearest** input ceramics in the same
+By default `P_pwr` sits across the **single nearest** ceramic, which ignores the
+other input caps that share the commutation current. For a pure-inductance port
+matrix the parallel loop L is then lower than the single-cap number, so it usually
+over-estimates SW-node overshoot -- but that is not a bound on the extracted
+complex Z: copper R can put the parallel value above the single cap (see the two
+references below). `--cin-parallel N` ports the **N nearest** input ceramics in the same
 solve, so FastHenry returns their full mutual matrix, and the reduce step forms the
 true effective 2-terminal commutation impedance under a common-voltage drive
 (every cap pad pair at the same SW-node voltage, gates open):
@@ -241,8 +242,8 @@ per-cap ring-frequency current split. The series-only cap term is a useful
 above-SRF diagnostic; it is not a full C/ESR/ESL capacitor model. The loss tool
 supplies that full model from dslib.
 
-Without `--cin-esl`/`--cin-esr` the headline remains the ideal-cap copper lower
-bound. The two bounds always land in the report/JSON; `L_loop_physical` is set
+Without `--cin-esl`/`--cin-esr` the headline remains the ideal-cap copper-only
+value. The two references always land in the report/JSON; `L_loop_physical` is set
 only when a series ESL or ESR was supplied. Port polarity is fixed (always
 Vin→GND) so a reversed cap cannot silently corrupt the mutuals; a spuriously-low
 effective L still trips a warning.
