@@ -133,3 +133,60 @@ def test_the_extractor_refuses_an_empty_pin_from_yaml_or_cli(tmp_path):
         ep.parse_args(["--config", str(cfg), "--pcb-rev", ""])
     args = ep.parse_args(["--config", str(cfg)])
     assert args.pcb_rev == "abc1234"
+
+
+# ---- review of a9fd448 -------------------------------------------------------
+def test_an_in_repo_alias_of_the_root_cannot_pose_as_the_root(repo, tmp_path):
+    """`board -> .` made repo/board look like the repository root, so its own
+    symlink went unchecked and the same path and pin read the root's board."""
+    r, first = repo
+    (r / "b.kicad_pcb").write_text("ROOT-BOARD")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-qm", "root board")
+    _git(r, "rm", "-q", "--cached", "-r", "board")
+    import shutil
+    shutil.rmtree(r / "board")
+    (r / "board").symlink_to(".")
+    out = tmp_path / "w"
+    out.mkdir()
+    with pytest.raises(SystemExit, match="is a symlink in the working copy"):
+        pcb_source.resolve_pinned(str(r / "board" / "b.kicad_pcb"), "HEAD~1", str(out))
+    assert os.listdir(out) == []
+
+
+def test_a_case_alias_of_the_repo_is_the_repo(repo, tmp_path):
+    """On a case-insensitive volume `HW` and `hw` are one directory, not a symlink."""
+    r, first = repo
+    alias = r.parent / r.name.upper()
+    if not alias.exists():
+        pytest.skip("case-sensitive filesystem")
+    out = tmp_path / "w"
+    out.mkdir()
+    path, sha = pcb_source.resolve_pinned(str(alias / "board" / "b.kicad_pcb"), first, str(out))
+    assert open(path).read() == "COMMITTED-1" and sha == first
+
+
+def test_a_pinned_cli_board_resolves_from_the_invocation_directory(repo, tmp_path, monkeypatch):
+    """`--config config/c.yaml board.kicad_pcb --pcb-rev SHA` read config/board.kicad_pcb:
+    the merge lost that the CLI, not the config, named the board."""
+    sys.path.insert(0, ROOT)
+    import extract_parasitics as ep
+    r, first = repo
+    (r / "board" / "config").mkdir()
+    (r / "board" / "config" / "b.kicad_pcb").write_text("CONFIG-DIR-BOARD")
+    _git(r, "add", "board/config")
+    _git(r, "commit", "-qm", "config-dir board")
+    cfg = r / "board" / "config" / "c.yaml"
+    cfg.write_text("pcb: b.kicad_pcb\nsw: SW\ngnd: GND\nout: o\n")
+    monkeypatch.chdir(r / "board")
+    args = ep.parse_args(["--config", str(cfg), "b.kicad_pcb", "--pcb-rev", "HEAD"])
+    assert args.pcb_from_cli is True
+    out = tmp_path / "w"
+    out.mkdir()
+    path, _ = pcb_source.resolve_pinned(
+        args.pcb, args.pcb_rev, str(out),
+        config_path=None if args.pcb_from_cli else args.config)
+    assert open(path).read() == "COMMITTED-2"
+    wrong, _ = pcb_source.resolve_pinned(args.pcb, args.pcb_rev, str(out), config_path=str(cfg))
+    assert open(wrong).read() == "CONFIG-DIR-BOARD"     # what the old merge selected
+    assert ep.parse_args(["--config", str(cfg)]).pcb_from_cli is False

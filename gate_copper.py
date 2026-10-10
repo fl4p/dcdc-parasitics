@@ -651,10 +651,12 @@ def parse_args(argv=None):
         sys.stderr.write(f"WARNING: board given on the command line; the config's "
                          f"pcb_rev pins the config's own pcb and is not applied.\n")
         merged["pcb_rev"] = None
+    # a relative CLI board means the invocation directory (review of a9fd448)
+    merged["pcb_from_cli"] = "pcb" in cli
     missing = [k for k in REQUIRED_ARGS if not merged.get(k)]
     if missing:
         ap.error("missing required argument(s): " + ", ".join(missing))
-    keep = set(DEFAULTS) | set(REQUIRED_ARGS)
+    keep = set(DEFAULTS) | set(REQUIRED_ARGS) | {"pcb_from_cli"}
     return argparse.Namespace(**{k: v for k, v in merged.items() if k in keep})
 
 
@@ -673,7 +675,9 @@ def main(argv=None):
     # 31ea1a1, finding 2); the board is in memory once loaded.
     workdir = tempfile.mkdtemp(prefix="dcdc_gate_")
     atexit.register(shutil.rmtree, workdir, True)
-    pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config,
+    # a pinned CLI board resolves from the invocation directory (review of a9fd448)
+    cfg = None if (args.pcb_from_cli and args.pcb_rev) else args.config
+    pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=cfg,
                                       rev=args.pcb_rev)
     board = pcbnew.LoadBoard(pcb)
     if board is None:

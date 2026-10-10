@@ -1394,6 +1394,9 @@ def parse_args(argv=None):
             f"config's pcb_rev {yaml_args['pcb_rev']!r} pins the config's own pcb and "
             f"is not applied to it. Pass --pcb-rev to pin this board.\n")
         merged["pcb_rev"] = None
+    # A relative board named on the command line means the invocation directory,
+    # never the config's (review of a9fd448); resolve_pinned is told which.
+    merged["pcb_from_cli"] = "pcb" in cli_args
 
     missing = [name for name in REQUIRED_ARGS if not merged.get(name)]
     if missing:
@@ -1516,7 +1519,8 @@ def main():
     args.pcb_rev_sha = None
     if args.pcb_rev:
         args.pcb, args.pcb_rev_sha = pcb_source.resolve_pinned(
-            args.pcb, args.pcb_rev, workdir, config_path=args.config)
+            args.pcb, args.pcb_rev, workdir,
+            config_path=None if args.pcb_from_cli else args.config)
         _info(f"board pinned to {args.pcb_rev} = {args.pcb_rev_sha[:12]} "
               f"(working copy not read)")
     else:

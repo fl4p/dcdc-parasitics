@@ -104,15 +104,33 @@ def board_at_rev(path, rev, workdir):
         raise SystemExit(f"pcb_rev {rev!r}: {path} is not inside a git checkout "
                          f"({top.stderr.strip()})")
     root_real = os.path.realpath(top.stdout.strip())
-    # The lexical repository root: the ancestor of `where` that IS the root.
-    lex_root = where
-    while os.path.realpath(lex_root) != root_real:
-        parent = os.path.dirname(lex_root)
-        if parent == lex_root:
-            raise SystemExit(f"pcb_rev {rev!r}: {path} reaches its repository "
-                             f"{root_real} through a symlinked directory; give the "
-                             f"real path")
-        lex_root = parent
+    # The lexical repository root: the HIGHEST ancestor of `where` that is the
+    # root directory. Taking the first match from below let an in-repo alias
+    # (`board -> .`) pose as the root, so its own symlink was never checked and
+    # the same path and pin read another committed file (review of a9fd448).
+    # Identity is by inode, not by string: on a case-insensitive volume
+    # `mainrepo` and `MainRepo` are one directory, not a symlink.
+    root_st = os.stat(root_real)
+
+    def is_root(d):
+        try:
+            st = os.stat(d)
+        except OSError:
+            return False
+        return (st.st_dev, st.st_ino) == (root_st.st_dev, root_st.st_ino)
+
+    lex_root, probe = None, where
+    while True:
+        if is_root(probe):
+            lex_root = probe
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    if lex_root is None:
+        raise SystemExit(f"pcb_rev {rev!r}: {path} reaches its repository "
+                         f"{root_real} through a symlinked directory; give the "
+                         f"real path")
     rel = os.path.relpath(path, lex_root)
     if rel == os.pardir or rel.startswith(os.pardir + os.sep):
         raise SystemExit(f"pcb_rev {rev!r}: {path} is outside the repository {root_real}")
@@ -149,7 +167,9 @@ def resolve_pinned(pcb, rev, workdir, config_path=None):
     """(path, full commit sha) of `pcb` as committed at `rev`; see board_at_rev.
 
     The path is resolved WITHOUT looking at the working copy: absolute as given,
-    else relative to the config file when one supplied it, else to the cwd. The
+    else relative to the config file when the config supplied it, else to the
+    cwd. Callers pass config_path=None for a board named on the command line: a
+    relative CLI board means the invocation directory (review of a9fd448). The
     unpinned resolver's "cwd first, then config dir, and compare the two files"
     read live files, so deleting or editing one changed which committed board the
     same config selected (review of b8f4779)."""

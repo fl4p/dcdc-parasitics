@@ -902,6 +902,8 @@ def parse_args(argv=None):
         sys.stderr.write(f"WARNING: board given on the command line; the config's "
                          f"pcb_rev pins the config's own pcb and is not applied.\n")
         merged["pcb_rev"] = None
+    # a relative CLI board means the invocation directory (review of a9fd448)
+    merged["pcb_from_cli"] = "pcb" in cli_args
 
     missing = [name for name in REQUIRED_ARGS if not merged.get(name)]
     if missing:
@@ -909,7 +911,7 @@ def parse_args(argv=None):
 
     # Keep only the values this viewer consumes. Extra extraction-only YAML keys
     # are accepted above so users can point both tools at the same config.
-    keep = set(DEFAULTS) | set(REQUIRED_ARGS)
+    keep = set(DEFAULTS) | set(REQUIRED_ARGS) | {"pcb_from_cli"}
     args = argparse.Namespace(**{k: v for k, v in merged.items() if k in keep})
     args.out = _normalize_out(args.out)
     return args
@@ -919,9 +921,10 @@ def main(argv=None):
     args = parse_args(argv)
     workdir = tempfile.mkdtemp(prefix="dcdc_view_")
     atexit.register(shutil.rmtree, workdir, True)   # no board copy left per run
-    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir,
-                                           config_path=getattr(args, "config", None),
-                                           rev=getattr(args, "pcb_rev", None))
+    rev = getattr(args, "pcb_rev", None)
+    # a pinned CLI board resolves from the invocation directory (review of a9fd448)
+    cfg = None if (getattr(args, "pcb_from_cli", False) and rev) else getattr(args, "config", None)
+    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=cfg, rev=rev)
     board = pcbnew.LoadBoard(args.pcb)
     if board is None:
         raise SystemExit(f"{args.pcb}: KiCad failed to load PCB")
