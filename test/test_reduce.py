@@ -90,29 +90,40 @@ check("bracket single>=ideal", p["L_loop_single"] >= p["L_loop_ideal"],
 shares = sum(s["mag"] for s in p["current_split"].values())
 check("current split ~ sums to 1", abs(shares - 1.0) < 1e-9, f"sum|w|={shares:.4f}")
 
-# 6. Reversed-port polarity: shared mutual flips sign -> spuriously low L, must warn.
+# 6. Reversed-port polarity drops L below the uncoupled parallel of the self-Ls.
+# That is ADVISORY only (review of 6377a8a): a correctly wired bank with mixed-sign
+# coupling does the same, so it is info, never a warning.
 Mrev = np.array([[Lf + Lb, -Lf], [-Lf, Lf + Lb]])
 p = reduce(Mrev, ["P_pwr", "P_pwr1"], ["P_pwr", "P_pwr1"],
            {"cin_used": ["C1", "C2"]})
-check("reversed polarity warns", any("polarity" in w or "sign" in w or "floor" in w
-                                      for w in p["reduce_warn"]),
-      "; ".join(p["reduce_warn"]) or "(no warning!)")
+check("reversed polarity: advisory in reduce_info",
+      any("uncoupled parallel" in w for w in p.get("reduce_info_base", [])),
+      "; ".join(p.get("reduce_info_base", [])) or "(no advisory!)")
+check("reversed polarity: no false-certainty warning",
+      not any("uncoupled parallel" in w for w in p["reduce_warn"]),
+      "; ".join(p["reduce_warn"]) or "(none)")
 
-# 6b. Unequal caps with P_pwr the WORST one (fugu2-dualLS shape): correctly coupled,
-# so no floor warning -- the floor is the harmonic sum of every cap's self-L, not
-# P_pwr's self-L / N. Flipping a near cap must still warn.
+# 6b. Reviewer's correctly wired, mixed-sign bank (all currents forward) is below the
+# harmonic floor: it must not WARN. Unequal caps with P_pwr worst: no warning either.
+Mmix = 1e-9 * np.array([[2, -0.8, 0.2], [-0.8, 2, 0.2], [0.2, 0.2, 2]])
+pm = reduce(Mmix, ["P_pwr", "P_pwr1", "P_pwr2"], ["P_pwr", "P_pwr1", "P_pwr2"],
+            {"cin_used": ["C1", "C2", "C3"]})
+check("mixed-sign passive bank: no warning",
+      not any("uncoupled" in w or "positive semi-definite" in w for w in pm["reduce_warn"]),
+      "; ".join(pm["reduce_warn"]) or "(none)")
 Mu = 0.5e-9 * np.ones((3, 3)) + np.diag([8e-9, 1e-9, 1e-9])
 pu = reduce(Mu, ["P_pwr", "P_pwr1", "P_pwr2"], ["P_pwr", "P_pwr1", "P_pwr2"],
             {"cin_used": ["C1", "C2", "C3"]})
-check("unequal caps: no spurious floor warning",
-      not any("floor" in w or "exceeds the best" in w for w in pu["reduce_warn"]),
+check("unequal caps: no spurious warning",
+      not any("uncoupled" in w or "positive semi-definite" in w for w in pu["reduce_warn"]),
       "; ".join(pu["reduce_warn"]) or "(none)")
-S = np.diag([1.0, 1.0, -1.0])
-pf = reduce(S @ Mu @ S, ["P_pwr", "P_pwr1", "P_pwr2"], ["P_pwr", "P_pwr1", "P_pwr2"],
-            {"cin_used": ["C1", "C2", "C3"]})
-check("unequal caps: flipped near cap warns",
-      any("floor" in w for w in pf["reduce_warn"]),
-      "; ".join(pf["reduce_warn"]) or "(no warning!)")
+
+# 6c. Known-bad: a non-passive (indefinite) cap-port L matrix must warn.
+Mbad = 1e-9 * np.array([[1.0, 2.0], [2.0, 1.0]])
+pb = reduce(Mbad, ["P_pwr", "P_pwr1"], ["P_pwr", "P_pwr1"], {"cin_used": ["C1", "C2"]})
+check("indefinite cap-port L warns",
+      any("positive semi-definite" in w for w in pb["reduce_warn"]),
+      "; ".join(pb["reduce_warn"]) or "(no warning!)")
 
 # 7. Near-singular / near-coincident caps: cond(Zc) huge, must warn.
 eps = 1e-15

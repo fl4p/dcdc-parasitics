@@ -1062,25 +1062,32 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
             f"make the split physical but does not make scalar_trunk valid. If "
             f"negative share persists with realistic ESL/ESR, also check port "
             f"polarity / geometry")
-    # Both bounds come from every cap's own self-L, not from cin_idx[0]: that is
-    # P_pwr, which need not be the nearest cap (on fugu2-dualLS it is the 8.67 nH
-    # bulk cap, so L_single/N invented a 1.24 nH floor above the real 0.36 nH one).
+    # Diagonal-based bounds are NOT theorems for a real cap bank (review of 6377a8a):
+    # a correctly wired bank with mixed-sign cap-cap coupling falls below the
+    # harmonic sum of the self-Ls (false "polarity" warning), a reversed weakly
+    # coupled cap can stay above it, and with copper R in Z the complex reduction can
+    # exceed the best single cap. What IS an invariant of a passive RL extraction is
+    # that the cap-port inductance matrix Im(Z)/w is positive semi-definite (reactive
+    # power >= 0 for any real excitation); that is the warning. The harmonic floor
+    # stays as advisory context. P_pwr (cin_idx[0]) is the geometrically nearest cap
+    # but need not have the lowest self-L: on fugu2-dualLS it is C27, a 1 uF 0805
+    # MLCC with the bank's highest self-L (8.67 nH).
     self_L = [float(Z[j, j].imag / w) for j in cin_idx]
-    L_best_single = min(self_L)
     L_uncoupled = 1.0 / sum(1.0 / x for x in self_L) if min(self_L) > 0 else None
-    if len(cin_idx) > 1 and L_uncoupled is None:
-        warn.append(f"non-positive cap-port self-L ({min(self_L)*1e9:.2f} nH) — the "
-                    f"parallel-cap bounds cannot be checked; check cap ports")
-    if len(cin_idx) > 1 and L_loop_ideal > L_best_single + 1e-12:
-        warn.append(f"effective loop L ({L_loop_ideal*1e9:.2f} nH) exceeds the best "
-                    f"single cap ({L_best_single*1e9:.2f} nH) — unexpected for "
-                    f"parallel caps; check mutual signs / port polarity")
+    if len(cin_idx) > 1:
+        Lc = np.array([[Z[a, b].imag / w for b in cin_idx] for a in cin_idx])
+        eig = np.linalg.eigvalsh(0.5 * (Lc + Lc.T))
+        if not np.all(np.isfinite(eig)) or eig.min() < -1e-6 * max(abs(eig).max(), 1e-30):
+            warn.append(f"cap-port inductance matrix is not positive semi-definite "
+                        f"(min eigenvalue {eig.min()*1e9:.3g} nH) — a passive extraction "
+                        f"cannot produce that; check cap ports / mesh")
     if (len(cin_idx) > 1 and L_uncoupled is not None
             and L_loop_ideal < L_uncoupled - 1e-12):
-        # positively-coupled parallel caps can't drop below the uncoupled floor
-        warn.append(f"effective loop L ({L_loop_ideal*1e9:.2f} nH) is below the "
-                    f"uncoupled parallel floor ({L_uncoupled*1e9:.2f} nH) "
-                    f"— likely reversed cap-port polarity or a mutual-sign error")
+        info_base.append(
+            f"effective loop L ({L_loop_ideal*1e9:.2f} nH) is below the uncoupled "
+            f"parallel of the cap self-Ls ({L_uncoupled*1e9:.2f} nH). Normal with "
+            f"mixed-sign cap-cap coupling, so not evidence of a fault; a reversed cap "
+            f"port can also cause it")
 
     # ---- conduction-path resistances (LF, per-side) ----
     # Read R/L at the LOWEST swept frequency: there the skin depth dwarfs the
