@@ -31,9 +31,10 @@
 # split is external wiring and is not measured here; these legs give the on-board
 # copper each candidate path carries, which is what the split calculation needs.
 # Fugu2 board pinned to e8bb240 (2026-09-02, GitHub main): the latest 50 x 88 mm board
-# on which every Fugu2 example builds its mesh with all ports connected (fugu2-cu and
-# ReboostV2 then stop at the scalar-Cin validity check, a refusal of the cap model,
-# not of the board). Later boards: 1b13241 (op-amp current sense)
+# on which every Fugu2 example builds its mesh with all ports connected (fugu2-cu,
+# fugu2-HSlump-noLeads and ReboostV2 then stop at the scalar-Cin validity check, a
+# refusal of the cap model, not of the board; pass --allow-scalar-cin or use the
+# matrix Cin model). Later boards: 1b13241 (op-amp current sense)
 # leaves P_pwr's ground pad unbonded at 1 mm pitch and has no T_HV+ copper;
 # 971ab77 widened the board to 58.5 mm and dropped Net-(Q2-G). The working copy
 # is read only to locate the repository.

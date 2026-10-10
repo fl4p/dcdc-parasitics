@@ -418,8 +418,9 @@ this way. `loop_inductance_guard.py` (kicad-design) passes the board it gates on
 the command line, which replaces the config's `pcb` and its pin, so a fresh guard
 run extracts and gates exactly the file it was given -- pinned or not. Give it the
 exported board (`git show <rev>:Fugu2.kicad_pcb > board.kicad_pcb`); handed the
-working copy it gates the working copy. Only re-gating a saved extraction
-(`--json`) compares board hashes and refuses a different board.
+working copy it gates the working copy. A fresh run and re-gating a saved
+extraction (`--json`) both compare the extraction's `meta.pcb_sha256` with the
+given board's hash and refuse a mismatch.
 
 ```yaml
 pcb: https://github.com/org/repo/blob/<commit-sha>/hw/Fugu2/Fugu2.kicad_pcb
