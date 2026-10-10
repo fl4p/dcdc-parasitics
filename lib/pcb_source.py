@@ -110,27 +110,12 @@ def board_at_rev(path, rev, workdir):
     # the same path and pin read another committed file (review of a9fd448).
     # Identity is by inode, not by string: on a case-insensitive volume
     # `mainrepo` and `MainRepo` are one directory, not a symlink.
-    root_st = os.stat(root_real)
-
-    def is_root(d):
-        try:
-            st = os.stat(d)
-        except OSError:
-            return False
-        return (st.st_dev, st.st_ino) == (root_st.st_dev, root_st.st_ino)
-
-    lex_root, probe = None, where
-    while True:
-        if is_root(probe):
-            lex_root = probe
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            break
-        probe = parent
+    lex_root = _lexical_root(where, root_real)
     if lex_root is None:
         raise SystemExit(f"pcb_rev {rev!r}: {path} reaches its repository "
                          f"{root_real} through a symlinked directory; give the "
                          f"real path")
+    _refuse_shadowing_repo(lex_root, rev, path)
     rel = os.path.relpath(path, lex_root)
     if rel == os.pardir or rel.startswith(os.pardir + os.sep):
         raise SystemExit(f"pcb_rev {rev!r}: {path} is outside the repository {root_real}")
@@ -161,6 +146,61 @@ def board_at_rev(path, rev, workdir):
     with open(out, "wb") as fh:
         fh.write(blob.stdout)
     return out, sha
+
+
+def _lexical_root(start, root_real):
+    """The HIGHEST lexical ancestor of `start` that is the directory `root_real`,
+    or None. Identity is by inode, not by string: on a case-insensitive volume
+    `mainrepo` and `MainRepo` are one directory, not a symlink."""
+    root_st = os.stat(root_real)
+    found, probe = None, start
+    while True:
+        try:
+            st = os.stat(probe)
+            if (st.st_dev, st.st_ino) == (root_st.st_dev, root_st.st_ino):
+                found = probe
+        except OSError:
+            pass
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return found
+        probe = parent
+
+
+def _refuse_shadowing_repo(lex_root, rev, path):
+    """Refuse a repository root that sits inside ANOTHER work tree at a place
+    that outer tree tracks. A nested `.git`, a `.git` file pointing at the outer
+    git dir, or the board directory swapped for a symlink to another clone all
+    made `git rev-parse` find a different repository from the working copy, so
+    the same path and pin read a different committed file (review of e2312f6).
+    An untracked nested repository (Fugu2 inside the ~/dev monorepo) and a
+    registered submodule (gitlink) are legitimate and pass."""
+    parent = os.path.dirname(lex_root)
+    if parent == lex_root:
+        return
+    try:
+        top = subprocess.run(["git", "-C", parent, "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True)
+    except OSError as e:
+        raise SystemExit(f"pcb_rev {rev!r}: cannot run git: {e}")
+    if top.returncode:
+        return                                  # not inside another work tree
+    outer_real = os.path.realpath(top.stdout.strip())
+    outer_lex = _lexical_root(parent, outer_real)
+    if outer_lex is None:
+        raise SystemExit(f"pcb_rev {rev!r}: {path}: the repository {lex_root} sits in "
+                         f"{outer_real}, reached through a symlink; give the real path")
+    rel = os.path.relpath(lex_root, outer_lex).replace(os.sep, "/")
+    entries = []
+    for args in (["ls-files", "-s", "--", rel], ["ls-tree", "-r", "HEAD", "--", rel]):
+        r = subprocess.run(["git", "-C", outer_lex, *args], capture_output=True, text=True)
+        if r.returncode == 0:
+            entries += [ln.split(None, 1)[0] for ln in r.stdout.splitlines() if ln.strip()]
+    if entries and any(mode != "160000" for mode in entries):
+        raise SystemExit(f"pcb_rev {rev!r}: {lex_root} acts as a repository root but "
+                         f"{outer_lex} tracks files under it; a nested .git, a .git "
+                         f"file or a symlinked directory there would decide which "
+                         f"committed board is read. Give the path in the real repository")
 
 
 def resolve_pinned(pcb, rev, workdir, config_path=None):

@@ -675,8 +675,9 @@ def main(argv=None):
     # 31ea1a1, finding 2); the board is in memory once loaded.
     workdir = tempfile.mkdtemp(prefix="dcdc_gate_")
     atexit.register(shutil.rmtree, workdir, True)
-    # a pinned CLI board resolves from the invocation directory (review of a9fd448)
-    cfg = None if (args.pcb_from_cli and args.pcb_rev) else args.config
+    # a CLI board resolves from the invocation directory, pinned or not (reviews of
+    # a9fd448 and e2312f6); only a config-supplied board falls back to the config's
+    cfg = None if args.pcb_from_cli else args.config
     pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=cfg,
                                       rev=args.pcb_rev)
     board = pcbnew.LoadBoard(pcb)

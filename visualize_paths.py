@@ -922,8 +922,9 @@ def main(argv=None):
     workdir = tempfile.mkdtemp(prefix="dcdc_view_")
     atexit.register(shutil.rmtree, workdir, True)   # no board copy left per run
     rev = getattr(args, "pcb_rev", None)
-    # a pinned CLI board resolves from the invocation directory (review of a9fd448)
-    cfg = None if (getattr(args, "pcb_from_cli", False) and rev) else getattr(args, "config", None)
+    # a CLI board resolves from the invocation directory, pinned or not (reviews of
+    # a9fd448 and e2312f6); only a config-supplied board falls back to the config's
+    cfg = None if getattr(args, "pcb_from_cli", False) else getattr(args, "config", None)
     args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=cfg, rev=rev)
     board = pcbnew.LoadBoard(args.pcb)
     if board is None:

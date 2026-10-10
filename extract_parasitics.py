@@ -1524,7 +1524,9 @@ def main():
         _info(f"board pinned to {args.pcb_rev} = {args.pcb_rev_sha[:12]} "
               f"(working copy not read)")
     else:
-        args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=args.config)
+        # a relative CLI board means the invocation directory, never the config's
+        args.pcb = pcb_source.resolve_pcb_path(
+            args.pcb, workdir, config_path=None if args.pcb_from_cli else args.config)
 
     # --- Altium auto-conversion (subprocess under KiCad Python) ---
     altium_meta = None

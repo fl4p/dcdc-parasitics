@@ -190,3 +190,85 @@ def test_a_pinned_cli_board_resolves_from_the_invocation_directory(repo, tmp_pat
     wrong, _ = pcb_source.resolve_pinned(args.pcb, args.pcb_rev, str(out), config_path=str(cfg))
     assert open(wrong).read() == "CONFIG-DIR-BOARD"     # what the old merge selected
     assert ep.parse_args(["--config", str(cfg)]).pcb_from_cli is False
+
+
+# ---- review of e2312f6 -------------------------------------------------------
+def _clone_with_root_board(r, tmp_path):
+    """A second clone whose ROOT holds b.kicad_pcb, committed in r as well."""
+    (r / "b.kicad_pcb").write_text("ROOT-BOARD")
+    _git(r, "add", "b.kicad_pcb")
+    _git(r, "commit", "-qm", "root board")
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", "--shared", str(r), str(other)], check=True)
+    return other
+
+
+@pytest.mark.parametrize("case", ["nested-git-dir", "git-file", "symlink-to-clone"])
+def test_the_working_copy_cannot_swap_the_repository(repo, tmp_path, case):
+    """Same absolute path, same full SHA: a nested .git, a .git file pointing at the
+    outer git dir, or board/ replaced by a symlink to another clone made git find
+    another repository, and the read switched from board/b.kicad_pcb to b.kicad_pcb."""
+    import shutil
+    r, first = repo
+    other = _clone_with_root_board(r, tmp_path)
+    sha = _git(r, "rev-parse", "HEAD")
+    board = r / "board"
+    if case == "nested-git-dir":
+        subprocess.run(["git", "-C", str(board), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(board), "fetch", "-q", str(r), sha], check=True)
+    elif case == "git-file":
+        (board / ".git").write_text(f"gitdir: {r / '.git'}\n")
+    else:
+        shutil.rmtree(board)
+        board.symlink_to(other)
+    out = tmp_path / "w"
+    out.mkdir()
+    with pytest.raises(SystemExit, match="pcb_rev"):
+        pcb_source.resolve_pinned(str(board / "b.kicad_pcb"), sha, str(out))
+    assert os.listdir(out) == []
+
+
+def test_an_untracked_nested_repository_is_legitimate(repo, tmp_path):
+    """Fugu2 lives untracked inside the ~/dev monorepo; that must keep working."""
+    r, first = repo
+    mono = tmp_path / "mono"
+    mono.mkdir()
+    subprocess.run(["git", "-C", str(mono), "init", "-q"], check=True)
+    (mono / "README").write_text("x")
+    subprocess.run(["git", "-C", str(mono), "add", "README"], check=True)
+    subprocess.run(["git", "-C", str(mono), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "m"], check=True)
+    nested = mono / "hw"
+    os.rename(r, nested)
+    out = tmp_path / "w"
+    out.mkdir()
+    path, sha = pcb_source.resolve_pinned(str(nested / "board" / "b.kicad_pcb"), first, str(out))
+    assert open(path).read() == "COMMITTED-1" and sha == first
+
+
+def test_an_unpinned_cli_board_resolves_from_the_invocation_directory_too(tmp_path,
+                                                                          monkeypatch):
+    """Unpinned, a CLI board missing from the cwd silently loaded the config's board:
+    the extractor passed config_path whatever named the board (review of e2312f6)."""
+    sys.path.insert(0, ROOT)
+    import extract_parasitics as ep
+    cfgdir = tmp_path / "cfg"
+    cfgdir.mkdir()
+    (cfgdir / "only-here.kicad_pcb").write_text("CONFIG-DIR-BOARD")
+    cfg = cfgdir / "c.yaml"
+    cfg.write_text(f"pcb: only-here.kicad_pcb\nsw: SW\ngnd: GND\nout: {tmp_path / 'o'}\n")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    seen = {}
+
+    def spy(pcb, workdir, config_path=None, **kw):
+        seen["config_path"] = config_path
+        raise SystemExit("stop")
+    monkeypatch.setattr(ep.pcb_source, "resolve_pcb_path", spy)
+    for argv, want in ((["--config", str(cfg), "only-here.kicad_pcb"], None),
+                       (["--config", str(cfg)], str(cfg))):
+        monkeypatch.setattr(sys, "argv", ["extract_parasitics.py", *argv])
+        with pytest.raises(SystemExit, match="stop"):
+            ep.main()
+        assert seen["config_path"] == want
