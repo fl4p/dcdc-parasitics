@@ -98,6 +98,22 @@ check("reversed polarity warns", any("polarity" in w or "sign" in w or "floor" i
                                       for w in p["reduce_warn"]),
       "; ".join(p["reduce_warn"]) or "(no warning!)")
 
+# 6b. Unequal caps with P_pwr the WORST one (fugu2-dualLS shape): correctly coupled,
+# so no floor warning -- the floor is the harmonic sum of every cap's self-L, not
+# P_pwr's self-L / N. Flipping a near cap must still warn.
+Mu = 0.5e-9 * np.ones((3, 3)) + np.diag([8e-9, 1e-9, 1e-9])
+pu = reduce(Mu, ["P_pwr", "P_pwr1", "P_pwr2"], ["P_pwr", "P_pwr1", "P_pwr2"],
+            {"cin_used": ["C1", "C2", "C3"]})
+check("unequal caps: no spurious floor warning",
+      not any("floor" in w or "exceeds the best" in w for w in pu["reduce_warn"]),
+      "; ".join(pu["reduce_warn"]) or "(none)")
+S = np.diag([1.0, 1.0, -1.0])
+pf = reduce(S @ Mu @ S, ["P_pwr", "P_pwr1", "P_pwr2"], ["P_pwr", "P_pwr1", "P_pwr2"],
+            {"cin_used": ["C1", "C2", "C3"]})
+check("unequal caps: flipped near cap warns",
+      any("floor" in w for w in pf["reduce_warn"]),
+      "; ".join(pf["reduce_warn"]) or "(no warning!)")
+
 # 7. Near-singular / near-coincident caps: cond(Zc) huge, must warn.
 eps = 1e-15
 Msing = np.array([[10e-9, 10e-9 - eps], [10e-9 - eps, 10e-9]])
