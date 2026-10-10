@@ -67,74 +67,48 @@ def check_pin(value, source):
     return value.strip()
 
 
-def board_at_rev(path, rev, workdir):
-    """Write `path` as committed at git revision `rev` into `workdir`; return
-    (new path, full commit sha). `path` locates the repository and the file in
-    it; the working copy's bytes are never read, so uncommitted edits to the
-    board cannot leak into an extraction pinned to a commit.
+def board_at_rev(path, rev, workdir, repo):
+    """Write `path` as committed at git revision `rev` in the repository rooted at
+    `repo` into `workdir`; return (new path, full commit sha, in-commit path).
 
-    The path is taken LEXICALLY inside the repository: a symlink -- the board
-    file itself, or a directory between the repository root and it -- would let
-    the working copy choose which committed file is read, and a target outside
-    the repository became "../x" for `git show`, which Git resolves against its
-    invocation directory (review of b8f4779). Both are refused, as is a path that
-    is a symlink or not a regular file IN THE COMMIT. Symlinks above the
-    repository root (macOS /tmp -> /private/tmp) are fine.
+    The in-commit path is `path` relative to `repo`, computed LEXICALLY from the
+    two given strings. Neither the board nor any directory on its path is looked
+    at, and git does not DISCOVER the repository from the board's location: every
+    working-copy trick that moved that discovery -- a symlinked directory, a nested
+    `.git` or `.git` file, `core.worktree`, an empty intermediate repository --
+    worked by changing which repository root, and therefore which in-commit path,
+    the same board path meant (reviews of b8f4779, a9fd448, e2312f6, 8655cb2). With
+    the in-commit path fixed by text, a full commit SHA selects the same blob in
+    any object store that has the commit (git is content-addressed). A tag or a
+    short hash is resolved in `repo`; meta records the full SHA it resolved to.
 
-    Fails hard -- the path is not in a git checkout, the revision does not exist
-    (rebased away, never fetched), or the file is not in that commit -- rather
-    than fall back to the working copy, which is exactly what the pin excludes."""
-    path = os.path.abspath(path)                       # lexical: no symlink resolution
-    where = os.path.dirname(path)
-    while not os.path.isdir(where):        # the file may not exist in the working copy
-        parent = os.path.dirname(where)
-        if parent == where:
-            break
-        where = parent
+    Fails hard -- `repo` is not a git repository, the revision does not exist,
+    the path leaves `repo`, or the file is not a regular file in that commit --
+    rather than fall back to the working copy, which is exactly what the pin
+    excludes."""
+    path = os.path.abspath(path)                        # lexical: no symlink resolution
+    repo = os.path.abspath(repo)
+    rel = os.path.relpath(path, repo)
+    if rel in (os.curdir, os.pardir) or rel.startswith(os.pardir + os.sep):
+        raise SystemExit(f"pcb_rev {rev!r}: {path} is not inside pcb_repo {repo}")
+    rel = rel.replace(os.sep, "/")
 
     def git(*args, text=True):
         try:
-            return subprocess.run(["git", "-C", where, *args], capture_output=True,
+            return subprocess.run(["git", "-C", repo, *args], capture_output=True,
                                   text=text)
         except OSError as e:
             raise SystemExit(f"pcb_rev {rev!r}: cannot run git: {e}")
 
-    top = git("rev-parse", "--show-toplevel")
-    if top.returncode:
-        raise SystemExit(f"pcb_rev {rev!r}: {path} is not inside a git checkout "
-                         f"({top.stderr.strip()})")
-    root_real = os.path.realpath(top.stdout.strip())
-    # The lexical repository root: the HIGHEST ancestor of `where` that is the
-    # root directory. Taking the first match from below let an in-repo alias
-    # (`board -> .`) pose as the root, so its own symlink was never checked and
-    # the same path and pin read another committed file (review of a9fd448).
-    # Identity is by inode, not by string: on a case-insensitive volume
-    # `mainrepo` and `MainRepo` are one directory, not a symlink.
-    lex_root = _lexical_root(where, root_real)
-    if lex_root is None:
-        raise SystemExit(f"pcb_rev {rev!r}: {path} reaches its repository "
-                         f"{root_real} through a symlinked directory; give the "
-                         f"real path")
-    _refuse_shadowing_repo(lex_root, rev, path)
-    rel = os.path.relpath(path, lex_root)
-    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
-        raise SystemExit(f"pcb_rev {rev!r}: {path} is outside the repository {root_real}")
-    probe = lex_root
-    for part in rel.split(os.sep):
-        probe = os.path.join(probe, part)
-        if os.path.islink(probe):
-            raise SystemExit(f"pcb_rev {rev!r}: {probe} is a symlink in the working "
-                             f"copy, so it would decide which committed file is read; "
-                             f"give the real path inside the repository")
-    rel = rel.replace(os.sep, "/")
     sha = git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
     if sha.returncode:
-        raise SystemExit(f"pcb_rev {rev!r}: no such commit in {root_real}")
+        raise SystemExit(f"pcb_rev {rev!r}: no such commit in pcb_repo {repo} "
+                         f"(or it is not a git repository)")
     sha = sha.stdout.strip()
     entry = git("ls-tree", "--full-tree", sha, "--", rel)
     mode = entry.stdout.split()[0] if entry.returncode == 0 and entry.stdout.strip() else None
     if mode is None:
-        raise SystemExit(f"pcb_rev {rev!r}: {rel} is not in commit {sha[:12]} of {root_real}")
+        raise SystemExit(f"pcb_rev {rev!r}: {rel} is not in commit {sha[:12]} of {repo}")
     if mode not in ("100644", "100755"):
         raise SystemExit(f"pcb_rev {rev!r}: {rel} is not a regular file in commit "
                          f"{sha[:12]} (git mode {mode}{', a symlink' if mode == '120000' else ''})")
@@ -145,88 +119,74 @@ def board_at_rev(path, rev, workdir):
     out = os.path.join(workdir, f"{sha[:12]}-{os.path.basename(path)}")
     with open(out, "wb") as fh:
         fh.write(blob.stdout)
-    return out, sha
+    return out, sha, rel
 
 
-def _lexical_root(start, root_real):
-    """The HIGHEST lexical ancestor of `start` that is the directory `root_real`,
-    or None. Identity is by inode, not by string: on a case-insensitive volume
-    `mainrepo` and `MainRepo` are one directory, not a symlink."""
-    root_st = os.stat(root_real)
-    found, probe = None, start
-    while True:
-        try:
-            st = os.stat(probe)
-            if (st.st_dev, st.st_ino) == (root_st.st_dev, root_st.st_ino):
-                found = probe
-        except OSError:
-            pass
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            return found
-        probe = parent
+def _anchor(value, config_path):
+    """Absolute as given, else relative to the config file when it supplied the
+    value, else to the cwd. Purely lexical."""
+    if os.path.isabs(value):
+        return value
+    if config_path:
+        return os.path.join(os.path.dirname(os.path.abspath(config_path)), value)
+    return os.path.abspath(value)
 
 
-def _refuse_shadowing_repo(lex_root, rev, path):
-    """Refuse a repository root that sits inside ANOTHER work tree at a place
-    that outer tree tracks. A nested `.git`, a `.git` file pointing at the outer
-    git dir, or the board directory swapped for a symlink to another clone all
-    made `git rev-parse` find a different repository from the working copy, so
-    the same path and pin read a different committed file (review of e2312f6).
-    An untracked nested repository (Fugu2 inside the ~/dev monorepo) and a
-    registered submodule (gitlink) are legitimate and pass."""
-    parent = os.path.dirname(lex_root)
-    if parent == lex_root:
-        return
-    try:
-        top = subprocess.run(["git", "-C", parent, "rev-parse", "--show-toplevel"],
-                             capture_output=True, text=True)
-    except OSError as e:
-        raise SystemExit(f"pcb_rev {rev!r}: cannot run git: {e}")
-    if top.returncode:
-        return                                  # not inside another work tree
-    outer_real = os.path.realpath(top.stdout.strip())
-    outer_lex = _lexical_root(parent, outer_real)
-    if outer_lex is None:
-        raise SystemExit(f"pcb_rev {rev!r}: {path}: the repository {lex_root} sits in "
-                         f"{outer_real}, reached through a symlink; give the real path")
-    rel = os.path.relpath(lex_root, outer_lex).replace(os.sep, "/")
-    entries = []
-    for args in (["ls-files", "-s", "--", rel], ["ls-tree", "-r", "HEAD", "--", rel]):
-        r = subprocess.run(["git", "-C", outer_lex, *args], capture_output=True, text=True)
-        if r.returncode == 0:
-            entries += [ln.split(None, 1)[0] for ln in r.stdout.splitlines() if ln.strip()]
-    if entries and any(mode != "160000" for mode in entries):
-        raise SystemExit(f"pcb_rev {rev!r}: {lex_root} acts as a repository root but "
-                         f"{outer_lex} tracks files under it; a nested .git, a .git "
-                         f"file or a symlinked directory there would decide which "
-                         f"committed board is read. Give the path in the real repository")
-
-
-def resolve_pinned(pcb, rev, workdir, config_path=None):
-    """(path, full commit sha) of `pcb` as committed at `rev`; see board_at_rev.
-
-    The path is resolved WITHOUT looking at the working copy: absolute as given,
-    else relative to the config file when the config supplied it, else to the
-    cwd. Callers pass config_path=None for a board named on the command line: a
-    relative CLI board means the invocation directory (review of a9fd448). The
-    unpinned resolver's "cwd first, then config dir, and compare the two files"
-    read live files, so deleting or editing one changed which committed board the
-    same config selected (review of b8f4779)."""
+def resolve_pinned(pcb, rev, workdir, repo, config_path=None, repo_config_path=None):
+    """(path, full commit sha, in-commit path) of `pcb` as committed at `rev` in
+    `repo`; see board_at_rev. `config_path` / `repo_config_path` is the config
+    file that supplied `pcb` / `repo` (None when the command line did)."""
     rev = check_pin(rev, "pcb_rev")
     if is_url(pcb):
         raise SystemExit(f"pcb_rev {rev!r} applies to a local board in a git "
                          f"checkout, not to the URL {pcb}; pin the commit in the URL")
-    if os.path.isabs(pcb):
-        path = pcb
-    elif config_path:
-        path = os.path.join(os.path.dirname(os.path.abspath(config_path)), pcb)
-    else:
-        path = os.path.abspath(pcb)
-    return board_at_rev(path, rev, workdir)
+    if not isinstance(repo, str) or not repo.strip():
+        raise SystemExit(f"pcb_rev {rev!r} needs pcb_repo (--pcb-repo): the repository "
+                         f"root the board path is taken relative to. It is not "
+                         f"discovered from the working copy, which could change it")
+    return board_at_rev(_anchor(pcb, config_path), rev, workdir,
+                        _anchor(repo, repo_config_path))
 
 
-def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url, rev=None):
+def merge_pin(yaml_args, cli_args, merged, warn=None):
+    """The board/pin merge shared by all three tools; mutates `merged`.
+
+    - A pin that is given must name something (check_pin).
+    - A board named on the command line replaces the YAML's `pcb` AND its pin and
+      repository: the explicit file is used as given unless the same command line
+      pins it (loop_inductance_guard.py relies on this).
+    - Which source supplied `pcb` and `pcb_repo` is recorded, because a relative
+      value resolves against the config's directory only when the config gave it
+      (reviews of a9fd448, e2312f6)."""
+    for src, d in (("config", yaml_args), ("--pcb-rev", cli_args)):
+        if "pcb_rev" in d:
+            d["pcb_rev"] = check_pin(d["pcb_rev"], src)
+    if "pcb" in cli_args and "pcb_rev" not in cli_args:
+        if yaml_args.get("pcb_rev") and warn:
+            warn(f"WARNING: board {cli_args['pcb']!r} given on the command line; the "
+                 f"config's pcb_rev {yaml_args['pcb_rev']!r} pins the config's own pcb "
+                 f"and is not applied to it. Pass --pcb-rev and --pcb-repo to pin it.\n")
+        merged["pcb_rev"] = None
+    if "pcb" in cli_args and "pcb_repo" not in cli_args:
+        merged["pcb_repo"] = None             # the config's repository went with its pcb
+    merged["pcb_from_cli"] = "pcb" in cli_args
+    merged["pcb_repo_from_cli"] = "pcb_repo" in cli_args
+
+
+def resolve_board(args, workdir):
+    """(local board path, full pinned sha or None, in-commit path or None)."""
+    cfg = getattr(args, "config", None)
+    pcb_cfg = None if getattr(args, "pcb_from_cli", False) else cfg
+    rev = getattr(args, "pcb_rev", None)
+    if rev is not None:
+        repo_cfg = None if getattr(args, "pcb_repo_from_cli", False) else cfg
+        return resolve_pinned(args.pcb, rev, workdir, getattr(args, "pcb_repo", None),
+                              config_path=pcb_cfg, repo_config_path=repo_cfg)
+    return resolve_pcb_path(args.pcb, workdir, config_path=pcb_cfg), None, None
+
+
+def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url, rev=None,
+                     repo=None):
     """Download URL PCB inputs to a temp file; local paths resolve against the
     current working directory first, then — when a YAML config supplied the
     path — against the config file's own directory. If both resolve to a real
@@ -236,7 +196,7 @@ def resolve_pcb_path(pcb, workdir, config_path=None, downloader=download_url, re
     only names the repository and file: the board is read from that commit, see
     board_at_rev. A URL with a rev is refused -- pin the URL itself instead."""
     if rev is not None:                     # "" is refused by check_pin, never "unpinned"
-        return resolve_pinned(pcb, rev, workdir, config_path)[0]
+        return resolve_pinned(pcb, rev, workdir, repo, config_path)[0]
     if is_url(pcb):
         url = normalize_pcb_url(pcb)
         name = os.path.basename(urllib.parse.urlparse(url).path) or "board.kicad_pcb"

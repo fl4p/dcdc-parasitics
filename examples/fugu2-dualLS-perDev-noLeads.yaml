@@ -16,9 +16,10 @@
 # matrix Cin model). Later boards: 1b13241 (op-amp current sense)
 # leaves P_pwr's ground pad unbonded at 1 mm pitch and has no T_HV+ copper;
 # 971ab77 widened the board to 58.5 mm and dropped Net-(Q2-G). The working copy
-# is read only to locate the repository.
+# is never read: pcb_repo names the repository and pcb's path inside it.
 pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
 pcb_rev: e8bb240067fc6af078344b42ae14f68ecbfd1aa4
+pcb_repo: ../../../../../ee/hw/Fugu2   # the pin reads Fugu2.kicad_pcb from this repository
 sw: SW
 gnd: BuckGND
 vin: Solar+

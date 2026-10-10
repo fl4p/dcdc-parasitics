@@ -59,6 +59,7 @@ DEFAULTS = {
     "config": None,
     "gate_net_override": None,   # applied in memory before discovery, as kicad_geom does
     "pcb_rev": None,             # draw the board as committed there, as the extractor reads it
+    "pcb_repo": None,
 }
 
 REQUIRED_ARGS = ("pcb", "sw", "gnd", "out")
@@ -71,6 +72,7 @@ LIST_TYPES = {
 SCALAR_TYPES = {
     "pcb": str,
     "pcb_rev": str,
+    "pcb_repo": str,
     "sw": str,
     "gnd": str,
     "vin": str,
@@ -766,7 +768,9 @@ def build_parser():
     ap.add_argument("--config", default=argparse.SUPPRESS,
                     help="YAML file containing CLI args as argparse dest names")
     ap.add_argument("--pcb-rev", default=argparse.SUPPRESS,
-                    help="git commit/tag: draw the board as committed there")
+                    help="git commit/tag: draw the board as committed there (needs --pcb-repo)")
+    ap.add_argument("--pcb-repo", default=argparse.SUPPRESS,
+                    help="repository root the pinned board path is relative to")
     ap.add_argument("--sw", default=argparse.SUPPRESS, help="switch-node net name")
     ap.add_argument("--gnd", default=argparse.SUPPRESS, help="ground net name")
     ap.add_argument("--vin", default=argparse.SUPPRESS, help="input rail net")
@@ -888,30 +892,19 @@ def parse_args(argv=None):
 
     ap = build_parser()
     cli_args = vars(ap.parse_args(argv))
-    # A pin that is given must name something (pcb_source.check_pin): an empty
-    # value read as false and selected the working copy (review of b8f4779).
-    for _src, _d in (("config", yaml_args), ("--pcb-rev", cli_args)):
-        if "pcb_rev" in _d:
-            _d["pcb_rev"] = pcb_source.check_pin(_d["pcb_rev"], _src)
     merged = {}
     merged.update(DEFAULTS)
     merged.update(yaml_args)
     merged.update(cli_args)
-    if "pcb" in cli_args and yaml_args.get("pcb_rev") and "pcb_rev" not in cli_args:
-        # an explicit board replaces the config's pcb and its pin (as the extractor)
-        sys.stderr.write(f"WARNING: board given on the command line; the config's "
-                         f"pcb_rev pins the config's own pcb and is not applied.\n")
-        merged["pcb_rev"] = None
-    # a relative CLI board means the invocation directory (review of a9fd448)
-    merged["pcb_from_cli"] = "pcb" in cli_args
-
+    # board / pin / repository merge shared with the extractor
+    pcb_source.merge_pin(yaml_args, cli_args, merged, warn=sys.stderr.write)
     missing = [name for name in REQUIRED_ARGS if not merged.get(name)]
     if missing:
         ap.error("missing required argument(s): " + ", ".join(missing))
 
     # Keep only the values this viewer consumes. Extra extraction-only YAML keys
     # are accepted above so users can point both tools at the same config.
-    keep = set(DEFAULTS) | set(REQUIRED_ARGS) | {"pcb_from_cli"}
+    keep = set(DEFAULTS) | set(REQUIRED_ARGS) | {"pcb_from_cli", "pcb_repo_from_cli"}
     args = argparse.Namespace(**{k: v for k, v in merged.items() if k in keep})
     args.out = _normalize_out(args.out)
     return args
@@ -921,11 +914,7 @@ def main(argv=None):
     args = parse_args(argv)
     workdir = tempfile.mkdtemp(prefix="dcdc_view_")
     atexit.register(shutil.rmtree, workdir, True)   # no board copy left per run
-    rev = getattr(args, "pcb_rev", None)
-    # a CLI board resolves from the invocation directory, pinned or not (reviews of
-    # a9fd448 and e2312f6); only a config-supplied board falls back to the config's
-    cfg = None if getattr(args, "pcb_from_cli", False) else getattr(args, "config", None)
-    args.pcb = pcb_source.resolve_pcb_path(args.pcb, workdir, config_path=cfg, rev=rev)
+    args.pcb = pcb_source.resolve_board(args, workdir)[0]
     board = pcbnew.LoadBoard(args.pcb)
     if board is None:
         raise SystemExit(f"{args.pcb}: KiCad failed to load PCB")
