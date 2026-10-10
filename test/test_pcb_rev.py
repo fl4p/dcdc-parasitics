@@ -231,3 +231,82 @@ def test_which_directory_each_value_is_relative_to(tmp_path, monkeypatch):
     s = _main_resolution(monkeypatch, ["--config", str(cfg), "x.kicad_pcb",
                                        "--pcb-rev", "def5678"])
     assert s["repo"] is None                     # the config's repo went with its pcb
+
+
+# ---- review of 4e4a605 -------------------------------------------------------
+@pytest.mark.parametrize("what", ["commit", "tree", "blob"])
+def test_git_replace_cannot_change_the_bytes_of_a_full_sha(repo, tmp_path, what):
+    """`git replace` on the commit, its tree or the board blob made the same full SHA
+    return other bytes while meta.pcb_rev still named the original commit."""
+    r, first = repo
+    sha = _git(r, "rev-parse", "HEAD")
+    blob = _git(r, "rev-parse", f"{sha}:board/b.kicad_pcb")
+    fake_blob = subprocess.run(["git", "-C", str(r), "hash-object", "-w", "--stdin"],
+                               input="REPLACED", capture_output=True, text=True,
+                               check=True).stdout.strip()
+    if what == "blob":
+        _git(r, "replace", blob, fake_blob)
+    else:
+        (r / "board" / "b.kicad_pcb").write_text("REPLACED")
+        _git(r, "add", "board/b.kicad_pcb")
+        _git(r, "commit", "-qm", "fake")
+        fake = _git(r, "rev-parse", "HEAD")
+        _git(r, "reset", "-q", "--soft", sha)
+        if what == "commit":
+            _git(r, "replace", sha, fake)
+        else:
+            _git(r, "replace", _git(r, "rev-parse", f"{sha}^{{tree}}"),
+                 _git(r, "rev-parse", f"{fake}^{{tree}}"))
+    assert subprocess.run(["git", "-C", str(r), "show", f"{sha}:board/b.kicad_pcb"],
+                          capture_output=True, text=True).stdout == "REPLACED"
+    assert _read(r, sha, tmp_path)[0] == "COMMITTED-2"
+
+
+@pytest.mark.parametrize("var", ["GIT_DIR", "GIT_REPLACE_REF_BASE"])
+def test_git_environment_cannot_redirect_the_read(repo, tmp_path, monkeypatch, var):
+    """A redirected GIT_DIR (whose repository replaces the blob), or a replacement
+    stored under a custom GIT_REPLACE_REF_BASE, changed the bytes of a full SHA."""
+    r, first = repo
+    sha = _git(r, "rev-parse", "HEAD")
+    blob = _git(r, "rev-parse", f"{sha}:board/b.kicad_pcb")
+    where = _clone(r, tmp_path) if var == "GIT_DIR" else r
+    fake = subprocess.run(["git", "-C", str(where), "hash-object", "-w", "--stdin"],
+                          input="OTHER", capture_output=True, text=True,
+                          check=True).stdout.strip()
+    if var == "GIT_DIR":
+        _git(where, "replace", blob, fake)
+        monkeypatch.setenv("GIT_DIR", str(where / ".git"))
+    else:
+        _git(r, "update-ref", f"refs/elsewhere/{blob}", fake)
+        monkeypatch.setenv("GIT_REPLACE_REF_BASE", "refs/elsewhere/")
+    assert _read(r, sha, tmp_path)[0] == "COMMITTED-2"
+
+
+def test_pcb_repo_must_be_the_root_not_a_directory_inside_it(repo, tmp_path):
+    """pcb_repo=repo/board: git found repo upward, the lexical path was b.kicad_pcb,
+    and the read returned the root's board."""
+    r, first = repo
+    out = tmp_path / "w"
+    out.mkdir()
+    with pytest.raises(SystemExit, match="not a repository root"):
+        pcb_source.resolve_pinned(str(r / "board" / "b.kicad_pcb"), first, str(out),
+                                  str(r / "board"))
+    assert os.listdir(out) == []
+
+
+def test_a_forged_object_is_refused_not_extracted(repo, tmp_path):
+    """An object whose content does not hash to its id is refused."""
+    r, first = repo
+    sha = _git(r, "rev-parse", "HEAD")
+    blob = _git(r, "rev-parse", f"{sha}:board/b.kicad_pcb")
+    import zlib
+    path = r / ".git" / "objects" / blob[:2] / blob[2:]
+    if not path.exists():
+        pytest.skip("object is packed")
+    os.chmod(path, 0o644)
+    body = b"FORGED"
+    path.write_bytes(zlib.compress(b"blob %d\0" % len(body) + body))
+    out = tmp_path / "w"
+    out.mkdir()
+    with pytest.raises(SystemExit, match="does not hash"):
+        pcb_source.resolve_pinned(str(r / "board" / "b.kicad_pcb"), sha, str(out), str(r))

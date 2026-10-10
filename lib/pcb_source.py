@@ -73,7 +73,8 @@ def board_at_rev(path, rev, workdir, repo):
 
     The in-commit path is `path` relative to `repo`, computed LEXICALLY from the
     two given strings. Neither the board nor any directory on its path is looked
-    at, and git does not DISCOVER the repository from the board's location: every
+    at, git does not DISCOVER the repository from the board's location (pcb_repo
+    must itself be the root), and every object read is re-hashed: every
     working-copy trick that moved that discovery -- a symlinked directory, a nested
     `.git` or `.git` file, `core.worktree`, an empty intermediate repository --
     worked by changing which repository root, and therefore which in-commit path,
@@ -94,32 +95,92 @@ def board_at_rev(path, rev, workdir, repo):
     rel = rel.replace(os.sep, "/")
 
     def git(*args, text=True):
+        # No replacement objects and no inherited GIT_* variables: `git replace`,
+        # GIT_REPLACE_REF_BASE or a redirected GIT_DIR made the same full SHA return
+        # other bytes (review of 4e4a605). The hash walk below re-checks regardless.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env["GIT_NO_REPLACE_OBJECTS"] = "1"
         try:
-            return subprocess.run(["git", "-C", repo, *args], capture_output=True,
-                                  text=text)
+            return subprocess.run(["git", "--no-replace-objects", "-C", repo, *args],
+                                  capture_output=True, text=text, env=env)
         except OSError as e:
             raise SystemExit(f"pcb_rev {rev!r}: cannot run git: {e}")
 
+    # pcb_repo must BE the repository (work-tree root, or the git dir of a bare
+    # repository): `git -C` searches upward, so pcb_repo=repo/sub silently read
+    # repo's b.kicad_pcb for repo/sub/b.kicad_pcb (review of 4e4a605).
+    bare = git("rev-parse", "--is-bare-repository")
+    if bare.returncode:
+        raise SystemExit(f"pcb_rev {rev!r}: pcb_repo {repo} is not a git repository")
+    which = "--absolute-git-dir" if bare.stdout.strip() == "true" else "--show-toplevel"
+    root = git("rev-parse", which).stdout.strip()
+    try:
+        same = bool(root) and os.path.samefile(root, repo)
+    except OSError:
+        same = False
+    if not same:
+        raise SystemExit(f"pcb_rev {rev!r}: pcb_repo {repo} is not a repository root "
+                         f"(git resolves it to {root or '?'}); give the root itself")
+
     sha = git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
     if sha.returncode:
-        raise SystemExit(f"pcb_rev {rev!r}: no such commit in pcb_repo {repo} "
-                         f"(or it is not a git repository)")
+        raise SystemExit(f"pcb_rev {rev!r}: no such commit in pcb_repo {repo}")
     sha = sha.stdout.strip()
-    entry = git("ls-tree", "--full-tree", sha, "--", rel)
-    mode = entry.stdout.split()[0] if entry.returncode == 0 and entry.stdout.strip() else None
-    if mode is None:
-        raise SystemExit(f"pcb_rev {rev!r}: {rel} is not in commit {sha[:12]} of {repo}")
-    if mode not in ("100644", "100755"):
-        raise SystemExit(f"pcb_rev {rev!r}: {rel} is not a regular file in commit "
-                         f"{sha[:12]} (git mode {mode}{', a symlink' if mode == '120000' else ''})")
-    blob = git("cat-file", "blob", f"{sha}:{rel}", text=False)
-    if blob.returncode:
-        raise SystemExit(f"pcb_rev {rev!r}: cannot read {rel} at {sha[:12]}: "
-                         f"{blob.stderr.decode(errors='replace').strip()}")
+    data = _verified_blob(git, rev, sha, rel)
     out = os.path.join(workdir, f"{sha[:12]}-{os.path.basename(path)}")
     with open(out, "wb") as fh:
-        fh.write(blob.stdout)
+        fh.write(data)
     return out, sha, rel
+
+
+def _verified_blob(git, rev, sha, rel):
+    """The bytes of `rel` in commit `sha`, with EVERY object on the way re-hashed
+    here: commit -> tree per path component -> blob. git cat-file does not verify
+    what it returns, so an object store that answers a full SHA with other content
+    (replacement objects, a swapped alternate, a forged loose object) is caught
+    here and refused instead of being extracted under a correct-looking pin."""
+    algo = {40: hashlib.sha1, 64: hashlib.sha256}.get(len(sha))
+    if algo is None:
+        raise SystemExit(f"pcb_rev {rev!r}: unexpected object id {sha!r}")
+
+    def obj(kind, oid):
+        r = git("cat-file", kind, oid, text=False)
+        if r.returncode:
+            raise SystemExit(f"pcb_rev {rev!r}: cannot read {kind} {oid[:12]}: "
+                             f"{r.stderr.decode(errors='replace').strip()}")
+        body = r.stdout
+        if algo(f"{kind} {len(body)}".encode() + b"\0" + body).hexdigest() != oid:
+            raise SystemExit(f"pcb_rev {rev!r}: {kind} {oid[:12]} does not hash to its "
+                             f"id in this repository; refusing the pinned read")
+        return body
+
+    commit = obj("commit", sha)
+    first = commit.split(b"\n", 1)[0]
+    if not first.startswith(b"tree "):
+        raise SystemExit(f"pcb_rev {rev!r}: commit {sha[:12]} has no tree line")
+    oid, mode = first[5:].decode(), b"40000"
+    raw = len(sha) // 2
+    parts = rel.split("/")
+    for k, name in enumerate(parts):
+        if mode != b"40000":
+            raise SystemExit(f"pcb_rev {rev!r}: {'/'.join(parts[:k])} is not a directory "
+                             f"in commit {sha[:12]}")
+        tree, pos, found = obj("tree", oid), 0, None
+        while pos < len(tree):
+            sp = tree.index(b" ", pos)
+            nul = tree.index(b"\0", sp)
+            if tree[sp + 1:nul].decode(errors="surrogateescape") == name:
+                found = (tree[pos:sp], tree[nul + 1:nul + 1 + raw].hex())
+                break
+            pos = nul + 1 + raw
+        if found is None:
+            raise SystemExit(f"pcb_rev {rev!r}: {rel} is not in commit {sha[:12]}")
+        mode, oid = found
+    if mode not in (b"100644", b"100755"):
+        kind = ", a symlink" if mode == b"120000" else ""
+        raise SystemExit(f"pcb_rev {rev!r}: {rel} is not a regular file in commit "
+                         f"{sha[:12]} (git mode {mode.decode()}{kind})")
+    return obj("blob", oid)
 
 
 def _anchor(value, config_path):
