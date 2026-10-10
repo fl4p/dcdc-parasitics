@@ -125,6 +125,17 @@ check("indefinite cap-port L warns",
       any("positive semi-definite" in w for w in pb["reduce_warn"]),
       "; ".join(pb["reduce_warn"]) or "(no warning!)")
 
+# 6d. Within the solver's 1e-3 resolution a slightly negative eigenvalue is INFO, not a
+# warning (review of 5521bd8: -2.0e-4 nH vs 139 nH on a valid copper deck).
+Mtiny = 1e-9 * np.array([[139.0, 139.0 + 2e-2], [139.0 + 2e-2, 139.0]])   # -0.02 nH, 7e-5 rel
+pt = reduce(Mtiny, ["P_pwr", "P_pwr1"], ["P_pwr", "P_pwr1"], {"cin_used": ["C1", "C2"]})
+check("sub-resolution negative eigenvalue: no warning",
+      not any("positive semi-definite" in w for w in pt["reduce_warn"]),
+      "; ".join(pt["reduce_warn"]) or "(none)")
+check("sub-resolution negative eigenvalue: info",
+      any("numerically unresolved" in w for w in pt.get("reduce_info_base", [])),
+      "; ".join(pt.get("reduce_info_base", [])) or "(no info!)")
+
 # 7. Near-singular / near-coincident caps: cond(Zc) huge, must warn.
 eps = 1e-15
 Msing = np.array([[10e-9, 10e-9 - eps], [10e-9 - eps, 10e-9]])

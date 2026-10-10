@@ -144,13 +144,16 @@ def subckt(p):
     ]
     if p.get("n_cin", 1) > 1:
         kind = "physical (cap ESL/ESR)" if p.get("L_loop_physical") is not None \
-            else "ideal-cap copper-only (lower bound)"
+            else "ideal-cap copper-only"
         lines.append(
             f"* L_loop = {p['L_loop']*nH:.3g} nH: effective {p['n_cin']} input caps in "
             f"parallel ({','.join(t.get('cin_used', []))}), {kind}.")
+        # Two references, NOT a bracket: with copper R in Z the ideal-cap parallel can
+        # exceed the nearest cap alone, and cap ESL can lift the truth above both
+        # (review of 5521bd8: "1 nH (upper) >= truth >= 1.61 nH (lower)" was printed).
         lines.append(
-            f"*   bracket: single nearest cap {p['L_loop_single']*nH:.3g} nH (upper) >= "
-            f"truth >= ideal-cap {p.get('L_loop_ideal', p['L_loop'])*nH:.3g} nH (lower).")
+            f"*   references (not bounds): nearest cap alone {p['L_loop_single']*nH:.3g} nH; "
+            f"ideal-cap parallel, copper only {p.get('L_loop_ideal', p['L_loop'])*nH:.3g} nH.")
     for w in warn + (p.get("reduce_warn") or []):
         lines.append(f"* WARNING: {w}")
     # Context for a model this run REJECTED (scalar trunk, when a valid matrix Cin resolved).
@@ -443,11 +446,11 @@ def markdown(p):
          f"| Commutation loop L (Cin→HS→SW→LS→GND){' — %d caps ‖' % p['n_cin'] if p.get('n_cin', 1) > 1 else ''} | **{L(p['L_loop'])}** |"),
     ]
     if p.get("n_cin", 1) > 1:
-        # SW-peak L is bracketed: single-cap (upper) ≥ truth ≥ ideal-cap copper-only (lower)
+        # two references, not bounds (see the text summary above)
         lines.append(
-            f"| ⤷ single nearest cap alone — **upper bound** | {L(p['L_loop_single'])} |")
+            f"| ⤷ nearest cap alone (reference) | {L(p['L_loop_single'])} |")
         lines.append(
-            f"| ⤷ ideal-cap parallel (copper only) — **lower bound** | {L(p.get('L_loop_ideal', p['L_loop']))} |")
+            f"| ⤷ ideal-cap parallel, copper only (reference) | {L(p.get('L_loop_ideal', p['L_loop']))} |")
         if p.get("L_loop_physical") is not None:
             lines.append(
                 f"| ⤷ with cap ESL {p['cin_esl']*1e9:.2g} nH / ESR {p['cin_esr']*1e3:.2g} mΩ — **physical** | {L(p['L_loop_physical'])} |")
@@ -617,9 +620,9 @@ def markdown(p):
             "## Input-cap current split (at the ring frequency)",
             "",
             "Fraction of the total commutation current each ported cap carries "
-            "(from `y = Zc⁻¹·1`). The parallel loop L is bracketed **single-cap "
-            "(upper) ≥ truth ≥ ideal-cap copper-only (lower)**; the truth sits near "
-            "the lower bound when cap ESL ≪ per-cap branch L. Ideal caps assume each "
+            "(from `y = Zc⁻¹·1`). The nearest-cap and ideal-cap copper-only loop L "
+            "are references, not bounds (copper R can order them either way). Ideal "
+            "caps assume each "
             "MLCC is a short — pass `--cin-esl/--cin-esr` for the physical split.",
             "",
             "| Cap | current share |",

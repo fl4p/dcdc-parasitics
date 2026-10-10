@@ -221,16 +221,19 @@ solved as `Zc x = 1` (never an explicit inverse; `cond(Zc)` is reported and a
 warning fires if it is ill-conditioned). The parallel-cap current split
 `y = Zc⁻¹·1` is reported per refdes.
 
-**The SW-peak loop L is a bracket, not one number:**
+**The SW-peak loop L comes with two reference values. They are not bounds:**
 
-| bound | meaning |
+| field | meaning |
 |---|---|
-| `L_loop_single` (upper) | nearest single cap alone — pessimistic |
-| `L_loop_ideal` (lower) | all N caps ‖, treated as ideal shorts (copper only) |
+| `L_loop_single` | nearest single cap alone |
+| `L_loop_ideal` | all N caps ‖, treated as ideal shorts (copper only) |
 | `L_loop_physical` | plateau-band result with the uniform per-cap series ESL/ESR supplied by `--cin-esl`/`--cin-esr` |
 
-The truth sits between the bounds, near the lower one when cap ESL ≪ per-cap branch
-L. `L_loop_physical` and the top-level `current_split` are evaluated at the selected
+For a pure-inductance matrix, adding cap ESL can only raise the parallel L above
+`L_loop_ideal`, and the parallel never exceeds the best single cap. Neither holds as a
+bound on the extracted complex Z: copper R can lift the ideal-cap reduction above
+`L_loop_single` (and the nearest cap need not have the lowest self-L), so treat the two as
+references. Use `L_loop_physical` when cap ESL/ESR are known. `L_loop_physical` and the top-level `current_split` are evaluated at the selected
 L plateau (default 5 MHz), not at `--ring-freq`. The reducer applies the same series
 ESL/ESR at every point in `L_eff_sweep`, so that array contains the full effective
 loop L/R sweep, including the point nearest the ring. It does not currently emit a
@@ -407,15 +410,24 @@ boolean options via `--no-svg`, `--no-hs-kelvin`, and the other `--no-*` forms.
 `blob` URLs are converted to raw downloads automatically. Prefer a commit SHA in
 the URL instead of a branch name for reproducible extraction.
 
-For a local board in a git checkout, `pcb_rev: <commit or tag>` (`--pcb-rev`) pins
-it the same way without publishing anything: the board is read with `git show
-<rev>:<path>` from the repository `pcb` points into, never from the working copy,
-so another session's uncommitted edits to the board cannot leak into the
-extraction. A missing commit or a file absent from it fails hard; there is no
-fallback to the working copy. `gate_copper.py` and `visualize_paths.py` honour it
-too, and the full commit lands in `meta.pcb_rev`. The Fugu2 examples are pinned
-this way. `loop_inductance_guard.py` (kicad-design) passes the board it gates on
-the command line, which replaces the config's `pcb` and its pin, so a fresh guard
+For a local board in a git checkout, `pcb_rev: <commit or tag>` (`--pcb-rev`) with
+`pcb_repo: <repository root>` (`--pcb-repo`) pins it the same way without publishing
+anything: the board is read with `git cat-file <sha>:<path>` from `pcb_repo`, never
+from the working copy, so another session's uncommitted edits to the board cannot
+leak into the extraction. `<path>` is `pcb` relative to `pcb_repo`, computed from
+the two strings alone. The repository is not discovered from the board's location,
+because symlinks, nested `.git` dirs or files and `core.worktree` in the working copy
+could change that discovery and so which committed file the same path meant. With a
+full SHA, git's content addressing then makes the bytes independent of the working
+copy; prefer a full SHA, since a tag or short hash is resolved in `pcb_repo`. Relative
+`pcb` and `pcb_repo` resolve against the config's directory when the config gave them,
+else against the cwd. A missing `pcb_repo`, a missing commit, a path outside
+`pcb_repo` or a file absent from the commit fails hard; there is no fallback to the
+working copy. `gate_copper.py` and `visualize_paths.py` honour it too; the full commit
+lands in `meta.pcb_rev` and the in-commit path in `meta.pcb_rev_path`. The Fugu2
+examples are pinned this way. `loop_inductance_guard.py` (kicad-design) passes the
+board it gates on the command line, which replaces the config's `pcb`, its pin and
+its `pcb_repo`, so a fresh guard
 run extracts and gates exactly the file it was given -- pinned or not. Give it the
 exported board (`git show <rev>:Fugu2.kicad_pcb > board.kicad_pcb`); handed the
 working copy it gates the working copy. A fresh run and re-gating a saved
@@ -759,7 +771,8 @@ The `--pitch 2.0` result reproduces the historical lead-inclusive fixture's
 - **`parasitics.json`** — named parasitics + full port L/R matrix + provenance.
   `meta.pcb_sha256` records the SHA-256 of the resolved `.kicad_pcb` input so
   downstream tools can detect stale extraction artifacts; `meta.pcb_rev` is the
-  full commit when the board was pinned with `pcb_rev`, else null. When extracted through
+  full commit when the board was pinned with `pcb_rev`, else null (`meta.pcb_rev_path`: the
+  board's path inside that commit). When extracted through
   `--config`, `meta.extract_config_sha256` records that YAML file's SHA-256 too.
   CSI fields: `csi_hs` / `csi_ls` are side-specific source-lead mutuals used in
   the emitted subckt; `csi_hs_loop` / `csi_ls_loop` are the full-loop mutuals for

@@ -1014,7 +1014,7 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     Zeff, y, denom, cond, weights = _eff_commutation(Z, cin_idx, zcap_at(w))
     L_loop = float(Zeff.imag / w)
     R_loop = float(Zeff.real)
-    # bracket: ideal copper-only (lower bound) and nearest single cap (upper bound)
+    # references (NOT bounds, see README): ideal-cap copper-only parallel and nearest cap alone
     Zeff0, _, _, _, _ = _eff_commutation(Z, cin_idx, None)
     L_loop_ideal = float(Zeff0.imag / w)
     i0 = cin_idx[0]
@@ -1077,10 +1077,23 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     if len(cin_idx) > 1:
         Lc = np.array([[Z[a, b].imag / w for b in cin_idx] for a in cin_idx])
         eig = np.linalg.eigvalsh(0.5 * (Lc + Lc.T))
-        if not np.all(np.isfinite(eig)) or eig.min() < -1e-6 * max(abs(eig).max(), 1e-30):
+        # Resolution: FastHenry's iterative solve runs at a 1e-3 relative tolerance and
+        # Z is written to 6 significant digits, so a negative eigenvalue within 1e-3 of
+        # the spectral scale is numerically UNRESOLVED, not a physical violation: a
+        # valid close-port copper deck gave -2.0e-4 nH against 139 nH (-1.5e-6 relative),
+        # which a direct solve cleared (review of 5521bd8). Beyond 1e-3 the solver cannot
+        # explain it.
+        scale = max(abs(eig).max(), 1e-30) if np.all(np.isfinite(eig)) else 0.0
+        if not np.all(np.isfinite(eig)) or eig.min() < -1e-3 * scale:
             warn.append(f"cap-port inductance matrix is not positive semi-definite "
-                        f"(min eigenvalue {eig.min()*1e9:.3g} nH) — a passive extraction "
-                        f"cannot produce that; check cap ports / mesh")
+                        f"(min eigenvalue {eig.min()*1e9:.3g} nH, beyond the solver's "
+                        f"1e-3 resolution) — a passive extraction cannot produce that; "
+                        f"check cap ports / mesh")
+        elif eig.min() < 0:
+            info_base.append(f"cap-port inductance matrix has a slightly negative "
+                             f"eigenvalue ({eig.min()*1e9:.3g} nH vs {scale*1e9:.3g} nH "
+                             f"scale), within the iterative solver's 1e-3 resolution: "
+                             f"PSD is numerically unresolved, not violated")
     if (len(cin_idx) > 1 and L_uncoupled is not None
             and L_loop_ideal < L_uncoupled - 1e-12):
         info_base.append(
@@ -1700,8 +1713,8 @@ def reduce_parasitics(zc, ports, topo, meta, plateau=5e6, cin_ports=None,
     p = dict(
         freq_Hz=f,
         L_loop=L_loop, R_loop=R_loop,
-        L_loop_ideal=L_loop_ideal,            # copper-only lower bound
-        L_loop_single=L_loop_single,          # nearest single cap, upper bound
+        L_loop_ideal=L_loop_ideal,            # ideal-cap copper-only parallel (reference)
+        L_loop_single=L_loop_single,          # nearest single cap alone (reference)
         L_loop_physical=(L_loop if physical else None),
         per_cap_L=per_cap_L, current_split=split,
         cin_esl=cin_esl, cin_esr=cin_esr, cond_Zc=cond,
