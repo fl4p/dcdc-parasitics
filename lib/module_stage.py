@@ -43,9 +43,10 @@ So the closure is an EXPLICIT, RECORDED DECLARATION with no default:
       The VIN pad group and the GND pad group are joined by one FastHenry
       `.equiv`. The internal contribution is EXACTLY ZERO by construction, not by
       assumption, and the extracted `L_loop` is board copper only -- the same
-      basis as `examples/fugu2-cu.yaml` (lead_mm=0.1). This is a LOWER BOUND on
-      the physical loop: the real module adds bondwire/leadframe/die inductance
-      that is not in this number.
+      basis as `examples/fugu2-cu.yaml` (lead_mm=0.1). Under the additive model it
+      is a LOWER BOUND on the physical loop: the real module adds bondwire/leadframe/
+      die inductance that is not in this number. The model neglects board-to-module
+      mutual coupling, which could lower the total, so physically it is a reference.
 
   internal_closure: declared_internal
       Same solve, byte-for-byte -- FastHenry has no lumped-element primitive, so
@@ -181,7 +182,7 @@ def parse_spec(spec):
             "from the package pads to the dies inside an integrated module is not "
             "public geometry, so the extractor will not choose it for you. Declare "
             f"one of: {IDEAL} (internal contribution exactly 0; L_loop is board "
-            f"copper only, a LOWER bound on the physical loop), or {DECLARED} "
+            f"copper only, a lower bound under the additive internal-L model), or {DECLARED} "
             "(same board solve, plus a separately-reported internal_nh you must "
             "source).")
     if closure not in CLOSURES:

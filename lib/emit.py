@@ -87,8 +87,9 @@ def subckt(p):
         # it is not — same reasoning as the DCDC_ONLY_FB banner above.
         warn.append(
             f"INTEGRATED-MODULE extraction ({_mod.get('ref')}, internal_closure "
-            f"{_mod.get('internal_closure')}): L_loop is BOARD COPPER ONLY and is a "
-            f"LOWER BOUND — the module's pad-to-die path is not public and is NOT "
+            f"{_mod.get('internal_closure')}): L_loop is BOARD COPPER ONLY, a lower "
+            f"bound under the additive internal-L model (board-module mutual coupling "
+            f"neglected) — the module's pad-to-die path is not public and is NOT "
             f"included. Lscs_*/Lg* below are 0 PLACEHOLDERS (gates are in the package)"
             + ("" if _mod.get("L_loop_with_internal") is None else
                f"; a declared internal {_mod['internal_L']*1e9:.2f} nH "
@@ -305,7 +306,9 @@ def _module_banner(p):
         f"> **INTEGRATED-MODULE extraction — {mod.get('ref')}.** Both switches are "
         f"inside the package. The input commutation loop is closed at the PACKAGE "
         f"PADS (`internal_closure: {mod.get('internal_closure')}`), so **L_loop "
-        f"below is BOARD COPPER ONLY** and is a LOWER BOUND on the physical loop: "
+        f"below is BOARD COPPER ONLY** and a lower bound on the physical loop only "
+        f"under the additive internal-L model (board-module mutual coupling, which "
+        f"could lower the total, is neglected): "
         f"the module's pad-to-die path is not public geometry and is never "
         f"invented. Gate loops, CSI and the per-switch conduction split do not "
         f"exist on the board and are reported as unavailable, never as zero.",

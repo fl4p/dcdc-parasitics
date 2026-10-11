@@ -582,7 +582,7 @@ layout guidance and no internal dimensions), so the tool refuses to choose it:
 
 | `internal_closure` | solve | what `L_loop` means | extra fields |
 |---|---|---|---|
-| `ideal_pad_plane` | one `.equiv`, VIN pad group ↔ GND pad group | **board copper only**, internal contribution exactly 0 — a *lower bound* on the physical loop | `module.L_loop_board`, `module.internal_L = 0` |
+| `ideal_pad_plane` | one `.equiv`, VIN pad group ↔ GND pad group | **board copper only**, internal contribution exactly 0 — a *lower bound* on the physical loop under the additive internal-L model (board-module mutual coupling neglected) | `module.L_loop_board`, `module.internal_L = 0` |
 | `declared_internal` | **identical** — FastHenry has no lumped element | still board copper only | `module.L_loop_with_internal`, plus the required `internal_nh` and `internal_source` |
 
 `L_loop` is board copper on **both** closures, on purpose: a declared internal
