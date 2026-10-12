@@ -10,7 +10,8 @@
 # WHAT IT CANNOT ANSWER. FastHenry solves copper. The components in the path are out of
 # reach and need a datasheet or a 4-wire measurement:
 #     R26      0.5 mOhm shunt        BuckGND <-> GND
-#     F1, F3   40 A blade fuses      Bat+ <-> BT+ , T_HV+ <-> Solar+
+#     F1       40 A blade fuse       Bat+ <-> BT+   (flu's PCB has NO input fuse F3 and no T_HV+ net;
+#                                    F3 exists only on later Fugu2 revisions)
 #     Q5/6/7   3x AONS66612          BflowS <-> Bat+   0.55 mOhm cold, ~0.72 hot
 # Do not read a small copper number as "Rmisc is small". And note Q5/Q6/Q7 are not in
 # the fetlib model at all -- ~0.5 W unbooked at 30 A, independent of anything here.
@@ -21,16 +22,18 @@
 # and that is the only source for it -- do not read the value field as the part.
 #
 # METERED SPAN (Fab, 2026-08-26): INA228_3's voltage taps land on flu's OWN output
-# terminals, J9. So J6 -> Q5/6/7 -> F1 -> J9 and the return J9.2 -> R26 -> BuckGND are
-# all inside the measured efficiency. The input tap point (J10 vs upstream of F3) is
+# terminals, J9. So J6 -> Q5/6/7 -> F1 -> J9 and the return J9.1 -> R26 -> BuckGND are
+# all inside the measured efficiency. The input tap point (J10 or upstream of it) is
 # NOT established, so the in_* legs are extracted but must not be booked yet.
 #
-# R26 SITS IN THE GROUND LEG. J10.1 is BuckGND, J9.2 is GND, and R26 is the only
+# R26 SITS IN THE GROUND LEG. J10.2 is BuckGND, J9.1 is GND, and R26 is the only
 # on-board path between them -- so tying input and output ground externally, as the
 # power-loop rig does, puts a wire across the board's own current-sense shunt. That
 # split is external wiring and is not measured here; these legs give the on-board
 # copper each candidate path carries, which is what the split calculation needs.
-pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+# flu IS Fugu2 tag pcbway-order-2024-10 (238b094), confirmed by Fab 2026-10-11 -- not the HEAD board.
+# Detached worktree of ~/dev/ee/hw/Fugu2 at that tag (see examples/flu.yaml).
+pcb: ../../../../../ee/hw/Fugu2-pcbway-order-2024-10/Fugu2.kicad_pcb
 sw: SW
 gnd: BuckGND
 vin: Solar+
@@ -43,7 +46,7 @@ gate_net_override:
 
 # The output power path is not part of the half-bridge topology, so none of its nets
 # are meshed by default and every pad on them would be refused as "no copper contact".
-extra_nets: [BflowS, "Bat+", "BT+", GND, "T_HV+"]
+extra_nets: [BflowS, "Bat+", "BT+", GND]
 
 # EVERY PAIR IS SAME-NET AND JOINED BY BOARD COPPER -- the constraint that killed
 # probe_c1 in flu-sense.yaml (Q2.2/Q2.3 close only through the circuit, and the
@@ -64,21 +67,28 @@ extra_nets: [BflowS, "Bat+", "BT+", GND, "T_HV+"]
 # a segment" caveat is real but belongs to L, not to a resistive driving point.
 probe_ports:
   # --- metered output: coil lug -> back-flow FETs -> fuse -> terminal ---
-  out_coil_bflow: [J6.1, Q5.1]     # BflowS
-  out_bflow_fuse: [Q5.3, F1.1]     # Bat+
-  out_fuse_term:  [F1.2, J9.1]     # BT+
+  # Q6, not Q5: on flu's PCB Q5's largest pad-1 land (3.2 x 0.6 mm, rotated -90) gets no mesh node
+  # at pitch 1.0 and the extractor refuses the proximity bond; Q6's same land does. Both sit on the
+  # shared BflowS / Bat+ pours (see below), so the leg is the same pour path either way.
+  out_coil_bflow: [J6.1, Q6.1]     # BflowS
+  out_bflow_fuse: [Q6.3, F1.1]     # Bat+
+  out_fuse_term:  [F1.2, J9.2]     # BT+
   # --- metered output return: terminal ground -> shunt -> LS source ---
-  out_gnd_shunt:  [J9.2, R26.2]    # GND
+  out_gnd_shunt:  [J9.1, R26.2]    # GND
   out_shunt_ls:   [R26.1, D9.3]    # BuckGND
   # --- input side: extracted, NOT bookable until the INA228_2 tap point is known ---
-  in_term_fuse:   [J10.2, F3.1]    # T_HV+
-  in_fuse_cin:    [F3.2, C11.1]    # Solar+
+  # flu (pcbway-order-2024-10) has no F3: J10.1 is Solar+ straight to the Cin pour. On later
+  # revisions J9/J10 pin numbers are swapped and F3 sits between T_HV+ and Solar+.
+  in_term_cin:    [J10.1, C11.1]   # Solar+
 
 # Q5.1 and Q5.3 are split lands (thermal tab plus lead fingers) and J9/J10 carry
 # alternate lands for two mounting orientations. The extractor lands on the largest
 # land of the terminal and says which on stderr; check that line before booking.
 #
-# A PROBE AT Q5 IS NOT ONE FET'S BRANCH. Q5, Q6 and Q7 share the BflowS and Bat+ pours,
+# OPEN (2026-10-12): flu's PCB (pcbway-order-2024-10) has only Q5 and Q6 footprints -- there is
+# no Q7 -- yet the note above records 3x AONS66612 stuffed on flu. Not resolved; ask Fab.
+#
+# A PROBE AT Q5/Q6 IS NOT ONE FET'S BRANCH. Q5, Q6 and Q7 share the BflowS and Bat+ pours,
 # so the port already reflects spreading across the whole pour. That is the right
 # quantity for "what does the J6 -> pour path present" and the wrong one for a
 # per-device branch resistance.

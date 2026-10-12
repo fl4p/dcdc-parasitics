@@ -54,7 +54,9 @@
 # ("Fixed DRC errors", 2026-07-17). Comparing this extraction against that snapshot would
 # confound the footprint change with a board revision whose diff touches 252 lines of
 # SW/BuckGND/Solar.
-pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+# flu IS Fugu2 tag pcbway-order-2024-10 (238b094), confirmed by Fab 2026-10-11 -- not the HEAD board.
+# Detached worktree of ~/dev/ee/hw/Fugu2 at that tag (see examples/flu.yaml).
+pcb: ../../../../../ee/hw/Fugu2-pcbway-order-2024-10/Fugu2.kicad_pcb
 sw: SW
 gnd: BuckGND
 vin: Solar+

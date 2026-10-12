@@ -53,7 +53,9 @@
 # below are local pad-to-pad loops; the extra Q2 lead/die copper shifts the commutation
 # loop, not the mount loops. Letting a single-D9 override anchor on a non-populated
 # footprint's pad is the proper fix and is out of scope here.
-pcb: ../../../../../ee/hw/Fugu2/Fugu2.kicad_pcb
+# flu IS Fugu2 tag pcbway-order-2024-10 (238b094), confirmed by Fab 2026-10-11 -- not the HEAD board.
+# Detached worktree of ~/dev/ee/hw/Fugu2 at that tag (see examples/flu.yaml).
+pcb: ../../../../../ee/hw/Fugu2-pcbway-order-2024-10/Fugu2.kicad_pcb
 sw: SW
 gnd: BuckGND
 vin: Solar+
