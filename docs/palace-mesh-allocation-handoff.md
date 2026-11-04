@@ -4068,6 +4068,170 @@ Y-capacitors. For a *non-isolated* converter that leaves the common-mode return
 path undefined. Whether the board complies is not determinable by simulation;
 see `EMI.md`, which reaches the same conclusion independently.
 
+### 0.50 A third host, the GB10 (`pgx102.farm.internal`), reproduces the canary on the macOS mesh byte for byte
+
+Added 2026-11-02. This section adds a host; it does not reopen §0.49. The GB10 is
+NVIDIA's Grace-Blackwell desktop: aarch64, 20 cores, Ubuntu 24.04, **121 GiB
+unified memory** (the GPU allocates from the same pool), shared with LLM
+inference and Blender jobs.
+
+**Build.** Palace was built CPU-only into `~/opt/palace-0ca2de94` with the full
+20-option set of the attested macOS cache (`-G "Unix Makefiles"`, §0.43), on
+apt OpenMPI 4.1.6, gfortran 13 and OpenBLAS. The source is upstream `86810b19`
+plus the two local commits, replayed with `git am` under their original
+committer name, e-mail and date, so the commit hash reproduces as **`0ca2de94`
+exactly**. The binary reports `v0.17.0-302-g0ca2de94`. A full superbuild takes
+about 3.5 min. The attestation is
+`docs/artifacts/palace-gb10-build-v1/palace-build.a0a4bc3d….json` on the GB10
+copy, written by the unmodified `write_palace_build_manifest`, so it carries the
+same Linux gap as §0.43: no shared-library closure. The build has `gslib` OFF,
+as attested, so stock Palace examples with field probes abort with
+"InterpolationOperator class requires MFEM_USE_GSLIB". That is expected and not
+a defect.
+
+**gmsh.** No aarch64 Linux wheel exists for `gmsh==4.15.2`. It was built from the
+4.15.2 source tarball with OCC 7.6 (dynamic library, Python SDK) and reports
+`4.15.2-git`. That is the same release under a different version string.
+
+**Transport** is §0.44's, unchanged: the server's `lib/` (including its
+`process_monitor.py` teardown fix, with `.orig` alongside), the server's
+`/Users/fab/...` source inputs (4.1 MB) under a sudo-created `/Users/fab`, and
+the server venv's pins (`meshpy 2026.1`, `numpy 2.5.2`, `scipy 1.18.1`,
+`shapely 2.1.2`, `psutil 7.2.2`). The run script `probe_gb10.py` is the
+server's `probe_large.py` with `lib/` (the **unmodified** profile table) and
+the GB10 executable and manifest. `_validate_source_identity` passes natively:
+30 conductors, 3 dielectrics.
+
+**The GB10 mesher reproduces the macOS mesh byte for byte.** `regenerate.py
+8e-6 5e-4 v3k3gb -0.005 0.005 2e-4 3.2e-7`, the parameters recorded in the
+`v3k3lx` manifest, runs in 19 s at 0.96 GB. It gives node/tet/edge/face counts
+107409/581382/711825/1185811 and `md5 4f2588b7706f4e6313ad1db4a889028f`,
+**identical to the macOS `v3k3` mesh** (`mesh_sha256 31212d6c…`), not to
+`v3k3lx` (`83bcc83a…`). The 174-element tie-break of §0.44 is an x86-vs-arm64
+effect: both arm64 hosts break the tie the same way.
+
+**Canary rung, `v3k3gb` p2 SuperLU, 8 ranks, `pcb_diagnostic`:** 74.1 s,
+19.88 GB, `numerically_converged_diagnostic`. Compared with Linux `v3k3lx-p2/run-01`:
+
+```
+entries      : 18x18 = 324
+worst abs    : 0.002684 fF at (2, 2)      [1-based]
+worst rel    : 0.0005261% at (3, 16)
+outside gate : 0 of 324 (2% + 1 fF)
+trace        : 19.226607 pF vs 19.226605 pF
+reciprocity  : 1.15e-15, positive off-diagonals 0
+```
+
+These are **exactly §0.44's macOS-vs-Linux figures**, which follows from the mesh
+identity: the GB10 run reproduces the macOS matrix to well below the printed
+digits. The macOS `v3k3-p2/run-02` matrix itself was removed in the §0.44 disk
+cleanup, so that last step is inferred from the identical difference pattern,
+not diffed directly. A Palace-own check (`examples/spheres`, probes stripped)
+does diff directly: GB10 against the macOS build gives 9.5e-15 relative on
+`terminal-C` and 1.3e-10 on `terminal-Craw`.
+
+**Memory guard.** The GB10's `memguard.service` kills only LLM servers, so it
+does not protect against a solver. Palace runs therefore go under
+`systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`. Calibrated
+before use: a 4 GB allocation under a 500 MB cap is killed (exit 137), and a
+200 MB allocation runs normally. A CPU-only Palace run is fully inside that
+cgroup. A CUDA run is not, because GPU driver allocations escape it.
+
+**GPU (CUDA + cuDSS) reproduces the canary; the linear solver is about 1.6x faster, not 50x (corrected below).**
+This is a diagnostic run outside the workflow, added 2026-11-04. A second build,
+`~/opt/palace-0ca2de94-cuda` (same source), needed four non-default settings:
+- cuDSS **0.7.1** in a private prefix. MFEM's cuDSS patch uses the pre-0.8 API (`CUDSS_DATA_COMM`, the
+  one-index-type `cudssMatrixCreateCsr`), and both the system's 1.0 and 0.8 fail to compile;
+- `-Xcicc -O1`. At the default level, CUDA 13.0's cicc grew to 125 GB on MFEM
+  `bilininteg_convection_ea.cpp` and caused a global OOM on 2026-11-03;
+- `CUDAHOSTCXX=/usr/bin/c++`. Without it, camp/umpire's BLT check fails Palace's configure;
+- `Solver.Backend="/gpu/cuda/gen"` in the config, because the default MAGMA backend is not built.
+
+`write_palace_config` pins `Device: CPU`, so the run reuses the workflow's own `v3k3gb-p2/run-01/config.json`
+with only `Device=GPU`, `Backend` and `Linear.Type=cuDSS` changed. It runs on the same hard-linked mesh, on
+1 rank, in `simple-hb-gpu-diagnostic-v1/v3k3gb-p2-cudss/run-01`. Each of the 18 RHS takes 1 PCG iteration,
+with explicit residuals of about 5e-15. `terminal-Craw` against the CPU SuperLU run: max abs 3.0e-24 F,
+max relative 5.9e-13 of the matrix, 0/324 outside the gate. It is reciprocal to 6e-16 and has no positive
+off-diagonals. Time, GPU 1 rank against CPU 8 ranks:
+
+```
+                 total  setup(KSP)  preconditioner  linear-solve  mesh-prep  operator-construction
+GPU cuDSS, 1 rk   78.6     27.9         0.9            3.6          18.3          13.4
+CPU SuperLU, 8 rk 73.7      0.8        50.9            1.2           3.6           3.5
+```
+
+**Correction (2026-11-04, evening): compare Setup + Preconditioner + Linear Solve, not Preconditioner
+alone.** Palace's `Setup` timer is `KSP_SETUP` (`linalg/ksp.cpp:297`), which wraps `SetOperators`. cuDSS
+runs its analysis and its factorization there (MFEM `CuDSSSolver::SetMatrixCuDSS`). SuperLU_DIST factorizes
+lazily on the first solve, so its factorization lands in `Preconditioner`. The first version of this section
+set GPU preconditioner+solve (4.5 s) against CPU preconditioner+solve (52.1 s) and called it 11x. That
+compared a GPU solve against a CPU factorization. Setup does scale with the mesh (27.9/44.1/93.6 s on
+v3k3/v3k4/v3k5), which identifies it as the factorization, not CUDA JIT. Like for like, the linear solver
+is 32.4 s against 52.9 s on v3k3: **1.6x**. Host RSS was 3.7 GB, and MemAvailable never fell below 103 GB.
+
+**v3k4/v3k5 (added 2026-11-04): the GPU linear solver is 1.2–1.6x faster, and the 1-rank GPU run is slower
+overall.** Both meshes regenerated on the GB10 are byte-identical to the macOS `v3k4`/`v3k5` (md5
+`f88867ea…`, `f6f09fc0…`). The configs are written by the workflow's writer (`make_config.py`) and run
+outside `run_palace` (`run-ladder-cmp.sh`), CPU and GPU on the same config bytes apart from the three GPU
+keys. Every run solved 18/18 RHS in 1 iteration, with explicit residuals ≤ 7.1e-15.
+
+```
+rung    H1 DOF   trace pF   GPU-CPU max rel  total GPU/CPU s  linear solver GPU/CPU s  peak mem GPU/CPU
+v3k3gb   819k   19.226607      5.9e-13          78.6 / 73.7        32.4 /  52.9  (1.6x)  host 3.7 / 19.9 GB
+v3k4gb  1.39M   18.918420      1.0e-13         128.6 / 81.1        51.8 /  62.6  (1.2x)  cg 6.2 / 35.3 GB
+v3k5gb  2.53M   18.802336      3.3e-13         264.3 / 208.0      110.5 / 172.9  (1.6x)  cg 10.7 / 80.1 GB
+```
+(linear solver = Setup + Preconditioner + Linear Solve, max over ranks.)
+
+0/324 entries outside the gate on every rung. At v3k5 the 1-rank GPU run also spends 57 s in
+MeshPreprocessing and 52 s in OperatorConstruction, against 7/5 s on 8 CPU ranks. The CPU SuperLU run at v3k5
+peaked at 80.1 GB of cgroup memory, at the 80 GB unit cap (MemoryMax=80G). cuDSS needed 10.7 GB of host
+cgroup memory, and MemAvailable stayed ≥ 71 GB, so the GPU factor fits where CPU SuperLU barely does.
+
+**Several ranks sharing the GPU (v3k5gb, added 2026-11-04): reaches parity with CPU, not a win.** The runs
+are in `simple-hb-gpu-diagnostic-v1/v3k5gb-p2-cudss-np*/`. Script: `~/palace-gb10/run-gpu-np.sh`, table:
+`np_report.py`. Getting distributed cuDSS to run at all needed a CUDA-aware MPI:
+- Ubuntu's OpenMPI 4.1.6 is not CUDA-aware (`mpi_built_with_cuda_support:false`). With 2+ ranks, cuDSS's
+  `reduce_status` passes a device buffer to `MPI_Allreduce`, and it segfaults in `memcpy` (gdb backtrace,
+  exit 139 on 2/4/8 ranks).
+- OpenMPI 4.1.6 rebuilt `--with-cuda` (smcuda BTL, `~/opt/openmpi-4.1.6-cuda`). It ran 2 ranks, but
+  **v3k5 at 4 ranks hung 3 times out of 3**, spinning in `mca_btl_smcuda_component_progress`, with ranks
+  stuck in different collectives (lost message). Excluding `openib` did not help. Spheres at 4 ranks passed,
+  so a small case does not catch this.
+- OpenMPI 4.1.6 on UCX 1.22.0 built with CUDA (`~/opt/ucx-1.22.0-cuda`, `~/opt/openmpi-4.1.6-ucx`),
+  `OMPI_MCA_pml=ucx`, `OMPI_MCA_btl=^smcuda,openib`, `UCX_TLS=sm,cuda,self`: 2 and 4 ranks ran cleanly,
+  and 4 ranks twice. It is the same ABI (`libmpi.so.40`), so Palace is not rebuilt; `PATH`/`LD_LIBRARY_PATH`
+  select the MPI. `CUDSS_COMM_LIB` points at `libcudss_commlayer_openmpi.so`.
+
+```
+v3k5gb p2              total   KSP setup  precond  mesh-prep  op-constr  min MemAvailable  C max rel vs CPU
+CPU SuperLU, 8 rk      208.0      1.9      169.5       7.4       4.6         37.5 GB            -
+GPU 1 rk               264.3     93.6       12.7      56.6      52.2         69.3 GB         3.3e-13
+GPU 1 rk, 16 thr       203.4     72.2       12.7      38.7      37.5         68.7 GB         3.2e-13
+GPU 2 rk (ucx)         240.8    108.1       29.1      41.8      19.6         60.5 GB         1.0e-13
+GPU 4 rk (ucx)         196.8     96.3       43.1      19.2       8.2         44.5 GB         1.3e-13
+GPU 4 rk (ucx), rep    195.5     97.2       41.0      18.9       8.4         44.2 GB         1.4e-13
+GPU 4 rk, 4 thr each   200.0     98.6       41.1      21.1       8.2         44.2 GB         1.5e-13
+GPU 8 rk (ucx)         killed by the watchdog: MemAvailable 13.9 GB < 16 GB floor, after setup_end
+```
+- More ranks speed up the mesh and operator work (56.6 → 19 s, 52 → 8 s), but distributed cuDSS gets
+  slower: KSP setup does not shrink, and the preconditioner grows from 12.7 s to 43 s at 4 ranks.
+- The `16 thr` row adds cuDSS's OpenMP threading layer (`CUDSS_THREADING_LIB=libcudss_mtlayer_gomp.so`,
+  read by MFEM) with `OMPI_MCA_hwloc_base_binding_policy=none`. KSP setup drops from 93.6 to 72.2 s, and
+  mesh-prep and operator construction drop as well; the 1-rank launch had pinned everything to one core.
+- Every rank adds its own CUDA context and cuDSS buffers in unified memory: the minimum MemAvailable
+  falls from 69 GB (1 rank) to 44 GB (4 ranks), and 8 ranks exceeded the watchdog floor.
+
+The best GPU configuration (4 ranks, 196 s) is 6% faster than CPU SuperLU on 8 ranks (208 s). **On the
+GB10 the GPU path's value is memory, not speed:** cuDSS on 1 rank used about 10 GB where SuperLU used 80 GB.
+For a mesh that does not fit SuperLU, use 1 rank with the threading layer: it gets most of the speed
+for the least memory.
+
+**What it buys.** 121 GiB against `mem.fabi.me`'s ~107 GiB actually free.
+§0.48's Fugu rung 3 (~80 GB, estimated) would fit; rung 4 (~151 GB) still would
+not. Per-rung wall time on `v3k3` is 74 s against 113 s on the server. That is
+one point, not a cost model.
+
 ## 1. Goal
 
 Produce **converged, passive, reciprocal** capacitance matrices for Fugu2
