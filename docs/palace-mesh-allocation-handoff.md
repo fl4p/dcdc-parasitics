@@ -4176,17 +4176,23 @@ outside `run_palace` (`run-ladder-cmp.sh`), CPU and GPU on the same config bytes
 keys. Every run solved 18/18 RHS in 1 iteration, with explicit residuals ≤ 7.1e-15.
 
 ```
-rung    H1 DOF   trace pF   GPU-CPU max rel  total GPU/CPU s  linear solver GPU/CPU s  peak mem GPU/CPU
-v3k3gb   819k   19.226607      5.9e-13          78.6 / 73.7        32.4 /  52.9  (1.6x)  host 3.7 / 19.9 GB
-v3k4gb  1.39M   18.918420      1.0e-13         128.6 / 81.1        51.8 /  62.6  (1.2x)  cg 6.2 / 35.3 GB
-v3k5gb  2.53M   18.802336      3.3e-13         264.3 / 208.0      110.5 / 172.9  (1.6x)  cg 10.7 / 80.1 GB
+rung    H1 DOF   trace pF   GPU-CPU max rel  total GPU/CPU s  linear solver GPU/CPU s  memory GPU/CPU (system drop)
+v3k3gb   819k   19.226607      5.9e-13          78.6 / 73.7        32.4 /  52.9  (1.6x)  16.2 / ~20 GB
+v3k4gb  1.39M   18.918420      1.0e-13         128.6 / 81.1        51.8 /  62.6  (1.2x)  25.0 / 36.0 GB
+v3k5gb  2.53M   18.802336      3.3e-13         264.3 / 208.0      110.5 / 172.9  (1.6x)  45.1 / 78.1 GB
 ```
-(linear solver = Setup + Preconditioner + Linear Solve, max over ranks.)
+(linear solver = Setup + Preconditioner + Linear Solve, max over ranks. Memory = MemAvailable at start minus
+its minimum during the run, from `mem.log`; v3k3 CPU is its host RSS, it has no `mem.log`.)
 
 0/324 entries outside the gate on every rung. At v3k5 the 1-rank GPU run also spends 57 s in
 MeshPreprocessing and 52 s in OperatorConstruction, against 7/5 s on 8 CPU ranks. The CPU SuperLU run at v3k5
-peaked at 80.1 GB of cgroup memory, at the 80 GB unit cap (MemoryMax=80G). cuDSS needed 10.7 GB of host
-cgroup memory, and MemAvailable stayed ≥ 71 GB, so the GPU factor fits where CPU SuperLU barely does.
+peaked at 80.1 GB of cgroup memory, at the 80 GB unit cap (MemoryMax=80G).
+
+**Correction (2026-11-04, evening): cuDSS saves 1.4–1.7x memory, not 8x.** The first version compared cgroup
+peaks (cuDSS 10.7 GB against SuperLU 80.1 GB). cuDSS's factor lives in GPU allocations, which on the GB10 come
+out of the same unified memory but are not charged to the cgroup. Measured as the system-wide MemAvailable drop,
+cuDSS takes 16.2/25.0/45.1 GB on v3k3/v3k4/v3k5 against SuperLU's ~20/36.0/78.1 GB. That is about 18 GB per
+million H1 unknowns for cuDSS, roughly linear over this range.
 
 **Several ranks sharing the GPU (v3k5gb, added 2026-11-04): reaches parity with CPU, not a win.** The runs
 are in `simple-hb-gpu-diagnostic-v1/v3k5gb-p2-cudss-np*/`. Script: `~/palace-gb10/run-gpu-np.sh`, table:
@@ -4222,15 +4228,17 @@ GPU 8 rk (ucx)         killed by the watchdog: MemAvailable 13.9 GB < 16 GB floo
 - Every rank adds its own CUDA context and cuDSS buffers in unified memory: the minimum MemAvailable
   falls from 69 GB (1 rank) to 44 GB (4 ranks), and 8 ranks exceeded the watchdog floor.
 
-The best GPU configuration (4 ranks, 196 s) is 6% faster than CPU SuperLU on 8 ranks (208 s). **On the
-GB10 the GPU path's value is memory, not speed:** cuDSS on 1 rank used about 10 GB where SuperLU used 80 GB.
-For a mesh that does not fit SuperLU, use 1 rank with the threading layer: it gets most of the speed
-for the least memory.
+The best GPU configuration (4 ranks, 196 s) is 6% faster than CPU SuperLU on 8 ranks (208 s). On the
+GB10 the GPU direct solver is a modest gain on both axes: about 1.6x on the linear solver and 1.7x on
+memory (46 GB against 78 GB at v3k5, system-wide). Among GPU settings, 1 rank with the threading layer gives
+nearly the best time (203 s) at the least memory (46 GB against 70 GB for 4 ranks).
 
-**What it buys.** 121 GiB against `mem.fabi.me`'s ~107 GiB actually free.
-§0.48's Fugu rung 3 (~80 GB, estimated) would fit; rung 4 (~151 GB) still would
-not. Per-rung wall time on `v3k3` is 74 s against 113 s on the server. That is
-one point, not a cost model.
+**What it buys.** 121 GiB against `mem.fabi.me`'s ~107 GiB actually free. Per-rung wall time on `v3k3` is
+74 s against 113 s on the server; that is one point, not a cost model. **It does not reopen the Fugu ladder
+(§0.49).** §0.48's ~80 GB for Fugu rung 3 is the BoomerAMG path at ~8.1 GB/Munk, which is about 100 h per rung.
+The direct solvers measured here cost much more memory per unknown: at about 18 GB/Munk (cuDSS), Fugu rung 1
+(3.2 Munk) is ~57 GB, rung 2 (5.4) ~97 GB, and rung 3 (9.9) ~175 GB, beyond the 121 GiB box. SuperLU is
+worse. Those unknown counts are themselves optimistic (§0.48).
 
 ## 1. Goal
 
