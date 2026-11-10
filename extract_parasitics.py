@@ -1556,7 +1556,7 @@ def main():
               f"CSI_hs={_nh(p['csi_hs'])}  CSI_ls={_nh(p['csi_ls'])}  "
               f"L_gate_hs={_nh(p['L_gate_hs'])}{extra}")
         _emit_reduce_warnings(p, prefix=f"pitch {pitch:g}: " if len(pitches) > 1 else "")
-        if p.get("r_hs") is not None:
+        if p.get("r_hs") is not None and p.get("r_ls") is not None:
             cr = (p.get("cond_ref") or {}).get("ref", "?")
             print(f"            R_conduction (LF, bulk={cr}): "
                   f"HS={p['r_hs']*1e3:.2f} mOhm  LS={p['r_ls']*1e3:.2f} mOhm  "
