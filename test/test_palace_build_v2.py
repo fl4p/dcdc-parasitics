@@ -16,7 +16,7 @@ SOURCE_IDENTITY = ROOT / "docs/artifacts/palace-e4-source-v5" / (
     "palace-source-identity."
     "9a50e1ad35a4b6b644afdff791f312c75b8d58ff7bc01cc5669fe7faa16be94b.json"
 )
-BUILD = Path("/Users/fab/dev/vendor/palace-build-qualification-make")
+BUILD = Path("/Users/fab/dev/vendor/palace-build-qualification-direct-make")
 EXECUTABLE = BUILD / "bin/palace"
 
 

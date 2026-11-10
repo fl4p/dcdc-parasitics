@@ -11,15 +11,18 @@ AUTHORIZED_PALACE_SOURCE_IDENTITIES = frozenset({
 })
 
 AUTHORIZED_PALACE_BUILDS = {
+    # Attests source 0ca2de94. The palace-build-qualification-make tree was
+    # previously listed here but its binary self-reports 86810b19-dirty, so that
+    # attestation was false and every run under it tripped the runtime Git check.
     "9a50e1ad35a4b6b644afdff791f312c75b8d58ff7bc01cc5669fe7faa16be94b": {
-        "build_directory": "/Users/fab/dev/vendor/palace-build-qualification-make",
-        "executable": "/Users/fab/dev/vendor/palace-build-qualification-make/bin/palace",
+        "build_directory": "/Users/fab/dev/vendor/palace-build-qualification-direct-make",
+        "executable": "/Users/fab/dev/vendor/palace-build-qualification-direct-make/bin/palace",
         "binaries": {
-            "/Users/fab/dev/vendor/palace-build-qualification-make/bin/palace": (
+            "/Users/fab/dev/vendor/palace-build-qualification-direct-make/bin/palace": (
                 "ad43ec030f51435f32150a5c72cb324ca03083d2ffc2f91405bbf41c6bc2240f"
             ),
-            "/Users/fab/dev/vendor/palace-build-qualification-make/bin/palace-arm64.bin": (
-                "1bef63615fc4279f4fc09fa9bcd6b70ee9220f6d0c7c13cd8087c355eb54c9e2"
+            "/Users/fab/dev/vendor/palace-build-qualification-direct-make/bin/palace-arm64.bin": (
+                "0dfeb13ca9b93143d5b191a763fefaa5a94b08e0f3286b7d18a9c425b6c6ee2f"
             ),
         },
         "mpi_launcher": "/opt/homebrew/Cellar/open-mpi/5.0.9_1/bin/mpirun",
