@@ -215,6 +215,29 @@ check("per-device aggregate conduction R is parallel effective",
       abs(p10c["r_hs"] - 2e-3) < 1e-12,
       f'{p10c["r_hs"]*1e3:.3f} mΩ')
 
+# The max-per-device side scalars caveat the .SUBCKT only; the loss deck reads
+# parallel_devices. With the per-ref rows complete, that is INFO, not a WARNING.
+check("per-device scalars caveat is INFO when the per-ref rows are complete",
+      not any("per-device parallel-FET" in w for w in p10c["reduce_warn"]) and
+      any("per-device parallel-FET" in m for m in p10c["reduce_info"]),
+      f'warn={len(p10c["reduce_warn"])} info={len(p10c["reduce_info"])}')
+
+# ...but if a device's ports were DROPPED while >1 device remains, parallel_devices
+# is INCOMPLETE and cannot replace the scalars — the max() reduction is then all a
+# consumer has, so it must WARN again. (Calibration: the known-bad input the demote
+# must not swallow. Q5 is declared in the manifest but has no ports in the matrix.)
+topo10c3 = {"parallel_fets": "per-device",
+            "hs": {"device_ports": list(topo10c["hs"]["device_ports"]) + [
+                {"ref": "Q5", "gate_label": "P_ghs_Q5", "switch_label": "P_hs_Q5"}]},
+            "ls": topo10c["ls"]}
+p10c3 = sr.reduce_parasitics({1e5: R10c.astype(complex), 5e6: Z10c}, rows10c, topo10c3, {},
+                             plateau=5e6, cin_ports=["P_pwr"])
+check("dropped device re-raises the per-device scalars caveat as a WARNING",
+      any("per-device parallel-FET" in w and "NOT usable" in w
+          for w in p10c3["reduce_warn"]) and
+      not any("per-device parallel-FET" in m for m in p10c3["reduce_info"]),
+      "; ".join(w for w in p10c3["reduce_warn"] if "parallel-FET" in w) or "(no warning!)")
+
 # 10d. Legacy lumped mode may have sidecar topology records, but they must not be
 #      interpreted as per-device ports or warn as if per-device extraction ran.
 rows10d = ["P_pwr", "P_ghs", "P_gls", "P_hs", "P_ls"]

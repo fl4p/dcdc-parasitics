@@ -99,6 +99,36 @@ def test_switch_side_residual_R_warning_is_never_demoted():
         "INFO on a valid matrix run, but the matrix deck consumes r_hs_switch/r_ls_switch")
 
 
+def test_model_independent_info_survives_both_classification_branches():
+    """reduce_info_base (e.g. the parallel-FET note) is not about the Cin model, so it must
+    survive whether or not the scalar caveats are demoted — classify rebuilds reduce_info."""
+    dev = "per-device parallel-FET ports present: ..."
+    demoted = solve_reduce.classify_cin_warnings(dict(
+        reduce_warn_base=list(BASE), reduce_scalar_warn=list(SCALAR),
+        reduce_info_base=[dev],
+        cin_model=dict(mode="matrix", basis="identity", matrix_valid=True)))
+    assert dev in demoted["reduce_info"]
+
+    kept = solve_reduce.classify_cin_warnings(dict(
+        reduce_warn_base=list(BASE), reduce_scalar_warn=list(SCALAR),
+        reduce_info_base=[dev],
+        cin_model=dict(mode="scalar_trunk", basis=None, matrix_valid=None)))
+    assert kept["reduce_info"] == [dev], "advisory must survive the non-demoting branch too"
+    assert kept["reduce_warn"] == BASE + SCALAR
+
+
+def test_report_rejection_callout_needs_scalar_caveats_not_just_any_info():
+    """A device-only INFO must not make report.md claim the scalar Cin model was rejected."""
+    import emit
+    p = _report_fixture()
+    p["reduce_scalar_warn"] = []                  # nothing scalar was rejected
+    p["reduce_info"] = ["per-device parallel-FET ports present: ..."]
+    assert "REJECTED" not in emit.markdown(p)
+
+    p["reduce_scalar_warn"] = list(SCALAR)        # now it really was
+    assert "REJECTED" in emit.markdown(p)
+
+
 def _valid_cap_only_payload():
     """A cap_only_additive payload that really passes _matrix_valid_for_payload."""
     L = np.array([[3.0e-9, 1.0e-9], [1.0e-9, 3.0e-9]])
@@ -212,11 +242,8 @@ def test_matrix_not_produced_claim_survives_a_genuine_scalar_fallback():
     assert p["reduce_info"] == []
 
 
-def test_report_marks_the_cin_branch_table_as_the_rejected_model():
-    """report.md renders the shared-trunk per-cap Lb/Rb table. On a valid-matrix run that table
-    IS the rejected model — the reader must not meet it unannotated."""
-    import emit
-    p = dict(
+def _report_fixture():
+    return dict(
         L_loop=3.2e-9, R_loop=3.1e-3, L_loop_ideal=3.2e-9, L_loop_single=9.2e-9,
         L_gate_hs=1e-8, R_gate_hs=2e-2, L_gate_ls=1e-9, R_gate_ls=6e-3,
         csi_hs=1.4e-9, csi_ls=3.2e-10, m_gate=0.0, freq_Hz=3.9e6, n_cin=2,
@@ -228,8 +255,16 @@ def test_report_marks_the_cin_branch_table_as_the_rejected_model():
                       dict(ref="C2", cls="mlcc", Lb=2e-9, Rb=2e-3)],
         cin_L_shared=3.9e-9, cin_R_shared=1e-3,
         cin_model=dict(mode="matrix", basis="identity", matrix_valid=True),
-        reduce_warn=[], reduce_info=["scalar ... was REJECTED ..."],
+        reduce_warn=[], reduce_scalar_warn=list(SCALAR),
+        reduce_info=["scalar ... was REJECTED ..."],
     )
+
+
+def test_report_marks_the_cin_branch_table_as_the_rejected_model():
+    """report.md renders the shared-trunk per-cap Lb/Rb table. On a valid-matrix run that table
+    IS the rejected model — the reader must not meet it unannotated."""
+    import emit
+    p = _report_fixture()
     md = emit.markdown(p)
     table_at = md.index("| Cap | class | branch L")
     assert "REJECTED" in md[:table_at], "the rejection must appear ABOVE the table it describes"
