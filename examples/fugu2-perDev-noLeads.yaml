@@ -12,6 +12,7 @@ lf_freq: 39000
 emit_cin_network: true
 cin_network_model: matrix
 weld_tol: 0.6
+zone_mesh: grid # grid, polygon
 margin: 8.0
 out: out/fugu2-perDeev-noLeads
 svg: true
