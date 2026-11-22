@@ -1,0 +1,13 @@
+# LibreSolar MPPT 2420 LC (MPPT_charger_20A), 2-layer. Until 2026-11-21 this config was named
+# mppt-2420-hc.yaml although it fetched this board.
+pcb: https://raw.githubusercontent.com/LibreSolar/mppt-2420-lc/c2211beb366b2b2f91e949e676a9cac4f9a408d9/MPPT_charger_20A.kicad_pcb
+sw: /DCDC power stage/SW_NODE
+gnd: GND
+vin: /DCDC power stage/DCDC_IN
+hs_ref: [Q1]
+ls_ref: [Q4]
+cin_parallel: 1
+pitch: [3.0, 2.0]
+emit_cin_network: true
+svg: true
+out: out-mppt-2420-lc/

@@ -1,9 +1,10 @@
-pcb: https://raw.githubusercontent.com/LibreSolar/mppt-2420-lc/refs/heads/master/MPPT_charger_20A.kicad_pcb
-sw: /DCDC power stage/SW_NODE
+# LibreSolar MPPT 2420 HC (v0.2.3), the historical lead-inclusive showcase fixture.
+pcb: https://raw.githubusercontent.com/LibreSolar/mppt-2420-hc/b1c11fee826d40b0465eae3dd58a15a336be2d7c/kicad/mppt-2420-hc.kicad_pcb
+sw: /DC/DC/SW_NODE
 gnd: GND
-vin: /DCDC power stage/DCDC_IN
+vin: /DCDC_HV+
 hs_ref: [Q1]
-ls_ref: [Q4]
+ls_ref: [Q2]
 cin_parallel: 1
 pitch: [3.0, 2.0]
 emit_cin_network: true

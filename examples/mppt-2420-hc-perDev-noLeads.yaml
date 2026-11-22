@@ -1,0 +1,22 @@
+# LibreSolar MPPT 2420 HC (rev 0.2.3), copper-only (lead_mm=0) re-extraction, 2026-11-21.
+# Same method as examples/fugu2-perDev-noLeads.yaml. The older lead-inclusive fixture examples/mppt-2420-hc.yaml
+# is neither used nor changed by this study.
+# PCB: github.com/LibreSolar/mppt-2420-hc main, kicad/mppt-2420-hc.kicad_pcb (local copy, sha256 in the report).
+pcb: /tmp/ls2420/mppt-2420-hc-main/kicad/mppt-2420-hc.kicad_pcb
+sw: /DC/DC/SW_NODE
+gnd: GND
+vin: /DCDC_HV+
+hs_ref: [Q1]
+ls_ref: [Q2]
+parallel_fets: per-device
+lead_mm: 0 # TO-220 leads are added in the SPICE deck (vendor _L0 values)
+cin_loop_refs: [C1, C2, C3, C4]
+pitch: [2.0, 1.0]
+lf_freq: 70000
+emit_cin_network: true
+cin_network_model: matrix
+weld_tol: 0.6
+zone_mesh: grid
+margin: 8.0
+out: out/mppt-2420-hc-perDev-noLeads
+svg: true

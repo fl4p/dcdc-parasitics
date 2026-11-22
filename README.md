@@ -931,6 +931,11 @@ running on the real boards below.
   `/DC/DC/SW_NODE`, HS `Q1`, LS `Q2`): loop L ≈ 8.5 nH, CSI_hs ≈ 0.71 nH,
   CSI_ls ≈ 1.36 nH, gate Rg `R1/R2 = 3R3` at 2 mm. This validates
   connectivity/rendering of that legacy fixture, not a copper-only loss input.
+  Its config is `examples/mppt-2420-hc.yaml` (board pinned to commit `b1c11fe`;
+  Vin `/DCDC_HV+`). Until 2026-11-21 that file fetched the 2-layer **2420 LC**
+  board instead (SW `/DCDC power stage/SW_NODE`, HS `Q1`, LS `Q4`); that config
+  is now `examples/mppt-2420-lc.yaml`, and any `out-mppt-2420-hc/` produced from
+  it before then is the LC board.
 - `Fugu2` (2-layer buck, paralleled HS `Q1∥Q3`, LS `Q2`, six-cap near bank,
   pad-land/grid, `lead_mm=0`): loop L ≈ **3.24 nH**. This is the current
   copper-only validation used with lead-inclusive `_L0` device models. The old
